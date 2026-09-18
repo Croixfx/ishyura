@@ -1,0 +1,120 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Ishyura design system.
+ * Slate/gray scale surfaces with a confident blue primary accent.
+ * The printable QR card uses fixed "print-*" tokens so it always
+ * renders white regardless of theme (for clean printing).
+ */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-print-surface: var(--print-surface);
+  --color-print-ink: var(--print-ink);
+  --color-print-muted: var(--print-muted);
+  --color-print-muted-ink: var(--print-muted-ink);
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --radius: 0.75rem;
+  --background: oklch(0.979 0.005 254);
+  --foreground: oklch(0.21 0.03 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.03 264);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.03 264);
+  --primary: oklch(0.55 0.2 262);
+  --primary-foreground: oklch(0.985 0.005 250);
+  --secondary: oklch(0.955 0.008 255);
+  --secondary-foreground: oklch(0.31 0.04 264);
+  --muted: oklch(0.955 0.008 255);
+  --muted-foreground: oklch(0.53 0.03 258);
+  --accent: oklch(0.945 0.014 255);
+  --accent-foreground: oklch(0.31 0.04 264);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0.005 250);
+  --border: oklch(0.915 0.01 255);
+  --input: oklch(0.885 0.012 256);
+  --ring: oklch(0.62 0.18 260);
+  /* Fixed printable card colors — identical in light and dark */
+  --print-surface: oklch(1 0 0);
+  --print-ink: oklch(0.18 0.03 264);
+  --print-muted: oklch(0.965 0.006 258);
+  --print-muted-ink: oklch(0.52 0.03 258);
+  /* Brand flair: yellow -> blue gradient strip */
+  --gradient-brand: linear-gradient(
+    90deg,
+    oklch(0.87 0.17 95) 0%,
+    oklch(0.78 0.15 210) 55%,
+    oklch(0.55 0.21 262) 100%
+  );
+}
+
+.dark {
+  --background: oklch(0.17 0.025 264);
+  --foreground: oklch(0.955 0.006 255);
+  --card: oklch(0.225 0.03 264);
+  --card-foreground: oklch(0.955 0.006 255);
+  --popover: oklch(0.24 0.03 264);
+  --popover-foreground: oklch(0.955 0.006 255);
+  --primary: oklch(0.66 0.18 258);
+  --primary-foreground: oklch(0.16 0.03 264);
+  --secondary: oklch(0.28 0.03 264);
+  --secondary-foreground: oklch(0.955 0.006 255);
+  --muted: oklch(0.28 0.03 264);
+  --muted-foreground: oklch(0.72 0.02 257);
+  --accent: oklch(0.3 0.035 264);
+  --accent-foreground: oklch(0.955 0.006 255);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0.005 250);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.62 0.16 260);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* Yellow-to-blue flair strip on the printable card */
+@utility gradient-strip {
+  background: var(--gradient-brand);
+}

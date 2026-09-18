@@ -1,0 +1,6 @@
+{
+  "name": "Ishyura — Instant MoMo Payment QR Codes",
+  "description": "Zero-login client-side instant USSD QR code generator for shop owners to receive Mobile Money payments with MTN MoMo and Airtel Money.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
