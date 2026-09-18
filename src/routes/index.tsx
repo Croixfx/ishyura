@@ -85,6 +85,13 @@ function Index() {
     [network, phone, ready],
   );
 
+  // Phone dialer URI: using tel: URI scheme with encoded '#' (%23)
+  // When scanned by camera apps (iOS & Android), the OS recognizes it as a phone action/dialer call instead of a web or text search.
+  const qrTelUri = useMemo(
+    () => (ready ? `tel:${encodeURIComponent(ussdString)}` : ""),
+    [ussdString, ready],
+  );
+
   const handleDownload = async () => {
     if (!cardRef.current || !ready) return;
     setDownloading(true);
@@ -209,7 +216,7 @@ function Index() {
 
                 <div className="mt-4 rounded-xl border border-print-muted p-3">
                   <QRCodeSVG
-                    value={ussdString}
+                    value={qrTelUri}
                     size={168}
                     level="M"
                     fgColor="#0f172a"
