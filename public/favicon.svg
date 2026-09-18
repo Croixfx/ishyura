@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <!-- Background with rounded corners -->
+  <rect width="100" height="100" rx="28" fill="#0c1322"/>
+  
+  <!-- Outer Focus / Camera Scanner Corners in vivid cyan-blue -->
+  <!-- Top-Left Corner -->
+  <path d="M 24 38 L 24 29 C 24 24.58 27.58 21 32 21 L 41 21" 
+        fill="none" 
+        stroke="#38bdf8" 
+        stroke-width="7.5" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"/>
+        
+  <!-- Top-Right Corner -->
+  <path d="M 59 21 L 68 21 C 72.42 21 76 24.58 76 29 L 76 38" 
+        fill="none" 
+        stroke="#38bdf8" 
+        stroke-width="7.5" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"/>
+        
+  <!-- Bottom-Left Corner -->
+  <path d="M 24 62 L 24 71 C 24 75.42 27.58 79 32 79 L 41 79" 
+        fill="none" 
+        stroke="#38bdf8" 
+        stroke-width="7.5" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"/>
+        
+  <!-- Bottom-Right Corner -->
+  <path d="M 59 79 L 68 79 C 72.42 79 76 75.42 76 71 L 76 62" 
+        fill="none" 
+        stroke="#38bdf8" 
+        stroke-width="7.5" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"/>
+  
+  <!-- Central Center Target Dot / Scanner Core in clean crisp white -->
+  <rect x="42" y="42" width="16" height="16" rx="5" fill="#ffffff"/>
+</svg>
