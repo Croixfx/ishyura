@@ -20,6 +20,7 @@ import {
   History,
   ShieldCheck,
   LogOut,
+  LogIn,
   ChevronRight,
   Save,
 } from "lucide-react";
@@ -173,6 +174,8 @@ function Index() {
 
   // User state & Soft Registration flow
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [authPhoneInput, setAuthPhoneInput] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState("");
   const [otpPreview, setOtpPreview] = useState<string | null>(null);
@@ -289,15 +292,19 @@ function Index() {
   };
 
   // Soft registration authentication handlers
-  const handleSendOtp = async () => {
-    if (!sanitizedInput) {
-      setAuthError("Please enter your phone number first.");
+  const handleSendOtp = async (overridePhone?: string) => {
+    const raw = (
+      overridePhone !== undefined ? overridePhone : authPhoneInput || sanitizedInput
+    ).trim();
+    const digits = raw.replace(/[^0-9]/g, "");
+    if (!digits || digits.length < 8) {
+      setAuthError("Please enter a valid phone number (e.g. 0788 123 456).");
       return;
     }
     setAuthLoading(true);
     setAuthError(null);
     try {
-      const res = await IshyuraClient.requestOtp(sanitizedInput);
+      const res = await IshyuraClient.requestOtp(raw);
       setOtpSent(true);
       setDeliveryInfo({
         status: res.delivery_status,
@@ -316,21 +323,26 @@ function Index() {
     }
   };
 
-  const handleVerifyOtp = async () => {
-    if (!otpCode || otpCode.length < 6) {
+  const handleVerifyOtp = async (overridePhone?: string) => {
+    const raw = (
+      overridePhone !== undefined ? overridePhone : authPhoneInput || sanitizedInput
+    ).trim();
+    if (!otpCode || otpCode.trim().length < 6) {
       setAuthError("Please enter the 6-digit OTP code.");
       return;
     }
     setAuthLoading(true);
     setAuthError(null);
     try {
-      const res = await IshyuraClient.verifyOtp(sanitizedInput, otpCode);
+      const res = await IshyuraClient.verifyOtp(raw, otpCode.trim());
       setCurrentUser({
         id: res.user_id,
         phone_number: res.phone_number,
         is_fully_registered: res.is_fully_registered,
       });
       setOtpSent(false);
+      setOtpCode("");
+      setAuthDialogOpen(false);
       const list = await IshyuraClient.listQrCodes();
       setQrHistory(list);
     } catch (err: unknown) {
@@ -342,6 +354,13 @@ function Index() {
 
   const handleSaveToHistory = async () => {
     if (!confirmedData) return;
+    if (!currentUser) {
+      if (!authPhoneInput && sanitizedInput.length >= 8) {
+        setAuthPhoneInput(sanitizedInput);
+      }
+      setAuthDialogOpen(true);
+      return;
+    }
     setSavingQr(true);
     try {
       await IshyuraClient.createQrCode(
@@ -396,7 +415,158 @@ function Index() {
           </div>
 
           <div className="flex items-center gap-2">
-            {currentUser ? (
+            {!currentUser ? (
+              <Dialog open={authDialogOpen} onOpenChange={setAuthDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setAuthError(null);
+                      if (!authPhoneInput && sanitizedInput.length >= 8) {
+                        setAuthPhoneInput(sanitizedInput);
+                      }
+                    }}
+                    className="h-9 gap-1.5 text-xs font-semibold border-primary/40 bg-primary/5 text-primary hover:bg-primary/15"
+                  >
+                    <LogIn className="size-3.5" />
+                    <span>Register / Sign In</span>
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <ShieldCheck className="size-5 text-primary" />
+                      Register or Sign In
+                    </DialogTitle>
+                    <DialogDescription>
+                      Instant passwordless access via SMS verification. A soft account will be
+                      created automatically.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="mt-2 space-y-4">
+                    {authError && (
+                      <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
+                        <AlertTriangle className="size-4 shrink-0" />
+                        <span>{authError}</span>
+                      </div>
+                    )}
+
+                    <div>
+                      <Label className="text-xs font-semibold">Mobile Phone Number</Label>
+                      <div className="mt-1 flex gap-2">
+                        <Input
+                          type="tel"
+                          placeholder="e.g. 0788 123 456 or +250..."
+                          value={authPhoneInput}
+                          disabled={otpSent || authLoading}
+                          onChange={(e) => setAuthPhoneInput(e.target.value)}
+                          className="h-9 text-xs font-mono"
+                        />
+                        {!otpSent && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={!authPhoneInput.trim() || authLoading}
+                            onClick={() => handleSendOtp(authPhoneInput)}
+                            className="h-9 shrink-0 text-xs font-semibold"
+                          >
+                            {authLoading ? (
+                              <Loader2 className="size-3.5 animate-spin mr-1" />
+                            ) : null}
+                            Send OTP
+                          </Button>
+                        )}
+                      </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Works with MTN Rwanda, Airtel Rwanda, and international numbers via Twilio.
+                      </p>
+                    </div>
+
+                    {otpSent && (
+                      <div className="space-y-3 rounded-xl border border-border/60 bg-muted/40 p-3.5">
+                        {deliveryInfo?.status === "sent" ? (
+                          <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                            <p className="font-semibold flex items-center gap-1.5">
+                              <span>📲</span> Real SMS Dispatched via Twilio
+                            </p>
+                            <p className="text-[10px] opacity-80 mt-0.5">
+                              Check your phone inbox for your 6-digit verification code.
+                            </p>
+                          </div>
+                        ) : otpPreview ? (
+                          <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                            <div className="flex items-center justify-between">
+                              <span>Verification OTP:</span>
+                              <strong className="font-mono text-xs px-1.5 py-0.5 rounded bg-emerald-500/20">
+                                {otpPreview}
+                              </strong>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-1">
+                              Configure live Twilio credentials in{" "}
+                              <code className="font-mono">.env</code> to deliver over real mobile
+                              networks.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="rounded-lg bg-blue-500/10 border border-blue-500/30 p-2 text-[11px] text-blue-700 dark:text-blue-300">
+                            Code sent to your mobile phone via Twilio SMS.
+                          </div>
+                        )}
+
+                        <div>
+                          <Label className="text-xs font-semibold">Enter 6-digit SMS Code</Label>
+                          <div className="mt-1 flex gap-2">
+                            <Input
+                              type="text"
+                              placeholder="6-digit code"
+                              value={otpCode}
+                              maxLength={6}
+                              onChange={(e) => setOtpCode(e.target.value)}
+                              className="h-9 font-mono text-xs tracking-widest text-center"
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={otpCode.length < 6 || authLoading}
+                              onClick={() => handleVerifyOtp(authPhoneInput)}
+                              className="h-9 shrink-0 text-xs font-semibold"
+                            >
+                              {authLoading ? (
+                                <Loader2 className="size-3.5 animate-spin mr-1" />
+                              ) : null}
+                              Verify &amp; Sign In
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-between items-center pt-1 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOtpSent(false);
+                              setOtpCode("");
+                            }}
+                            className="text-muted-foreground hover:text-foreground underline"
+                          >
+                            Change number
+                          </button>
+                          <button
+                            type="button"
+                            disabled={authLoading}
+                            onClick={() => handleSendOtp(authPhoneInput)}
+                            className="text-primary hover:underline font-medium"
+                          >
+                            Resend Code
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            ) : (
               <div className="flex items-center gap-2">
                 <Dialog>
                   <DialogTrigger asChild>
@@ -511,7 +681,7 @@ function Index() {
                   </DialogContent>
                 </Dialog>
               </div>
-            ) : null}
+            )}
 
             <Button
               variant="ghost"
@@ -722,83 +892,57 @@ function Index() {
             </form>
 
             {/* Soft Registration Box (Optional cloud history sync) */}
-            {!currentUser && (
+            {!currentUser ? (
               <div className="mt-6 rounded-2xl border border-border/70 bg-card/40 p-4 sm:p-5">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="size-4 text-primary" />
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                    Soft Registration &amp; History
-                  </h3>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-                  Start with just your phone number. Save your QR codes and upgrade to a full
-                  account whenever you are ready without losing history.
-                </p>
-
-                {!otpSent ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    disabled={!sanitizedInput || authLoading}
-                    onClick={handleSendOtp}
-                    className="mt-3 w-full text-xs font-semibold"
-                  >
-                    {authLoading ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
-                    Send Real OTP to {sanitizedInput ? sanitizedInput : "your phone"}
-                  </Button>
-                ) : (
-                  <div className="mt-3 space-y-2">
-                    {deliveryInfo?.status === "sent" ? (
-                      <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] text-emerald-700 dark:text-emerald-300">
-                        <p className="font-semibold flex items-center gap-1.5">
-                          <span>📲</span> SMS Dispatched via Twilio
-                        </p>
-                        <p className="text-[10px] opacity-80 mt-0.5">
-                          Check your phone inbox for your 6-digit verification code.
-                        </p>
-                      </div>
-                    ) : otpPreview ? (
-                      <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] text-emerald-700 dark:text-emerald-300">
-                        <div className="flex items-center justify-between">
-                          <span>Verification OTP:</span>
-                          <strong className="font-mono text-xs px-1.5 py-0.5 rounded bg-emerald-500/20">
-                            {otpPreview}
-                          </strong>
-                        </div>
-                        <p className="text-[10px] text-muted-foreground mt-1">
-                          Configure live Twilio credentials in{" "}
-                          <code className="font-mono">.env</code> to deliver over real mobile
-                          networks.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="rounded-lg bg-blue-500/10 border border-blue-500/30 p-2 text-[11px] text-blue-700 dark:text-blue-300">
-                        Code sent to your mobile device via Twilio SMS.
-                      </div>
-                    )}
-                    <div className="flex gap-2">
-                      <Input
-                        type="text"
-                        placeholder="6-digit OTP"
-                        value={otpCode}
-                        onChange={(e) => setOtpCode(e.target.value)}
-                        maxLength={6}
-                        className="h-9 font-mono text-center text-sm"
-                      />
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={authLoading}
-                        onClick={handleVerifyOtp}
-                        className="h-9 px-4 text-xs font-bold"
-                      >
-                        {authLoading ? <Loader2 className="size-3.5 animate-spin" /> : "Verify"}
-                      </Button>
-                    </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="size-4 text-primary" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                      Account &amp; History Sync
+                    </h3>
                   </div>
-                )}
-                {authError && <p className="mt-2 text-[11px] text-red-500">{authError}</p>}
+                  <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                    Twilio SMS OTP
+                  </span>
+                </div>
+                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+                  Start with just your phone number. Save generated QR codes to the cloud and
+                  upgrade to a full account anytime.
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setAuthError(null);
+                    if (!authPhoneInput && sanitizedInput.length >= 8) {
+                      setAuthPhoneInput(sanitizedInput);
+                    }
+                    setAuthDialogOpen(true);
+                  }}
+                  className="mt-3 w-full text-xs font-semibold gap-1.5 border border-border/60"
+                >
+                  <LogIn className="size-3.5 text-primary" />
+                  <span>Register or Sign In with Phone</span>
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-6 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4 sm:p-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <UserCheck className="size-4 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-xs font-bold text-foreground">
+                      Signed in as {currentUser.phone_number}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                    {currentUser.is_fully_registered ? "Full Account" : "Soft Account"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
+                  Your generated QR payment cards can be saved to your personal history (
+                  {qrHistory.length} saved).
+                </p>
               </div>
             )}
 
