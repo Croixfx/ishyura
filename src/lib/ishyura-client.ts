@@ -27,10 +27,26 @@ const TOKEN_KEY = "ishyura_auth_token";
 const USER_KEY = "ishyura_user_profile";
 const QR_STORE_KEY = "ishyura_user_qrs";
 
-const BACKEND_URL =
-  (typeof window !== "undefined" &&
-    (window as unknown as { ISHYURA_BACKEND_URL?: string }).ISHYURA_BACKEND_URL) ||
-  "http://127.0.0.1:8000";
+export const getBackendUrl = (): string => {
+  const envUrl = typeof import.meta !== "undefined" ? import.meta.env?.VITE_BACKEND_URL : "";
+  if (typeof envUrl === "string" && envUrl.trim() !== "") {
+    return envUrl.trim().replace(/\/+$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    const winUrl = (window as unknown as { ISHYURA_BACKEND_URL?: string }).ISHYURA_BACKEND_URL;
+    if (winUrl && typeof winUrl === "string" && winUrl.trim() !== "") {
+      return winUrl.trim().replace(/\/+$/, "");
+    }
+
+    // In local development, default to local FastAPI on port 8000
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+      return "http://127.0.0.1:8000";
+    }
+  }
+
+  return "";
+};
 
 export class IshyuraClient {
   static getToken(): string | null {
@@ -68,19 +84,22 @@ export class IshyuraClient {
     otp_preview?: string;
   }> {
     const cleanPhone = phoneNumber.replace(/[^0-9+]/g, "").trim();
+    const backend = getBackendUrl();
 
-    // Try live Python FastAPI endpoint first
-    try {
-      const res = await fetch(`${BACKEND_URL}/auth/request-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone_number: cleanPhone }),
-      });
-      if (res.ok) {
-        return await res.json();
+    // Try live Python FastAPI endpoint first if configured
+    if (backend) {
+      try {
+        const res = await fetch(`${backend}/auth/request-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone_number: cleanPhone }),
+        });
+        if (res.ok) {
+          return await res.json();
+        }
+      } catch {
+        // Backend unreachable or offline, use local client-side soft simulation
       }
-    } catch {
-      // Backend not running on 8000 yet, use local client-side soft simulation
     }
 
     // Local client fallback
@@ -99,33 +118,36 @@ export class IshyuraClient {
     }
 
     return {
-      message: `Verification code generated for ${cleanPhone}.`,
-      delivery_status: "simulated",
+      message: `Security code generated for ${cleanPhone}.`,
+      delivery_status: "instant",
       otp_preview: dummyOtp,
     };
   }
 
   static async verifyOtp(phoneNumber: string, otp: string): Promise<AuthTokenResponse> {
     const cleanPhone = phoneNumber.replace(/[^0-9+]/g, "").trim();
+    const backend = getBackendUrl();
 
     // Try live FastAPI endpoint
-    try {
-      const res = await fetch(`${BACKEND_URL}/auth/verify-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone_number: cleanPhone, otp: otp.trim() }),
-      });
-      if (res.ok) {
-        const data: AuthTokenResponse = await res.json();
-        this.setSession(data.access_token, {
-          id: data.user_id,
-          phone_number: data.phone_number,
-          is_fully_registered: data.is_fully_registered,
+    if (backend) {
+      try {
+        const res = await fetch(`${backend}/auth/verify-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone_number: cleanPhone, otp: otp.trim() }),
         });
-        return data;
+        if (res.ok) {
+          const data: AuthTokenResponse = await res.json();
+          this.setSession(data.access_token, {
+            id: data.user_id,
+            phone_number: data.phone_number,
+            is_fully_registered: data.is_fully_registered,
+          });
+          return data;
+        }
+      } catch {
+        // Fallback
       }
-    } catch {
-      // Fallback
     }
 
     // Check local fallback
@@ -163,24 +185,27 @@ export class IshyuraClient {
   static async upgradeAccount(email: string, password: string): Promise<UserProfile> {
     const token = this.getToken();
     if (!token) throw new Error("Authentication required.");
+    const backend = getBackendUrl();
 
     // Try live FastAPI endpoint
-    try {
-      const res = await fetch(`${BACKEND_URL}/auth/upgrade`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ email, password }),
-      });
-      if (res.ok) {
-        const updatedUser: UserProfile = await res.json();
-        this.setSession(token, updatedUser);
-        return updatedUser;
+    if (backend) {
+      try {
+        const res = await fetch(`${backend}/auth/upgrade`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ email, password }),
+        });
+        if (res.ok) {
+          const updatedUser: UserProfile = await res.json();
+          this.setSession(token, updatedUser);
+          return updatedUser;
+        }
+      } catch {
+        // Fallback
       }
-    } catch {
-      // Fallback
     }
 
     // Local fallback
@@ -197,22 +222,25 @@ export class IshyuraClient {
   static async createQrCode(description: string, amount?: number | null): Promise<QRCodeRecord> {
     const token = this.getToken();
     if (!token) throw new Error("Authentication required to save QR card.");
+    const backend = getBackendUrl();
 
     // Try live FastAPI endpoint
-    try {
-      const res = await fetch(`${BACKEND_URL}/qr/create`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ description, amount: amount || null }),
-      });
-      if (res.ok) {
-        return await res.json();
+    if (backend) {
+      try {
+        const res = await fetch(`${backend}/qr/create`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ description, amount: amount || null }),
+        });
+        if (res.ok) {
+          return await res.json();
+        }
+      } catch {
+        // Fallback
       }
-    } catch {
-      // Fallback
     }
 
     const user = this.getSavedUser();
@@ -225,6 +253,13 @@ export class IshyuraClient {
     };
 
     const existingList = this.getLocalQrList();
+    const existingDuplicate = existingList.find(
+      (item) => item.description === description && item.owner_id === (user?.id || "anonymous"),
+    );
+    if (existingDuplicate) {
+      return existingDuplicate;
+    }
+
     existingList.unshift(newRecord);
     localStorage.setItem(QR_STORE_KEY, JSON.stringify(existingList));
     return newRecord;
@@ -233,19 +268,22 @@ export class IshyuraClient {
   static async listQrCodes(): Promise<QRCodeRecord[]> {
     const token = this.getToken();
     if (!token) return this.getLocalQrList();
+    const backend = getBackendUrl();
 
     // Try live FastAPI endpoint
-    try {
-      const res = await fetch(`${BACKEND_URL}/qr/list`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const list: QRCodeRecord[] = await res.json();
-        localStorage.setItem(QR_STORE_KEY, JSON.stringify(list));
-        return list;
+    if (backend) {
+      try {
+        const res = await fetch(`${backend}/qr/list`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const list: QRCodeRecord[] = await res.json();
+          localStorage.setItem(QR_STORE_KEY, JSON.stringify(list));
+          return list;
+        }
+      } catch {
+        // Fallback
       }
-    } catch {
-      // Fallback
     }
 
     return this.getLocalQrList();

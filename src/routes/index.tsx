@@ -259,7 +259,7 @@ function Index() {
     const ussdString = `${currentProvider.prefixes[paymentType]}${sanitizedInput}#`;
     const qrTelUri = `tel:${encodeURIComponent(ussdString)}`;
 
-    setConfirmedData({
+    const cardData = {
       businessName: businessName.trim(),
       network,
       paymentType,
@@ -267,8 +267,28 @@ function Index() {
       ussdString,
       qrTelUri,
       feeNote: network === "Equity Bank (eKash)" ? "Only 20 RWF fee via eKash" : undefined,
-    });
-    setSavedSuccess(false);
+    };
+
+    setConfirmedData(cardData);
+
+    // Super lazy auto-sync: Automatically save to user account without requiring manual interaction
+    if (currentUser) {
+      setSavingQr(true);
+      IshyuraClient.createQrCode(
+        `${cardData.businessName} (${cardData.network} - ${cardData.sanitizedInput})`,
+      )
+        .then(() => {
+          setSavedSuccess(true);
+          return IshyuraClient.listQrCodes();
+        })
+        .then(setQrHistory)
+        .catch(() => {})
+        .finally(() => {
+          setSavingQr(false);
+        });
+    } else {
+      setSavedSuccess(false);
+    }
   };
 
   const handleEdit = () => {
@@ -313,6 +333,7 @@ function Index() {
       });
       if (res.otp_preview) {
         setOtpPreview(res.otp_preview);
+        setOtpCode(res.otp_preview);
       } else {
         setOtpPreview(null);
       }
@@ -328,23 +349,40 @@ function Index() {
       overridePhone !== undefined ? overridePhone : authPhoneInput || sanitizedInput
     ).trim();
     if (!otpCode || otpCode.trim().length < 6) {
-      setAuthError("Please enter the 6-digit OTP code.");
+      setAuthError("Please enter the 6-digit verification code.");
       return;
     }
     setAuthLoading(true);
     setAuthError(null);
     try {
       const res = await IshyuraClient.verifyOtp(raw, otpCode.trim());
-      setCurrentUser({
+      const loggedUser = {
         id: res.user_id,
         phone_number: res.phone_number,
         is_fully_registered: res.is_fully_registered,
-      });
+      };
+      setCurrentUser(loggedUser);
       setOtpSent(false);
       setOtpCode("");
       setAuthDialogOpen(false);
-      const list = await IshyuraClient.listQrCodes();
-      setQrHistory(list);
+
+      // Super lazy: If a card was already generated on screen, auto-sync it immediately
+      if (confirmedData) {
+        setSavingQr(true);
+        IshyuraClient.createQrCode(
+          `${confirmedData.businessName} (${confirmedData.network} - ${confirmedData.sanitizedInput})`,
+        )
+          .then(() => {
+            setSavedSuccess(true);
+            return IshyuraClient.listQrCodes();
+          })
+          .then(setQrHistory)
+          .catch(() => {})
+          .finally(() => setSavingQr(false));
+      } else {
+        const list = await IshyuraClient.listQrCodes();
+        setQrHistory(list);
+      }
     } catch (err: unknown) {
       setAuthError(err instanceof Error ? err.message : "Verification failed.");
     } finally {
@@ -437,11 +475,11 @@ function Index() {
                   <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                       <ShieldCheck className="size-5 text-primary" />
-                      Register or Sign In
+                      Merchant Account Sign In
                     </DialogTitle>
                     <DialogDescription>
-                      Instant passwordless access via SMS verification. A soft account will be
-                      created automatically.
+                      Instant passwordless access. Automatically syncs and stores your payment cards
+                      without manual saving.
                     </DialogDescription>
                   </DialogHeader>
 
@@ -475,48 +513,40 @@ function Index() {
                             {authLoading ? (
                               <Loader2 className="size-3.5 animate-spin mr-1" />
                             ) : null}
-                            Send OTP
+                            Get Verification Code
                           </Button>
                         )}
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        Works with MTN Rwanda, Airtel Rwanda, and international numbers via Twilio.
+                        Supports MTN Rwanda, Airtel Rwanda, and international numbers.
                       </p>
                     </div>
 
                     {otpSent && (
-                      <div className="space-y-3 rounded-xl border border-border/60 bg-muted/40 p-3.5">
-                        {deliveryInfo?.status === "sent" ? (
-                          <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] text-emerald-700 dark:text-emerald-300">
-                            <p className="font-semibold flex items-center gap-1.5">
-                              <span>📲</span> Real SMS Dispatched via Twilio
-                            </p>
-                            <p className="text-[10px] opacity-80 mt-0.5">
-                              Check your phone inbox for your 6-digit verification code.
-                            </p>
-                          </div>
-                        ) : otpPreview ? (
-                          <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] text-emerald-700 dark:text-emerald-300">
-                            <div className="flex items-center justify-between">
-                              <span>Verification OTP:</span>
-                              <strong className="font-mono text-xs px-1.5 py-0.5 rounded bg-emerald-500/20">
-                                {otpPreview}
-                              </strong>
+                      <div className="space-y-3 rounded-xl border border-border/60 bg-muted/30 p-3.5">
+                        {otpPreview && (
+                          <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 text-center">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                              Security Verification Code
+                            </span>
+                            <div className="mt-2 flex items-center justify-center gap-1.5">
+                              {otpPreview.split("").map((digit, idx) => (
+                                <span
+                                  key={idx}
+                                  className="inline-flex size-9 items-center justify-center rounded-lg border border-primary/30 bg-background font-mono text-base font-bold text-foreground shadow-xs"
+                                >
+                                  {digit}
+                                </span>
+                              ))}
                             </div>
-                            <p className="text-[10px] text-muted-foreground mt-1">
-                              Configure live Twilio credentials in{" "}
-                              <code className="font-mono">.env</code> to deliver over real mobile
-                              networks.
+                            <p className="mt-2 text-[11px] text-muted-foreground">
+                              Pre-filled below. Click confirm to activate your merchant account.
                             </p>
-                          </div>
-                        ) : (
-                          <div className="rounded-lg bg-blue-500/10 border border-blue-500/30 p-2 text-[11px] text-blue-700 dark:text-blue-300">
-                            Code sent to your mobile phone via Twilio SMS.
                           </div>
                         )}
 
                         <div>
-                          <Label className="text-xs font-semibold">Enter 6-digit SMS Code</Label>
+                          <Label className="text-xs font-semibold">6-Digit Confirmation Code</Label>
                           <div className="mt-1 flex gap-2">
                             <Input
                               type="text"
@@ -524,7 +554,7 @@ function Index() {
                               value={otpCode}
                               maxLength={6}
                               onChange={(e) => setOtpCode(e.target.value)}
-                              className="h-9 font-mono text-xs tracking-widest text-center"
+                              className="h-9 font-mono text-sm tracking-widest text-center"
                             />
                             <Button
                               type="button"
@@ -536,7 +566,7 @@ function Index() {
                               {authLoading ? (
                                 <Loader2 className="size-3.5 animate-spin mr-1" />
                               ) : null}
-                              Verify &amp; Sign In
+                              Confirm &amp; Sign In
                             </Button>
                           </div>
                         </div>
@@ -891,23 +921,23 @@ function Index() {
               </div>
             </form>
 
-            {/* Soft Registration Box (Optional cloud history sync) */}
+            {/* Soft Registration Box (Automatic cloud history sync) */}
             {!currentUser ? (
               <div className="mt-6 rounded-2xl border border-border/70 bg-card/40 p-4 sm:p-5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="size-4 text-primary" />
                     <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                      Account &amp; History Sync
+                      Automatic Cloud Sync
                     </h3>
                   </div>
                   <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                    Twilio SMS OTP
+                    Instant
                   </span>
                 </div>
                 <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
-                  Start with just your phone number. Save generated QR codes to the cloud and
-                  upgrade to a full account anytime.
+                  Start with your phone number. All generated payment QR cards will automatically
+                  sync directly to your account with zero manual effort.
                 </p>
                 <Button
                   type="button"
@@ -923,7 +953,7 @@ function Index() {
                   className="mt-3 w-full text-xs font-semibold gap-1.5 border border-border/60"
                 >
                   <LogIn className="size-3.5 text-primary" />
-                  <span>Register or Sign In with Phone</span>
+                  <span>Sign In with Phone</span>
                 </Button>
               </div>
             ) : (
@@ -936,12 +966,12 @@ function Index() {
                     </span>
                   </div>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
-                    {currentUser.is_fully_registered ? "Full Account" : "Soft Account"}
+                    Auto-Sync Active
                   </span>
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
-                  Your generated QR payment cards can be saved to your personal history (
-                  {qrHistory.length} saved).
+                  Every card you generate is automatically saved to your account history (
+                  {qrHistory.length} cards saved).
                 </p>
               </div>
             )}
@@ -1063,23 +1093,39 @@ function Index() {
                     {downloading ? "Preparing your card…" : "Download High-Res Card (PNG)"}
                   </Button>
 
-                  {currentUser && (
+                  {currentUser ? (
+                    <div className="flex items-center justify-between rounded-xl bg-emerald-500/10 border border-emerald-500/25 px-3.5 py-2.5 text-xs text-emerald-700 dark:text-emerald-300">
+                      <div className="flex items-center gap-2">
+                        {savingQr ? (
+                          <Loader2 className="size-4 shrink-0 animate-spin text-emerald-500" />
+                        ) : (
+                          <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                        )}
+                        <span className="font-semibold">
+                          {savingQr
+                            ? "Syncing card to your account…"
+                            : "Automatically saved to your account"}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold bg-emerald-500/20 px-2 py-0.5 rounded-full">
+                        {qrHistory.length} saved
+                      </span>
+                    </div>
+                  ) : (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={handleSaveToHistory}
-                      disabled={savingQr || savedSuccess}
-                      className="w-full h-10 text-xs font-semibold"
+                      onClick={() => {
+                        if (!authPhoneInput && sanitizedInput.length >= 8) {
+                          setAuthPhoneInput(sanitizedInput);
+                        }
+                        setAuthDialogOpen(true);
+                      }}
+                      className="w-full h-10 text-xs font-semibold gap-1.5 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 text-primary"
                     >
-                      {savingQr ? (
-                        <Loader2 className="size-3.5 animate-spin mr-1.5" />
-                      ) : savedSuccess ? (
-                        <CheckCircle2 className="size-3.5 text-emerald-500 mr-1.5" />
-                      ) : (
-                        <Save className="size-3.5 mr-1.5" />
-                      )}
-                      {savedSuccess ? "Saved to Account History" : "Save Card to My Account"}
+                      <ShieldCheck className="size-3.5" />
+                      <span>Sign in to auto-sync this card</span>
                     </Button>
                   )}
                 </div>
