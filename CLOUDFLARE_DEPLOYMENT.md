@@ -38,12 +38,14 @@ TWILIO_VERIFY_SERVICE_SID=
 1. Push this repository to your **GitHub** or **GitLab** account.
 2. Go to the [Cloudflare Dashboard](https://dash.cloudflare.com/) > **Compute (Workers & Pages)** > **Create application** > **Pages** > **Connect to Git**.
 3. Select your repository and configure build settings:
-   - **Framework preset**: `Vite`
+   - **Framework preset**: `None` (or `Vite`)
    - **Build command**: `npm run build`
-   - **Build output directory**: `dist`
+   - **Build output directory**: `dist/client`
    - **Node.js Version**: In Environment Variables, set `NODE_VERSION` = `20`.
    - **Backend API URL**: Set `VITE_BACKEND_URL` to your live backend endpoint (e.g. `https://api.yourdomain.com`).
 4. Click **Save and Deploy**. Cloudflare Pages will build and deploy your site to `https://<your-project>.pages.dev`.
+
+> **Note on Cloudflare Routing**: Cloudflare Pages natively supports Single Page Application (SPA) routing. Do **not** add a `/* /index.html 200` rule to `_redirects`, as Cloudflare's URL normalizer automatically handles root routing and will reject manual rewrite loops with error `code: 100324`.
 
 ### Option B: Deploy via Cloudflare Wrangler CLI
 From your terminal:
@@ -51,8 +53,8 @@ From your terminal:
 # 1. Build the production bundle
 npm run build
 
-# 2. Deploy directly to Cloudflare Pages
-npx wrangler pages deploy dist --project-name=ishyura
+# 2. Deploy directly to Cloudflare Pages (pointing to dist/client)
+npx wrangler pages deploy dist/client --project-name=ishyura
 ```
 
 ---
