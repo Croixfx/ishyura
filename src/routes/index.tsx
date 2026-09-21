@@ -15,6 +15,13 @@ import {
   ArrowRight,
   RotateCcw,
   Sparkles,
+  Landmark,
+  UserCheck,
+  History,
+  ShieldCheck,
+  LogOut,
+  ChevronRight,
+  Save,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -28,23 +35,32 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { IshyuraClient, UserProfile, QRCodeRecord } from "@/lib/ishyura-client";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       {
-        title: "Ishyura — Instant MoMo Payment QR Codes",
+        title: "Ishyura — Instant Payment QR Codes (MoMo & Equity eKash)",
       },
       {
         name: "description",
         content:
-          "Create printable Mobile Money payment QR tent cards for your shop in seconds. Zero login, works with MTN MoMo and Airtel Money for Merchant Codes and Phone Numbers.",
+          "Create printable payment QR tent cards for your shop in seconds. Zero login, works with MTN MoMo, Airtel Money, and Equity Bank eKash (*555*2*tel#) for Merchant Codes and Phone Numbers.",
       },
-      { property: "og:title", content: "Ishyura — Instant MoMo Payment QR Codes" },
+      { property: "og:title", content: "Ishyura — Instant Payment QR Codes" },
       {
         property: "og:description",
         content:
-          "Create printable Mobile Money payment QR tent cards for your shop in seconds. Zero login.",
+          "Create printable Mobile Money and Equity eKash payment QR tent cards for your counter. Zero login.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -53,18 +69,21 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-export type Network = "MTN MoMo" | "Airtel Money";
+export type Network = "MTN MoMo" | "Airtel Money" | "Equity Bank (eKash)";
 export type PaymentType = "momo_code" | "phone";
 
 export interface ProviderConfig {
   name: Network;
   brandColor: string;
+  badgeLabel?: string;
+  supportsMomoCode: boolean;
+  note?: string;
   momoCodeLabel: string;
   momoCodePlaceholder: string;
   phonePlaceholder: string;
   prefixes: {
-    momo_code: string; // Dialing a merchant / till / agent code
-    phone: string; // Transferring / sending money to a mobile number
+    momo_code: string;
+    phone: string;
   };
 }
 
@@ -72,6 +91,7 @@ export const PROVIDERS: Record<Network, ProviderConfig> = {
   "MTN MoMo": {
     name: "MTN MoMo",
     brandColor: "#ffcc00",
+    supportsMomoCode: true,
     momoCodeLabel: "MoMo Pay Merchant Code",
     momoCodePlaceholder: "e.g. 123456",
     phonePlaceholder: "e.g. 0788 123 456",
@@ -83,12 +103,27 @@ export const PROVIDERS: Record<Network, ProviderConfig> = {
   "Airtel Money": {
     name: "Airtel Money",
     brandColor: "#e60000",
+    supportsMomoCode: true,
     momoCodeLabel: "Airtel Merchant / Till Code",
     momoCodePlaceholder: "e.g. 567890",
     phonePlaceholder: "e.g. 0733 123 456 or 0722 123 456",
     prefixes: {
       momo_code: "*182*8*1*",
       phone: "*182*1*1*",
+    },
+  },
+  "Equity Bank (eKash)": {
+    name: "Equity Bank (eKash)",
+    brandColor: "#8B1E0F",
+    badgeLabel: "eKash • Only 20 RWF",
+    supportsMomoCode: false,
+    note: "Pay via Equity eKash straight to any phone number (*555*2*tel#) for just 20 RWF fee.",
+    momoCodeLabel: "Merchant Code",
+    momoCodePlaceholder: "e.g. 123456",
+    phonePlaceholder: "e.g. 0788 123 456 or 0733 123 456",
+    prefixes: {
+      momo_code: "*555*2*",
+      phone: "*555*2*",
     },
   },
 };
@@ -124,6 +159,7 @@ interface ConfirmedCardData {
   sanitizedInput: string;
   ussdString: string;
   qrTelUri: string;
+  feeNote?: string;
 }
 
 function Index() {
@@ -132,6 +168,30 @@ function Index() {
   const [paymentType, setPaymentType] = useState<PaymentType>("momo_code");
   const [accountValue, setAccountValue] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const [savingQr, setSavingQr] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // User state & Soft Registration flow
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpPreview, setOtpPreview] = useState<string | null>(null);
+  const [deliveryInfo, setDeliveryInfo] = useState<{
+    status?: string;
+    provider?: string;
+    message?: string;
+  } | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // Upgrade state
+  const [upgradeEmail, setUpgradeEmail] = useState("");
+  const [upgradePassword, setUpgradePassword] = useState("");
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [upgradeSuccess, setUpgradeSuccess] = useState(false);
+
+  // QR History
+  const [qrHistory, setQrHistory] = useState<QRCodeRecord[]>([]);
 
   // Verification & Confirmation state: prevents generating or exporting incomplete/miskeyed codes
   const [confirmedData, setConfirmedData] = useState<ConfirmedCardData | null>(null);
@@ -139,12 +199,20 @@ function Index() {
   const cardRef = useRef<HTMLDivElement>(null);
   const { theme, toggle } = useTheme();
 
+  useEffect(() => {
+    const user = IshyuraClient.getSavedUser();
+    if (user) {
+      setCurrentUser(user);
+      IshyuraClient.listQrCodes().then(setQrHistory);
+    }
+  }, []);
+
   const currentProvider = PROVIDERS[network];
 
   // Clean formatted input (stripping non-digits and spacing)
   const sanitizedInput = useMemo(() => accountValue.replace(/[^0-9]/g, "").trim(), [accountValue]);
 
-  // Validation rules tailored to Rwanda mobile money
+  // Validation rules tailored to Rwanda mobile money and bank eKash
   const validationError = useMemo(() => {
     if (!businessName.trim()) {
       return "Please enter your business or shop name.";
@@ -159,7 +227,6 @@ function Index() {
         return "Merchant codes are typically 5 to 7 digits long.";
       }
     } else {
-      // Phone number: standard Rwandan format is 10 digits (e.g. 078XXXXXXX or 073XXXXXXX)
       if (sanitizedInput.length < 9 || sanitizedInput.length > 12) {
         return "Please enter a valid phone number (e.g. 0788 123 456).";
       }
@@ -173,8 +240,15 @@ function Index() {
   const draftUssdPrefix = currentProvider.prefixes[paymentType];
   const draftUssdString = `${draftUssdPrefix}${sanitizedInput}#`;
 
-  // When user edits inputs, if previously confirmed, we keep the previous confirmed card
-  // until they confirm changes or explicitly reset.
+  const handleNetworkChange = (v: Network) => {
+    setNetwork(v);
+    if (confirmedData) setConfirmedData(null);
+    if (v === "Equity Bank (eKash)" && paymentType === "momo_code") {
+      setPaymentType("phone");
+    }
+  };
+
+  // When user clicks Confirm & Generate
   const handleConfirmAndGenerate = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!canConfirm) return;
@@ -189,7 +263,9 @@ function Index() {
       sanitizedInput,
       ussdString,
       qrTelUri,
+      feeNote: network === "Equity Bank (eKash)" ? "Only 20 RWF fee via eKash" : undefined,
     });
+    setSavedSuccess(false);
   };
 
   const handleEdit = () => {
@@ -203,12 +279,103 @@ function Index() {
       const dataUrl = await toPng(cardRef.current, { pixelRatio: 3 });
       const link = document.createElement("a");
       const typeSlug = confirmedData.paymentType === "momo_code" ? "code" : "phone";
-      link.download = `${confirmedData.businessName.replace(/\s+/g, "_")}_${confirmedData.network.replace(/\s+/g, "_")}_${typeSlug}.png`;
+      const netSlug = confirmedData.network.replace(/[^a-zA-Z0-9]/g, "_");
+      link.download = `${confirmedData.businessName.replace(/\s+/g, "_")}_${netSlug}_${typeSlug}.png`;
       link.href = dataUrl;
       link.click();
     } finally {
       setDownloading(false);
     }
+  };
+
+  // Soft registration authentication handlers
+  const handleSendOtp = async () => {
+    if (!sanitizedInput) {
+      setAuthError("Please enter your phone number first.");
+      return;
+    }
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const res = await IshyuraClient.requestOtp(sanitizedInput);
+      setOtpSent(true);
+      setDeliveryInfo({
+        status: res.delivery_status,
+        provider: res.provider,
+        message: res.message,
+      });
+      if (res.otp_preview) {
+        setOtpPreview(res.otp_preview);
+      } else {
+        setOtpPreview(null);
+      }
+    } catch (err: unknown) {
+      setAuthError(err instanceof Error ? err.message : "Failed to send OTP.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otpCode || otpCode.length < 6) {
+      setAuthError("Please enter the 6-digit OTP code.");
+      return;
+    }
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const res = await IshyuraClient.verifyOtp(sanitizedInput, otpCode);
+      setCurrentUser({
+        id: res.user_id,
+        phone_number: res.phone_number,
+        is_fully_registered: res.is_fully_registered,
+      });
+      setOtpSent(false);
+      const list = await IshyuraClient.listQrCodes();
+      setQrHistory(list);
+    } catch (err: unknown) {
+      setAuthError(err instanceof Error ? err.message : "Verification failed.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSaveToHistory = async () => {
+    if (!confirmedData) return;
+    setSavingQr(true);
+    try {
+      await IshyuraClient.createQrCode(
+        `${confirmedData.businessName} (${confirmedData.network} - ${confirmedData.sanitizedInput})`,
+      );
+      setSavedSuccess(true);
+      const updated = await IshyuraClient.listQrCodes();
+      setQrHistory(updated);
+    } catch (err: unknown) {
+      setAuthError(err instanceof Error ? err.message : "Failed to save QR.");
+    } finally {
+      setSavingQr(false);
+    }
+  };
+
+  const handleUpgradeAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!upgradeEmail || !upgradePassword) return;
+    setUpgradeLoading(true);
+    try {
+      const updated = await IshyuraClient.upgradeAccount(upgradeEmail, upgradePassword);
+      setCurrentUser(updated);
+      setUpgradeSuccess(true);
+    } catch (err: unknown) {
+      setAuthError(err instanceof Error ? err.message : "Failed to upgrade account.");
+    } finally {
+      setUpgradeLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    IshyuraClient.logout();
+    setCurrentUser(null);
+    setQrHistory([]);
   };
 
   return (
@@ -223,37 +390,157 @@ function Index() {
             <div>
               <span className="text-xl font-extrabold tracking-tight text-foreground">Ishyura</span>
               <span className="ml-2 hidden text-xs font-semibold text-muted-foreground sm:inline-block">
-                Instant MoMo Payment QR Cards
+                Instant Payment QR Cards
               </span>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggle}
-            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            className="rounded-full text-muted-foreground hover:text-foreground"
-          >
-            <span className="relative flex size-5 items-center justify-center">
-              <Sun
-                className={`absolute size-5 transition-all duration-300 ${
-                  theme === "dark"
-                    ? "scale-0 -rotate-90 opacity-0"
-                    : "scale-100 rotate-0 opacity-100"
-                }`}
-              />
-              <Moon
-                className={`absolute size-5 transition-all duration-300 ${
-                  theme === "dark"
-                    ? "scale-100 rotate-0 opacity-100"
-                    : "scale-0 rotate-90 opacity-0"
-                }`}
-              />
-            </span>
-          </Button>
+
+          <div className="flex items-center gap-2">
+            {currentUser ? (
+              <div className="flex items-center gap-2">
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 gap-1.5 text-xs font-semibold"
+                    >
+                      <UserCheck className="size-4 text-emerald-500" />
+                      <span className="max-w-[110px] truncate">{currentUser.phone_number}</span>
+                      {currentUser.is_fully_registered ? (
+                        <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                          Full
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                          Soft
+                        </span>
+                      )}
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        <ShieldCheck className="size-5 text-primary" />
+                        Ishyura Account &amp; History
+                      </DialogTitle>
+                      <DialogDescription>
+                        {currentUser.is_fully_registered
+                          ? "Your account is fully registered and protected."
+                          : "You are in Soft Registration. Upgrade to add email & password anytime without losing your QR codes."}
+                      </DialogDescription>
+                    </DialogHeader>
+
+                    {!currentUser.is_fully_registered && (
+                      <form
+                        onSubmit={handleUpgradeAccount}
+                        className="mt-2 space-y-3 rounded-xl border border-border/60 bg-muted/40 p-4"
+                      >
+                        <p className="text-xs font-bold text-foreground">Upgrade to Full Account</p>
+                        <Input
+                          type="email"
+                          placeholder="Your email address"
+                          value={upgradeEmail}
+                          onChange={(e) => setUpgradeEmail(e.target.value)}
+                          required
+                          className="h-9 text-xs"
+                        />
+                        <Input
+                          type="password"
+                          placeholder="Create a password (min 6 chars)"
+                          value={upgradePassword}
+                          onChange={(e) => setUpgradePassword(e.target.value)}
+                          required
+                          className="h-9 text-xs"
+                        />
+                        <Button
+                          type="submit"
+                          size="sm"
+                          disabled={upgradeLoading}
+                          className="w-full text-xs font-bold"
+                        >
+                          {upgradeLoading ? "Upgrading..." : "Save & Upgrade Account"}
+                        </Button>
+                        {upgradeSuccess && (
+                          <p className="text-[11px] font-medium text-emerald-600 flex items-center gap-1">
+                            <CheckCircle2 className="size-3" /> Account successfully upgraded!
+                          </p>
+                        )}
+                      </form>
+                    )}
+
+                    <div className="space-y-2 pt-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                          <History className="size-3.5" /> Saved QR Cards ({qrHistory.length})
+                        </p>
+                      </div>
+                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                        {qrHistory.length > 0 ? (
+                          qrHistory.map((item) => (
+                            <div
+                              key={item.id}
+                              className="rounded-lg border border-border/40 bg-card p-2 text-xs flex justify-between items-center"
+                            >
+                              <div>
+                                <p className="font-semibold">{item.description}</p>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {new Date(item.created_at).toLocaleDateString()}
+                                </p>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-xs text-muted-foreground py-2 text-center">
+                            No QR codes saved yet.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end pt-3 border-t border-border/50">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleLogout}
+                        className="text-xs text-red-500 hover:text-red-600"
+                      >
+                        <LogOut className="size-3.5 mr-1" /> Logout
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            ) : null}
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggle}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              className="rounded-full text-muted-foreground hover:text-foreground"
+            >
+              <span className="relative flex size-5 items-center justify-center">
+                <Sun
+                  className={`absolute size-5 transition-all duration-300 ${
+                    theme === "dark"
+                      ? "scale-0 -rotate-90 opacity-0"
+                      : "scale-100 rotate-0 opacity-100"
+                  }`}
+                />
+                <Moon
+                  className={`absolute size-5 transition-all duration-300 ${
+                    theme === "dark"
+                      ? "scale-100 rotate-0 opacity-100"
+                      : "scale-0 rotate-90 opacity-0"
+                  }`}
+                />
+              </span>
+            </Button>
+          </div>
         </header>
 
-        {/* Main Content Grid: 1 column on mobile/tablets, 2 columns on desktop/laptops */}
+        {/* Main Content Grid */}
         <main className="mt-8 grid flex-1 grid-cols-1 items-start gap-8 lg:mt-12 lg:grid-cols-12 lg:gap-12">
           {/* Left Column: Form & Confirmation step */}
           <section className="lg:col-span-6 xl:col-span-5">
@@ -262,8 +549,8 @@ function Index() {
                 Get paid with a scan
               </h1>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground sm:text-base">
-                Create a printable Mobile Money QR tent card for your counter. Review and confirm
-                your details before generating to guarantee zero mistakes.
+                Create a printable payment QR tent card for your counter. Supports MTN MoMo, Airtel
+                Money, and Equity Bank eKash with optional account history.
               </p>
             </div>
 
@@ -291,23 +578,25 @@ function Index() {
 
               <div className="space-y-2">
                 <Label htmlFor="network" className="text-sm font-semibold">
-                  Payment Network
+                  Payment Network / Bank
                 </Label>
-                <Select
-                  value={network}
-                  onValueChange={(v) => {
-                    setNetwork(v as Network);
-                    if (confirmedData) setConfirmedData(null);
-                  }}
-                >
+                <Select value={network} onValueChange={(v) => handleNetworkChange(v as Network)}>
                   <SelectTrigger id="network" className="h-11">
-                    <SelectValue placeholder="Choose network" />
+                    <SelectValue placeholder="Choose provider" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="MTN MoMo">MTN MoMo</SelectItem>
                     <SelectItem value="Airtel Money">Airtel Money</SelectItem>
+                    <SelectItem value="Equity Bank (eKash)">
+                      Equity Bank (eKash • 20 RWF)
+                    </SelectItem>
                   </SelectContent>
                 </Select>
+                {network === "Equity Bank (eKash)" && (
+                  <p className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                    ✨ Equity eKash lets clients pay directly to your phone number for just 20 RWF!
+                  </p>
+                )}
               </div>
 
               {/* Payment Type Selection */}
@@ -324,7 +613,8 @@ function Index() {
                   <TabsList className="grid h-11 w-full grid-cols-2 rounded-xl bg-muted/70 p-1">
                     <TabsTrigger
                       value="momo_code"
-                      className="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold sm:text-sm"
+                      disabled={!currentProvider.supportsMomoCode}
+                      className="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold sm:text-sm disabled:opacity-40"
                     >
                       <Store className="size-4 shrink-0" />
                       <span>Merchant Code</span>
@@ -339,9 +629,11 @@ function Index() {
                   </TabsList>
                 </Tabs>
                 <p className="text-[11px] text-muted-foreground">
-                  {paymentType === "momo_code"
-                    ? "For registered merchant/till codes (dials *182*8*1*code#)."
-                    : "For direct personal/agent phone number transfers (dials *182*1*1*number#)."}
+                  {network === "Equity Bank (eKash)"
+                    ? "Equity eKash dials *555*2*tel# to send money straight to your phone number."
+                    : paymentType === "momo_code"
+                      ? "For registered merchant/till codes (dials *182*8*1*code#)."
+                      : "For direct phone number transfers (dials *182*1*1*number#)."}
                 </p>
               </div>
 
@@ -350,7 +642,9 @@ function Index() {
                 <Label htmlFor="account-value" className="text-sm font-semibold">
                   {paymentType === "momo_code"
                     ? currentProvider.momoCodeLabel
-                    : "Recipient Mobile Phone Number"}
+                    : network === "Equity Bank (eKash)"
+                      ? "Recipient Phone Number (tel)"
+                      : "Recipient Mobile Phone Number"}
                 </Label>
                 <Input
                   id="account-value"
@@ -427,15 +721,96 @@ function Index() {
               </div>
             </form>
 
+            {/* Soft Registration Box (Optional cloud history sync) */}
+            {!currentUser && (
+              <div className="mt-6 rounded-2xl border border-border/70 bg-card/40 p-4 sm:p-5">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="size-4 text-primary" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                    Soft Registration &amp; History
+                  </h3>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                  Start with just your phone number. Save your QR codes and upgrade to a full
+                  account whenever you are ready without losing history.
+                </p>
+
+                {!otpSent ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={!sanitizedInput || authLoading}
+                    onClick={handleSendOtp}
+                    className="mt-3 w-full text-xs font-semibold"
+                  >
+                    {authLoading ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
+                    Send Real OTP to {sanitizedInput ? sanitizedInput : "your phone"}
+                  </Button>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {deliveryInfo?.status === "sent" ? (
+                      <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                        <p className="font-semibold flex items-center gap-1.5">
+                          <span>📲</span> SMS Dispatched via Twilio
+                        </p>
+                        <p className="text-[10px] opacity-80 mt-0.5">
+                          Check your phone inbox for your 6-digit verification code.
+                        </p>
+                      </div>
+                    ) : otpPreview ? (
+                      <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                        <div className="flex items-center justify-between">
+                          <span>Verification OTP:</span>
+                          <strong className="font-mono text-xs px-1.5 py-0.5 rounded bg-emerald-500/20">
+                            {otpPreview}
+                          </strong>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground mt-1">
+                          Configure live Twilio credentials in{" "}
+                          <code className="font-mono">.env</code> to deliver over real mobile
+                          networks.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg bg-blue-500/10 border border-blue-500/30 p-2 text-[11px] text-blue-700 dark:text-blue-300">
+                        Code sent to your mobile device via Twilio SMS.
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="6-digit OTP"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value)}
+                        maxLength={6}
+                        className="h-9 font-mono text-center text-sm"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={authLoading}
+                        onClick={handleVerifyOtp}
+                        className="h-9 px-4 text-xs font-bold"
+                      >
+                        {authLoading ? <Loader2 className="size-3.5 animate-spin" /> : "Verify"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {authError && <p className="mt-2 text-[11px] text-red-500">{authError}</p>}
+              </div>
+            )}
+
             {/* Practical instructions / feature badges */}
             <div className="mt-6 grid grid-cols-2 gap-3 text-xs text-muted-foreground">
               <div className="rounded-xl border border-border/40 bg-card/30 p-3">
                 <p className="font-semibold text-foreground flex items-center gap-1.5">
-                  <CheckCircle2 className="size-3.5 text-emerald-500" />
-                  Dual USSD Routing
+                  <Landmark className="size-3.5 text-emerald-500" />
+                  Equity eKash (20 RWF)
                 </p>
                 <p className="mt-0.5">
-                  Automatically chooses the proper USSD syntax for codes or phone numbers.
+                  Instant dialing via *555*2*tel# with an affordable 20 RWF transaction cost.
                 </p>
               </div>
               <div className="rounded-xl border border-border/40 bg-card/30 p-3">
@@ -453,7 +828,7 @@ function Index() {
           {/* Right Column: Live Payment Card Preview & Download */}
           <section className="lg:col-span-6 lg:col-start-7 xl:col-span-7 flex flex-col items-center justify-center">
             {confirmedData ? (
-              <div className="w-full max-w-sm space-y-5 lg:sticky lg:top-8 animate-in fade-in zoom-in-95 duration-300">
+              <div className="w-full max-w-sm space-y-4 lg:sticky lg:top-8 animate-in fade-in zoom-in-95 duration-300">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
                     Generated Card
@@ -464,7 +839,7 @@ function Index() {
                   </span>
                 </div>
 
-                {/* Printable card — fixed white surface so it prints cleanly */}
+                {/* Printable card */}
                 <div
                   ref={cardRef}
                   className="w-full overflow-hidden rounded-2xl bg-print-surface text-print-ink shadow-2xl shadow-black/15 transition-all duration-300"
@@ -473,7 +848,11 @@ function Index() {
                   <div className="flex flex-col items-center px-6 pb-6 pt-6 text-center">
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-print-muted-ink">
-                        {confirmedData.paymentType === "momo_code" ? "Merchant Pay" : "Send Money"}
+                        {confirmedData.network === "Equity Bank (eKash)"
+                          ? "Equity eKash Pay"
+                          : confirmedData.paymentType === "momo_code"
+                            ? "Merchant Pay"
+                            : "Send Money"}
                       </span>
                       <span className="text-[10px] rounded-sm bg-print-muted px-1.5 py-0.5 font-bold uppercase text-print-muted-ink">
                         {confirmedData.network}
@@ -502,6 +881,11 @@ function Index() {
                       <p className="font-mono text-sm font-bold tracking-tight text-print-ink">
                         {confirmedData.ussdString}
                       </p>
+                      {confirmedData.feeNote && (
+                        <p className="mt-1 text-[11px] font-bold text-emerald-700">
+                          {confirmedData.feeNote}
+                        </p>
+                      )}
                     </div>
 
                     <p className="mt-3 text-[11px] font-medium text-print-muted-ink">
@@ -510,27 +894,51 @@ function Index() {
                   </div>
                   <div className="flex items-center justify-between border-t border-print-muted bg-print-muted/40 px-5 py-3">
                     <span className="text-[11px] font-semibold text-print-muted-ink">
-                      {confirmedData.paymentType === "momo_code"
-                        ? "Registered Merchant"
-                        : "Direct Number"}
+                      {confirmedData.network === "Equity Bank (eKash)"
+                        ? "eKash • 20 RWF"
+                        : confirmedData.paymentType === "momo_code"
+                          ? "Registered Merchant"
+                          : "Direct Number"}
                     </span>
                     <span className="text-sm font-extrabold text-primary">Ishyura</span>
                   </div>
                 </div>
 
-                <Button
-                  size="lg"
-                  className="w-full h-12 text-base font-bold shadow-lg shadow-primary/20"
-                  onClick={handleDownload}
-                  disabled={downloading}
-                >
-                  {downloading ? (
-                    <Loader2 className="size-5 animate-spin" />
-                  ) : (
-                    <Download className="size-5" />
+                <div className="space-y-2">
+                  <Button
+                    size="lg"
+                    className="w-full h-12 text-base font-bold shadow-lg shadow-primary/20"
+                    onClick={handleDownload}
+                    disabled={downloading}
+                  >
+                    {downloading ? (
+                      <Loader2 className="size-5 animate-spin" />
+                    ) : (
+                      <Download className="size-5" />
+                    )}
+                    {downloading ? "Preparing your card…" : "Download High-Res Card (PNG)"}
+                  </Button>
+
+                  {currentUser && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSaveToHistory}
+                      disabled={savingQr || savedSuccess}
+                      className="w-full h-10 text-xs font-semibold"
+                    >
+                      {savingQr ? (
+                        <Loader2 className="size-3.5 animate-spin mr-1.5" />
+                      ) : savedSuccess ? (
+                        <CheckCircle2 className="size-3.5 text-emerald-500 mr-1.5" />
+                      ) : (
+                        <Save className="size-3.5 mr-1.5" />
+                      )}
+                      {savedSuccess ? "Saved to Account History" : "Save Card to My Account"}
+                    </Button>
                   )}
-                  {downloading ? "Preparing your card…" : "Download High-Res Card (PNG)"}
-                </Button>
+                </div>
 
                 <p className="text-center text-xs text-muted-foreground">
                   Print it, fold as a tent card, or place on your shop counter.
