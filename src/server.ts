@@ -1,3 +1,5 @@
+import { initPolyfills } from "./lib/polyfill";
+initPolyfills();
 import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
