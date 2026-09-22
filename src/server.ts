@@ -54,6 +54,16 @@ export default {
         return await handleApiRequest(request, env);
       }
 
+      // If running on Cloudflare Workers with [assets] binding
+      const workerEnv = env as
+        { ASSETS?: { fetch: (req: Request) => Promise<Response> } } | undefined;
+      if (workerEnv?.ASSETS && typeof workerEnv.ASSETS.fetch === "function") {
+        const assetResponse = await workerEnv.ASSETS.fetch(request);
+        if (assetResponse.status !== 404) {
+          return assetResponse;
+        }
+      }
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);
