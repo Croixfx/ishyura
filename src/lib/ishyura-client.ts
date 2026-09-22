@@ -343,41 +343,49 @@ export class IshyuraClient {
   // ADMIN DASHBOARD & OWNER REPORTING
   // ------------------------------------------------------------------
   static async getAdminStats(adminKey: string): Promise<AdminStats> {
-    const res = await fetch(getApiEndpoint("admin/stats"), {
-      headers: { "x-admin-key": adminKey },
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/stats?key=${encodeURIComponent(cleanKey)}`), {
+      headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
-      throw new Error("Invalid admin credentials or server error.");
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
     }
     return await res.json();
   }
 
   static async getAdminMerchants(adminKey: string): Promise<MerchantRecord[]> {
-    const res = await fetch(getApiEndpoint("admin/merchants"), {
-      headers: { "x-admin-key": adminKey },
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/merchants?key=${encodeURIComponent(cleanKey)}`), {
+      headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
-      throw new Error("Failed to load merchants list.");
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
     }
     return await res.json();
   }
 
   static async getAdminQrCodes(adminKey: string): Promise<QRCodeRecord[]> {
-    const res = await fetch(getApiEndpoint("admin/qr-codes"), {
-      headers: { "x-admin-key": adminKey },
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/qr-codes?key=${encodeURIComponent(cleanKey)}`), {
+      headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
-      throw new Error("Failed to load QR cards.");
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
     }
     return await res.json();
   }
 
   static async getAdminInquiries(adminKey: string): Promise<InquiryRecord[]> {
-    const res = await fetch(getApiEndpoint("admin/inquiries"), {
-      headers: { "x-admin-key": adminKey },
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/inquiries?key=${encodeURIComponent(cleanKey)}`), {
+      headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
-      throw new Error("Failed to load inquiries.");
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
     }
     return await res.json();
   }

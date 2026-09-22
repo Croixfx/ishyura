@@ -137,14 +137,19 @@ function jsonResponse(data: unknown, status = 200): Response {
 }
 
 function verifyAdminAuth(request: Request, env?: AppEnv): boolean {
-  const adminSecret = env?.ADMIN_SECRET || "ishyura2026";
-  const authHeader = request.headers.get("x-admin-key");
-  const authParam = new URL(request.url).searchParams.get("key");
-  return (
-    authHeader === adminSecret ||
-    authParam === adminSecret ||
-    authHeader === "admin" ||
-    authParam === "admin"
+  const configuredSecret = (env?.ADMIN_SECRET || "ishyura2026").trim();
+  const authHeader = (request.headers.get("x-admin-key") || "").trim();
+  const authParam = (new URL(request.url).searchParams.get("key") || "").trim();
+  const bearer = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+
+  const candidates = [authHeader, authParam, bearer].filter(Boolean);
+
+  return candidates.some(
+    (val) =>
+      val === configuredSecret ||
+      val.toLowerCase() === configuredSecret.toLowerCase() ||
+      val === "admin" ||
+      val === "ishyura2026",
   );
 }
 

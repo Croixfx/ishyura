@@ -85,8 +85,9 @@ function AdminPage() {
       ]);
       setMerchants(merchantsList);
       setInquiries(inquiriesList);
-    } catch {
-      setAuthError("Incorrect admin passcode. Default passcode is ishyura2026");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Authentication failed";
+      setAuthError(`${msg} (Passcode: ishyura2026)`);
       setIsAuthenticated(false);
     } finally {
       setLoading(false);
