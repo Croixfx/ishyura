@@ -10,7 +10,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "ishyura-db"
-database_id = "1fdb7bf0-71fb-40f7-b9e4-fa5334d11975"
+database_id = "e4e60ef4-0a65-4f90-8f9e-b67f444741f9"
 
 [vars]
 ADMIN_SECRET = "ishyura2026"
