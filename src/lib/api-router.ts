@@ -158,17 +158,16 @@ let d1Initialized = false;
 async function ensureD1Tables(db: D1Database): Promise<void> {
   if (d1Initialized) return;
   try {
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS merchants (
+    const statements = [
+      `CREATE TABLE IF NOT EXISTS merchants (
         id TEXT PRIMARY KEY,
         phone_number TEXT UNIQUE NOT NULL,
         is_fully_registered INTEGER DEFAULT 0,
         email TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         last_active_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS qr_codes (
+      );`,
+      `CREATE TABLE IF NOT EXISTS qr_codes (
         id TEXT PRIMARY KEY,
         owner_id TEXT,
         phone_number TEXT,
@@ -179,9 +178,8 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
         description TEXT,
         amount REAL,
         created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS inquiries (
+      );`,
+      `CREATE TABLE IF NOT EXISTS inquiries (
         id TEXT PRIMARY KEY,
         sender_name TEXT NOT NULL,
         sender_phone TEXT NOT NULL,
@@ -190,15 +188,29 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
         message TEXT NOT NULL,
         status TEXT DEFAULT 'new',
         created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS otps (
+      );`,
+      `CREATE TABLE IF NOT EXISTS otps (
         phone_number TEXT PRIMARY KEY,
         code TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         created_at TEXT DEFAULT (datetime('now'))
-      );
-    `);
+      );`,
+      `CREATE INDEX IF NOT EXISTS idx_qr_codes_owner ON qr_codes(owner_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_qr_codes_phone ON qr_codes(phone_number);`,
+      `CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);`,
+    ];
+
+    for (const sql of statements) {
+      try {
+        if (typeof db.exec === "function") {
+          await db.exec(sql);
+        } else if (typeof db.prepare === "function") {
+          await db.prepare(sql).run();
+        }
+      } catch (e) {
+        console.warn("Table creation statement warning:", e);
+      }
+    }
     d1Initialized = true;
   } catch (err) {
     console.warn("D1 table init notice:", err);
@@ -501,54 +513,68 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       if (env.DB) {
-        const merchantsCount =
-          (
-            await env.DB.prepare("SELECT count(*) as count FROM merchants").first<{
-              count: number;
-            }>()
-          )?.count || 0;
+        try {
+          const merchantsCount =
+            (
+              await env.DB.prepare("SELECT count(*) as count FROM merchants").first<{
+                count: number;
+              }>()
+            )?.count || 0;
 
-        const qrCount =
-          (
-            await env.DB.prepare("SELECT count(*) as count FROM qr_codes").first<{
-              count: number;
-            }>()
-          )?.count || 0;
+          const qrCount =
+            (
+              await env.DB.prepare("SELECT count(*) as count FROM qr_codes").first<{
+                count: number;
+              }>()
+            )?.count || 0;
 
-        const inquiriesTotal =
-          (
-            await env.DB.prepare("SELECT count(*) as count FROM inquiries").first<{
-              count: number;
-            }>()
-          )?.count || 0;
+          const inquiriesTotal =
+            (
+              await env.DB.prepare("SELECT count(*) as count FROM inquiries").first<{
+                count: number;
+              }>()
+            )?.count || 0;
 
-        const inquiriesNew =
-          (
-            await env.DB.prepare(
-              "SELECT count(*) as count FROM inquiries WHERE status = 'new'",
-            ).first<{ count: number }>()
-          )?.count || 0;
+          const inquiriesNew =
+            (
+              await env.DB.prepare(
+                "SELECT count(*) as count FROM inquiries WHERE status = 'new'",
+              ).first<{ count: number }>()
+            )?.count || 0;
 
-        const networks = await env.DB.prepare(
-          "SELECT network, count(*) as count FROM qr_codes GROUP BY network",
-        ).all<{ network: string; count: number }>();
+          const networks = await env.DB.prepare(
+            "SELECT network, count(*) as count FROM qr_codes GROUP BY network",
+          ).all<{ network: string; count: number }>();
 
-        const networkStats = (networks.results || []).reduce(
-          (acc, row) => {
-            acc[row.network] = row.count;
-            return acc;
-          },
-          {} as Record<string, number>,
-        );
+          const networkStats = (networks.results || []).reduce(
+            (acc, row) => {
+              acc[row.network] = row.count;
+              return acc;
+            },
+            {} as Record<string, number>,
+          );
 
-        return jsonResponse({
-          total_merchants: merchantsCount,
-          total_qr_codes: qrCount,
-          total_inquiries: inquiriesTotal,
-          new_inquiries: inquiriesNew,
-          network_breakdown: networkStats,
-          database_type: "Cloudflare D1",
-        });
+          return jsonResponse({
+            total_merchants: merchantsCount,
+            total_qr_codes: qrCount,
+            total_inquiries: inquiriesTotal,
+            new_inquiries: inquiriesNew,
+            network_breakdown: networkStats,
+            database_type: "Cloudflare D1",
+          });
+        } catch (dbErr) {
+          console.warn("D1 stats query failed, retrying table init:", dbErr);
+          d1Initialized = false;
+          await ensureD1Tables(env.DB);
+          return jsonResponse({
+            total_merchants: 0,
+            total_qr_codes: 0,
+            total_inquiries: 0,
+            new_inquiries: 0,
+            network_breakdown: {},
+            database_type: "Cloudflare D1 (Tables created)",
+          });
+        }
       }
 
       // Memory stats
@@ -579,15 +605,22 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       if (env.DB) {
-        const rows = await env.DB.prepare(
-          "SELECT m.id, m.phone_number, m.email, m.is_fully_registered, m.created_at, m.last_active_at, " +
-            "count(q.id) as qr_count " +
-            "FROM merchants m " +
-            "LEFT JOIN qr_codes q ON m.phone_number = q.phone_number " +
-            "GROUP BY m.id " +
-            "ORDER BY m.created_at DESC",
-        ).all();
-        return jsonResponse(rows.results || []);
+        try {
+          const rows = await env.DB.prepare(
+            "SELECT m.id, m.phone_number, m.email, m.is_fully_registered, m.created_at, m.last_active_at, " +
+              "count(q.id) as qr_count " +
+              "FROM merchants m " +
+              "LEFT JOIN qr_codes q ON m.phone_number = q.phone_number " +
+              "GROUP BY m.id " +
+              "ORDER BY m.created_at DESC",
+          ).all();
+          return jsonResponse(rows.results || []);
+        } catch (dbErr) {
+          console.warn("D1 merchants query error:", dbErr);
+          d1Initialized = false;
+          await ensureD1Tables(env.DB);
+          return jsonResponse([]);
+        }
       }
 
       const list = Array.from(memMerchants.values()).map((m) => {
@@ -609,10 +642,17 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       if (env.DB) {
-        const rows = await env.DB.prepare(
-          "SELECT * FROM qr_codes ORDER BY created_at DESC LIMIT 100",
-        ).all();
-        return jsonResponse(rows.results || []);
+        try {
+          const rows = await env.DB.prepare(
+            "SELECT * FROM qr_codes ORDER BY created_at DESC LIMIT 100",
+          ).all();
+          return jsonResponse(rows.results || []);
+        } catch (dbErr) {
+          console.warn("D1 qr_codes query error:", dbErr);
+          d1Initialized = false;
+          await ensureD1Tables(env.DB);
+          return jsonResponse([]);
+        }
       }
       return jsonResponse(memQrCodes);
     }
@@ -627,10 +667,17 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
       if (request.method === "GET") {
         if (env.DB) {
-          const rows = await env.DB.prepare(
-            "SELECT * FROM inquiries ORDER BY created_at DESC",
-          ).all();
-          return jsonResponse(rows.results || []);
+          try {
+            const rows = await env.DB.prepare(
+              "SELECT * FROM inquiries ORDER BY created_at DESC",
+            ).all();
+            return jsonResponse(rows.results || []);
+          } catch (dbErr) {
+            console.warn("D1 inquiries query error:", dbErr);
+            d1Initialized = false;
+            await ensureD1Tables(env.DB);
+            return jsonResponse([]);
+          }
         }
         return jsonResponse(memInquiries);
       }
