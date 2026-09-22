@@ -1,9 +1,6 @@
 export function renderErrorPage(errorDetail?: string): string {
   const safeDetail = errorDetail
-    ? errorDetail
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
+    ? errorDetail.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     : "";
 
   return `<!doctype html>

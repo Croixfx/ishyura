@@ -24,9 +24,16 @@ import {
   ChevronRight,
   Save,
   MessageSquare,
+  Package,
+  Truck,
+  FileDown,
+  Printer,
+  Radio,
 } from "lucide-react";
 
 import { InquiryDialog } from "@/components/InquiryDialog";
+import { OrderDialog } from "@/components/OrderDialog";
+import { type OrderItemType } from "@/lib/ishyura-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -204,6 +211,16 @@ function Index() {
   // Inquiries Dialog
   const [inquiryDialogOpen, setInquiryDialogOpen] = useState(false);
 
+  // Physical Goods Order Dialog state
+  const [orderDialogOpen, setOrderDialogOpen] = useState(false);
+  const [selectedProductForOrder, setSelectedProductForOrder] =
+    useState<OrderItemType>("acrylic_stand");
+
+  const openOrderModal = (product: OrderItemType = "acrylic_stand") => {
+    setSelectedProductForOrder(product);
+    setOrderDialogOpen(true);
+  };
+
   const cardRef = useRef<HTMLDivElement>(null);
   const { theme, toggle } = useTheme();
 
@@ -318,6 +335,16 @@ function Index() {
       link.download = `${confirmedData.businessName.replace(/\s+/g, "_")}_${netSlug}_${typeSlug}.png`;
       link.href = dataUrl;
       link.click();
+
+      // Timestamp download event in persistent D1 database
+      IshyuraClient.recordDownload({
+        business_name: confirmedData.businessName,
+        network: confirmedData.network,
+        dial_code: confirmedData.ussdString,
+        file_format: "png",
+        phone_number:
+          currentUser?.phone_number || (sanitizedInput.length >= 8 ? sanitizedInput : undefined),
+      }).catch((err) => console.warn("Failed to record download timestamp:", err));
     } finally {
       setDownloading(false);
     }
@@ -742,6 +769,17 @@ function Index() {
             <Button
               variant="outline"
               size="sm"
+              onClick={() => openOrderModal("acrylic_stand")}
+              className="h-9 gap-1.5 text-xs font-semibold border-primary/30 text-primary hover:bg-primary/10"
+            >
+              <Package className="size-3.5" />
+              <span className="hidden sm:inline">Order Stands &amp; Stickers</span>
+              <span className="sm:hidden">Order</span>
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setInquiryDialogOpen(true)}
               className="h-9 gap-1.5 text-xs font-semibold"
             >
@@ -1130,6 +1168,18 @@ function Index() {
                     {downloading ? "Preparing your card…" : "Download High-Res Card (PNG)"}
                   </Button>
 
+                  {/* Physical Merchandise Direct Order Button */}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    onClick={() => openOrderModal("acrylic_stand")}
+                    className="w-full h-11 text-xs font-bold gap-2 border-primary/40 bg-primary/10 hover:bg-primary/20 text-primary transition-all shadow-xs"
+                  >
+                    <Package className="size-4 text-primary" />
+                    <span>Order Physical Acrylic Stand (5,000 RWF)</span>
+                  </Button>
+
                   {currentUser ? (
                     <div className="flex items-center justify-between rounded-xl bg-emerald-500/10 border border-emerald-500/25 px-3.5 py-2.5 text-xs text-emerald-700 dark:text-emerald-300">
                       <div className="flex items-center gap-2">
@@ -1168,7 +1218,8 @@ function Index() {
                 </div>
 
                 <p className="text-center text-xs text-muted-foreground">
-                  Print it, fold as a tent card, or place on your shop counter.
+                  Print it yourself for free, or order a durable acrylic stand delivered to your
+                  shop counter.
                 </p>
               </div>
             ) : (
@@ -1197,6 +1248,166 @@ function Index() {
             )}
           </section>
         </main>
+
+        {/* Physical Products Advertising & Order Showcase */}
+        <section className="mt-14 rounded-3xl border border-border/80 bg-linear-to-b from-card/80 to-muted/30 p-6 sm:p-8 shadow-sm">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-border/60">
+            <div>
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary mb-2">
+                <Truck className="size-3.5" />
+                <span>Physical Delivery Across Rwanda (Kigali &amp; Upcountry)</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black text-foreground tracking-tight">
+                Upgrade Your Counter: Printed Acrylic Stands &amp; Waterproof Stickers
+              </h2>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1 max-w-2xl leading-relaxed">
+                Paper cards get wet, crumpled, or lost. Get high-durability acrylic tabletop stands
+                and laminated stickers pre-printed with your verified MoMo, Airtel, or eKash QR
+                code.
+              </p>
+            </div>
+            <div className="shrink-0 flex items-center gap-2">
+              <Button
+                size="lg"
+                onClick={() => openOrderModal("bundle")}
+                className="font-bold text-xs h-11 px-5 shadow-md shadow-primary/20 gap-2"
+              >
+                <Package className="size-4" />
+                <span>Order Starter Bundle (7,500 RWF)</span>
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Acrylic Stand Card */}
+            <div className="rounded-2xl border border-border/70 bg-card p-5 flex flex-col justify-between hover:border-primary/50 transition-colors shadow-xs">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Tabletop Stand
+                  </span>
+                  <span className="text-sm font-extrabold text-primary">5,000 RWF</span>
+                </div>
+                <h3 className="mt-2 text-base font-bold text-foreground">
+                  A6 Clear Acrylic L-Stand
+                </h3>
+                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+                  Sturdy, scratch-resistant acrylic base designed for shop counters, restaurants,
+                  bars, and reception desks.
+                </p>
+                <ul className="mt-3 space-y-1.5 text-[11px] text-muted-foreground font-medium">
+                  <li className="flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+                    <span>Double-sided glossy print</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+                    <span>Includes high-contrast color scheme</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <Radio className="size-3.5 text-blue-500 shrink-0" />
+                    <span>NFC tap tag ready upgrade available</span>
+                  </li>
+                </ul>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => openOrderModal("acrylic_stand")}
+                className="mt-5 w-full text-xs font-semibold gap-1.5 hover:bg-primary hover:text-primary-foreground"
+              >
+                <Package className="size-3.5" />
+                <span>Order Acrylic Stand</span>
+              </Button>
+            </div>
+
+            {/* Waterproof Stickers Card */}
+            <div className="rounded-2xl border border-border/70 bg-card p-5 flex flex-col justify-between hover:border-primary/50 transition-colors shadow-xs">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Laminated Pack
+                  </span>
+                  <span className="text-sm font-extrabold text-primary">3,000 RWF</span>
+                </div>
+                <h3 className="mt-2 text-base font-bold text-foreground">
+                  Pack of 5 Waterproof Stickers
+                </h3>
+                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+                  Heavy-duty vinyl stickers that stick to glass doors, POS devices, tables, delivery
+                  bikes, or cash registers.
+                </p>
+                <ul className="mt-3 space-y-1.5 text-[11px] text-muted-foreground font-medium">
+                  <li className="flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+                    <span>Waterproof &amp; UV sun resistant</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+                    <span>Strong residue-free adhesive</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+                    <span>5 identical cards in one pack</span>
+                  </li>
+                </ul>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => openOrderModal("stickers_pack")}
+                className="mt-5 w-full text-xs font-semibold gap-1.5 hover:bg-primary hover:text-primary-foreground"
+              >
+                <Package className="size-3.5" />
+                <span>Order Sticker Pack</span>
+              </Button>
+            </div>
+
+            {/* Merchant Bundle Card */}
+            <div className="rounded-2xl border-2 border-primary/50 bg-primary/5 p-5 flex flex-col justify-between relative overflow-hidden shadow-xs">
+              <div className="absolute top-2 right-2 bg-primary text-primary-foreground text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full">
+                Most Popular
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-primary">
+                    Full Kit
+                  </span>
+                  <span className="text-sm font-extrabold text-foreground">7,500 RWF</span>
+                </div>
+                <h3 className="mt-2 text-base font-bold text-foreground">
+                  Complete Merchant Bundle
+                </h3>
+                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+                  Best value for active businesses: 1 Acrylic Tabletop Stand + 5 Waterproof Vinyl
+                  Stickers.
+                </p>
+                <ul className="mt-3 space-y-1.5 text-[11px] text-muted-foreground font-medium">
+                  <li className="flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+                    <span>1x A6 clear acrylic stand</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+                    <span>5x heavy-duty vinyl stickers</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <Truck className="size-3.5 text-emerald-500 shrink-0" />
+                    <span>Express dispatch across Kigali</span>
+                  </li>
+                </ul>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => openOrderModal("bundle")}
+                className="mt-5 w-full text-xs font-bold gap-1.5"
+              >
+                <Package className="size-3.5" />
+                <span>Order Merchant Bundle</span>
+              </Button>
+            </div>
+          </div>
+        </section>
 
         {/* Footer with Inquiries & Admin triggers */}
         <footer className="mt-12 border-t border-border/50 pt-6 text-xs text-muted-foreground">
@@ -1232,6 +1443,18 @@ function Index() {
           open={inquiryDialogOpen}
           onOpenChange={setInquiryDialogOpen}
           defaultPhone={currentUser?.phone_number || sanitizedInput}
+        />
+
+        <OrderDialog
+          open={orderDialogOpen}
+          onOpenChange={setOrderDialogOpen}
+          defaultBusinessName={confirmedData?.businessName || businessName}
+          defaultPhone={
+            currentUser?.phone_number || (sanitizedInput.length >= 8 ? sanitizedInput : undefined)
+          }
+          network={confirmedData?.network || network}
+          dialCode={confirmedData?.ussdString || draftUssdString}
+          preselectedProduct={selectedProductForOrder}
         />
       </div>
     </div>

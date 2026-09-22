@@ -44,11 +44,60 @@ export interface InquiryRecord {
   created_at: string;
 }
 
+export type OrderItemType =
+  "acrylic_stand" | "vinyl_stickers" | "smart_nfc_stand" | "pro_bundle" | "custom";
+
+export type OrderStatus = "pending" | "processing" | "delivered" | "cancelled";
+
+export interface OrderPayload {
+  customer_name: string;
+  customer_phone: string;
+  business_name: string;
+  delivery_location: string;
+  item_type: OrderItemType;
+  quantity?: number;
+  total_price: number;
+  notes?: string;
+  network?: string;
+  dial_code?: string;
+}
+
+export interface OrderRecord {
+  id: string;
+  order_number: string;
+  customer_name: string;
+  customer_phone: string;
+  business_name: string;
+  delivery_location: string;
+  item_type: OrderItemType;
+  quantity: number;
+  total_price: number;
+  notes?: string | null;
+  network?: string | null;
+  dial_code?: string | null;
+  status: OrderStatus;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface DownloadEventRecord {
+  id: string;
+  business_name: string;
+  network: string;
+  dial_code: string;
+  phone_number?: string | null;
+  file_format: string;
+  created_at: string;
+}
+
 export interface AdminStats {
   total_merchants: number;
   total_qr_codes: number;
   total_inquiries: number;
   new_inquiries: number;
+  total_orders: number;
+  pending_orders: number;
+  total_downloads: number;
   network_breakdown: Record<string, number>;
   database_type: string;
 }
@@ -339,6 +388,69 @@ export class IshyuraClient {
     }
   }
 
+  static async recordDownload(data: {
+    business_name?: string;
+    network: string;
+    dial_code: string;
+    phone_number?: string;
+    file_format?: "png" | "pdf";
+  }): Promise<void> {
+    try {
+      await fetch(getApiEndpoint("downloads/track"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          business_name: data.business_name || "Payment Card",
+          network: data.network,
+          dial_code: data.dial_code,
+          phone_number: data.phone_number || "guest",
+          file_format: data.file_format || "png",
+        }),
+      });
+    } catch (e) {
+      console.warn("Download tracking notice:", e);
+    }
+  }
+
+  static async createOrder(payload: OrderPayload): Promise<{
+    success: boolean;
+    order_number: string;
+    message: string;
+  }> {
+    try {
+      const res = await fetch(getApiEndpoint("orders"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      const err = await res.json().catch(() => ({ detail: "Order failed" }));
+      throw new Error(err.detail || "Failed to place order.");
+    } catch (e: unknown) {
+      if (e instanceof Error && e.message !== "Failed to fetch") {
+        throw e;
+      }
+      // Offline fallback
+      const orderNum = `ISH-${Math.floor(100000 + Math.random() * 900000)}`;
+      const localOrders = JSON.parse(localStorage.getItem("pending_orders") || "[]");
+      localOrders.unshift({
+        ...payload,
+        id: crypto.randomUUID(),
+        order_number: orderNum,
+        status: "pending",
+        created_at: new Date().toISOString(),
+      });
+      localStorage.setItem("pending_orders", JSON.stringify(localOrders));
+      return {
+        success: true,
+        order_number: orderNum,
+        message: "Order placed successfully! We will contact you via WhatsApp/Phone.",
+      };
+    }
+  }
+
   // ------------------------------------------------------------------
   // ADMIN DASHBOARD & OWNER REPORTING
   // ------------------------------------------------------------------
@@ -408,7 +520,48 @@ export class IshyuraClient {
     }
   }
 
-  static getAdminExportUrl(adminKey: string, type: "merchants" | "qrs" | "inquiries"): string {
+  static async getAdminOrders(adminKey: string): Promise<OrderRecord[]> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/orders?key=${encodeURIComponent(cleanKey)}`), {
+      headers: { "x-admin-key": cleanKey },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  static async updateOrderStatus(adminKey: string, id: string, status: OrderStatus): Promise<void> {
+    const res = await fetch(getApiEndpoint("admin/orders"), {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": adminKey,
+      },
+      body: JSON.stringify({ id, status }),
+    });
+    if (!res.ok) {
+      throw new Error("Failed to update order status.");
+    }
+  }
+
+  static async getAdminDownloads(adminKey: string): Promise<DownloadEventRecord[]> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/downloads?key=${encodeURIComponent(cleanKey)}`), {
+      headers: { "x-admin-key": cleanKey },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  static getAdminExportUrl(
+    adminKey: string,
+    type: "merchants" | "qrs" | "inquiries" | "orders" | "downloads",
+  ): string {
     return `${getApiEndpoint("admin/export")}?type=${type}&key=${encodeURIComponent(adminKey)}`;
   }
 

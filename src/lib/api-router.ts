@@ -50,6 +50,34 @@ interface MemInquiry {
   created_at: string;
 }
 
+interface MemOrder {
+  id: string;
+  order_number: string;
+  customer_name: string;
+  customer_phone: string;
+  business_name: string;
+  delivery_location: string;
+  item_type: string;
+  quantity: number;
+  total_price: number;
+  notes: string | null;
+  network: string | null;
+  dial_code: string | null;
+  status: "pending" | "processing" | "delivered" | "cancelled";
+  created_at: string;
+  updated_at: string;
+}
+
+interface MemDownload {
+  id: string;
+  business_name: string;
+  network: string;
+  dial_code: string;
+  phone_number: string | null;
+  file_format: string;
+  created_at: string;
+}
+
 const memMerchants: Map<string, MemMerchant> = new Map([
   [
     "0788123456",
@@ -113,6 +141,38 @@ const memInquiries: MemInquiry[] = [
       "Hello Ishyura team, we have 15 cooperative vendors in Kimironko Market and would like customized acrylic QR tent stands. How can we proceed?",
     status: "new",
     created_at: new Date(Date.now() - 3600000 * 3).toISOString(),
+  },
+];
+
+const memOrders: MemOrder[] = [
+  {
+    id: "ord-1",
+    order_number: "ISH-782190",
+    customer_name: "Aline Uwase",
+    customer_phone: "0788223344",
+    business_name: "Chez Aline Boutique",
+    delivery_location: "Kimironko Market, Stall 42B",
+    item_type: "acrylic_stand",
+    quantity: 1,
+    total_price: 5000,
+    notes: "Please call when moto arrives at the gate",
+    network: "MTN MoMo",
+    dial_code: "*182*8*1*234567#",
+    status: "pending",
+    created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
+    updated_at: new Date(Date.now() - 3600000 * 2).toISOString(),
+  },
+];
+
+const memDownloads: MemDownload[] = [
+  {
+    id: "dl-1",
+    business_name: "Kigali Fresh Mart",
+    network: "MTN MoMo",
+    dial_code: "*182*8*1*123456#",
+    phone_number: "0788123456",
+    file_format: "png",
+    created_at: new Date(Date.now() - 3600000 * 5).toISOString(),
   },
 ];
 
@@ -195,9 +255,37 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
         expires_at TEXT NOT NULL,
         created_at TEXT DEFAULT (datetime('now'))
       );`,
+      `CREATE TABLE IF NOT EXISTS orders (
+        id TEXT PRIMARY KEY,
+        order_number TEXT UNIQUE NOT NULL,
+        customer_name TEXT NOT NULL,
+        customer_phone TEXT NOT NULL,
+        business_name TEXT NOT NULL,
+        delivery_location TEXT NOT NULL,
+        item_type TEXT NOT NULL,
+        quantity INTEGER DEFAULT 1,
+        total_price REAL NOT NULL,
+        notes TEXT,
+        network TEXT,
+        dial_code TEXT,
+        status TEXT DEFAULT 'pending',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );`,
+      `CREATE TABLE IF NOT EXISTS download_events (
+        id TEXT PRIMARY KEY,
+        business_name TEXT,
+        network TEXT NOT NULL,
+        dial_code TEXT NOT NULL,
+        phone_number TEXT,
+        file_format TEXT DEFAULT 'png',
+        created_at TEXT DEFAULT (datetime('now'))
+      );`,
       `CREATE INDEX IF NOT EXISTS idx_qr_codes_owner ON qr_codes(owner_id);`,
       `CREATE INDEX IF NOT EXISTS idx_qr_codes_phone ON qr_codes(phone_number);`,
       `CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);`,
+      `CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`,
+      `CREATE INDEX IF NOT EXISTS idx_downloads_created ON download_events(created_at);`,
     ];
 
     for (const sql of statements) {
@@ -505,6 +593,141 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     // ----------------------------------------------------
+    // 4B. DOWNLOADS: Track PDF / PNG Download Events
+    // ----------------------------------------------------
+    if (path === "/downloads/track" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as {
+        business_name?: string;
+        network?: string;
+        dial_code?: string;
+        phone_number?: string;
+        file_format?: string;
+      };
+
+      const id = crypto.randomUUID();
+      const businessName = (body.business_name || "Payment Card").trim();
+      const network = (body.network || "Mobile Money").trim();
+      const dialCode = (body.dial_code || "*182#").trim();
+      const phone = (body.phone_number || "guest").trim();
+      const fileFormat = (body.file_format || "png").trim();
+
+      if (env.DB) {
+        try {
+          await env.DB.prepare(
+            "INSERT INTO download_events (id, business_name, network, dial_code, phone_number, file_format) " +
+              "VALUES (?, ?, ?, ?, ?, ?)",
+          )
+            .bind(id, businessName, network, dialCode, phone, fileFormat)
+            .run();
+        } catch (e) {
+          console.warn("D1 download event track warning:", e);
+        }
+      } else {
+        memDownloads.unshift({
+          id,
+          business_name: businessName,
+          network,
+          dial_code: dialCode,
+          phone_number: phone,
+          file_format: fileFormat,
+          created_at: new Date().toISOString(),
+        });
+      }
+
+      return jsonResponse({ success: true, id, recorded_at: new Date().toISOString() });
+    }
+
+    // ----------------------------------------------------
+    // 4C. ORDERS: Physical Stands & Stickers Checkout
+    // ----------------------------------------------------
+    if (path === "/orders" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as {
+        customer_name?: string;
+        customer_phone?: string;
+        business_name?: string;
+        delivery_location?: string;
+        item_type?: string;
+        quantity?: number;
+        total_price?: number;
+        notes?: string;
+        network?: string;
+        dial_code?: string;
+      };
+
+      const customerName = (body.customer_name || "").trim();
+      const customerPhone = (body.customer_phone || "").trim();
+      const businessName = (body.business_name || "").trim();
+      const deliveryLocation = (body.delivery_location || "").trim();
+      const itemType = (body.item_type || "acrylic_stand").trim();
+      const quantity = Math.max(1, body.quantity || 1);
+      const totalPrice = body.total_price || 5000;
+      const notes = (body.notes || "").trim() || null;
+      const network = (body.network || "").trim() || null;
+      const dialCode = (body.dial_code || "").trim() || null;
+
+      if (!customerName || !customerPhone || !deliveryLocation) {
+        return jsonResponse(
+          { detail: "Please provide your name, phone number, and delivery location in Kigali." },
+          400,
+        );
+      }
+
+      const id = crypto.randomUUID();
+      const orderNumber = `ISH-${Math.floor(100000 + Math.random() * 900000)}`;
+
+      if (env.DB) {
+        try {
+          await env.DB.prepare(
+            "INSERT INTO orders (id, order_number, customer_name, customer_phone, business_name, delivery_location, item_type, quantity, total_price, notes, network, dial_code, status) " +
+              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+          )
+            .bind(
+              id,
+              orderNumber,
+              customerName,
+              customerPhone,
+              businessName,
+              deliveryLocation,
+              itemType,
+              quantity,
+              totalPrice,
+              notes,
+              network,
+              dialCode,
+            )
+            .run();
+        } catch (e) {
+          console.warn("D1 order insertion warning:", e);
+        }
+      } else {
+        memOrders.unshift({
+          id,
+          order_number: orderNumber,
+          customer_name: customerName,
+          customer_phone: customerPhone,
+          business_name: businessName,
+          delivery_location: deliveryLocation,
+          item_type: itemType,
+          quantity,
+          total_price: totalPrice,
+          notes,
+          network,
+          dial_code: dialCode,
+          status: "pending",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      return jsonResponse({
+        success: true,
+        order_number: orderNumber,
+        message:
+          "Order placed successfully! We will contact you via WhatsApp / Phone to confirm delivery.",
+      });
+    }
+
+    // ----------------------------------------------------
     // 5. ADMIN: Stats & Reporting
     // ----------------------------------------------------
     if (path === "/admin/stats" && request.method === "GET") {
@@ -542,6 +765,27 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               ).first<{ count: number }>()
             )?.count || 0;
 
+          const ordersTotal =
+            (
+              await env.DB.prepare("SELECT count(*) as count FROM orders").first<{
+                count: number;
+              }>()
+            )?.count || 0;
+
+          const ordersPending =
+            (
+              await env.DB.prepare(
+                "SELECT count(*) as count FROM orders WHERE status = 'pending'",
+              ).first<{ count: number }>()
+            )?.count || 0;
+
+          const downloadsTotal =
+            (
+              await env.DB.prepare("SELECT count(*) as count FROM download_events").first<{
+                count: number;
+              }>()
+            )?.count || 0;
+
           const networks = await env.DB.prepare(
             "SELECT network, count(*) as count FROM qr_codes GROUP BY network",
           ).all<{ network: string; count: number }>();
@@ -559,6 +803,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             total_qr_codes: qrCount,
             total_inquiries: inquiriesTotal,
             new_inquiries: inquiriesNew,
+            total_orders: ordersTotal,
+            pending_orders: ordersPending,
+            total_downloads: downloadsTotal,
             network_breakdown: networkStats,
             database_type: "Cloudflare D1",
           });
@@ -571,6 +818,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             total_qr_codes: 0,
             total_inquiries: 0,
             new_inquiries: 0,
+            total_orders: 0,
+            pending_orders: 0,
+            total_downloads: 0,
             network_breakdown: {},
             database_type: "Cloudflare D1 (Tables created)",
           });
@@ -591,6 +841,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         total_qr_codes: memQrCodes.length,
         total_inquiries: memInquiries.length,
         new_inquiries: memInquiries.filter((i) => i.status === "new").length,
+        total_orders: memOrders.length,
+        pending_orders: memOrders.filter((o) => o.status === "pending").length,
+        total_downloads: memDownloads.length,
         network_breakdown: breakdown,
         database_type: "In-Memory (Cloudflare D1 Ready)",
       });
@@ -705,6 +958,81 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     // ----------------------------------------------------
+    // 8B. ADMIN: Orders List & Status Update
+    // ----------------------------------------------------
+    if (path === "/admin/orders") {
+      if (!verifyAdminAuth(request, env)) {
+        return jsonResponse({ detail: "Unauthorized admin access." }, 401);
+      }
+
+      if (request.method === "GET") {
+        if (env.DB) {
+          try {
+            const rows = await env.DB.prepare(
+              "SELECT * FROM orders ORDER BY created_at DESC LIMIT 100",
+            ).all();
+            return jsonResponse(rows.results || []);
+          } catch (dbErr) {
+            console.warn("D1 orders query error:", dbErr);
+            d1Initialized = false;
+            await ensureD1Tables(env.DB);
+            return jsonResponse([]);
+          }
+        }
+        return jsonResponse(memOrders);
+      }
+
+      if (request.method === "PATCH") {
+        const body = (await request.json().catch(() => ({}))) as {
+          id?: string;
+          status?: "pending" | "processing" | "delivered" | "cancelled";
+        };
+        if (!body.id || !body.status) {
+          return jsonResponse({ detail: "Order ID and status required." }, 400);
+        }
+
+        const now = new Date().toISOString();
+        if (env.DB) {
+          await env.DB.prepare("UPDATE orders SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(body.status, now, body.id)
+            .run();
+        } else {
+          const ord = memOrders.find((o) => o.id === body.id);
+          if (ord) {
+            ord.status = body.status;
+            ord.updated_at = now;
+          }
+        }
+
+        return jsonResponse({ success: true, id: body.id, status: body.status });
+      }
+    }
+
+    // ----------------------------------------------------
+    // 8C. ADMIN: Download Events List
+    // ----------------------------------------------------
+    if (path === "/admin/downloads" && request.method === "GET") {
+      if (!verifyAdminAuth(request, env)) {
+        return jsonResponse({ detail: "Unauthorized admin access." }, 401);
+      }
+
+      if (env.DB) {
+        try {
+          const rows = await env.DB.prepare(
+            "SELECT * FROM download_events ORDER BY created_at DESC LIMIT 100",
+          ).all();
+          return jsonResponse(rows.results || []);
+        } catch (dbErr) {
+          console.warn("D1 downloads query error:", dbErr);
+          d1Initialized = false;
+          await ensureD1Tables(env.DB);
+          return jsonResponse([]);
+        }
+      }
+      return jsonResponse(memDownloads);
+    }
+
+    // ----------------------------------------------------
     // 9. ADMIN: CSV Export
     // ----------------------------------------------------
     if (path === "/admin/export" && request.method === "GET") {
@@ -761,6 +1089,42 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           headers: {
             "Content-Type": "text/csv; charset=utf-8",
             "Content-Disposition": 'attachment; filename="inquiries_report.csv"',
+            ...corsHeaders(),
+          },
+        });
+      }
+
+      if (type === "orders") {
+        const ordersList = memOrders;
+        const csvLines = [
+          "ID,Order Number,Customer Name,Phone,Business Name,Location,Item,Qty,Total RWF,Status,Created At",
+          ...ordersList.map(
+            (o) =>
+              `"${o.id}","${o.order_number}","${o.customer_name}","${o.customer_phone}","${o.business_name}","${o.delivery_location}","${o.item_type}","${o.quantity}","${o.total_price}","${o.status}","${o.created_at}"`,
+          ),
+        ];
+        return new Response(csvLines.join("\n"), {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": 'attachment; filename="orders_report.csv"',
+            ...corsHeaders(),
+          },
+        });
+      }
+
+      if (type === "downloads") {
+        const dlList = memDownloads;
+        const csvLines = [
+          "ID,Business Name,Network,Dial Code,Phone,Format,Downloaded At",
+          ...dlList.map(
+            (d) =>
+              `"${d.id}","${d.business_name}","${d.network}","${d.dial_code}","${d.phone_number || ""}","${d.file_format}","${d.created_at}"`,
+          ),
+        ];
+        return new Response(csvLines.join("\n"), {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": 'attachment; filename="downloads_log.csv"',
             ...corsHeaders(),
           },
         });

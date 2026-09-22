@@ -11,7 +11,8 @@ export function initPolyfills() {
         TSS_SHELL: "false",
       },
       cwd: () => "/",
-      nextTick: (fn: (...args: unknown[]) => void, ...args: unknown[]) => setTimeout(() => fn(...args), 0),
+      nextTick: (fn: (...args: unknown[]) => void, ...args: unknown[]) =>
+        setTimeout(() => fn(...args), 0),
     };
   } else {
     if (!g.process.env) {
@@ -25,4 +26,3 @@ export function initPolyfills() {
 }
 
 initPolyfills();
-

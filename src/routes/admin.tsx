@@ -20,12 +20,20 @@ import {
   ExternalLink,
   ArrowLeft,
   Key,
+  Package,
+  Truck,
+  FileDown,
+  Phone,
+  MapPin,
 } from "lucide-react";
 import {
   IshyuraClient,
   type AdminStats,
   type MerchantRecord,
   type InquiryRecord,
+  type OrderRecord,
+  type DownloadEventRecord,
+  type OrderStatus,
 } from "@/lib/ishyura-client";
 
 export const Route = createFileRoute("/admin")({
@@ -58,6 +66,8 @@ function AdminPage() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [merchants, setMerchants] = useState<MerchantRecord[]>([]);
   const [inquiries, setInquiries] = useState<InquiryRecord[]>([]);
+  const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [downloads, setDownloads] = useState<DownloadEventRecord[]>([]);
 
   // Load saved key from localStorage on mount
   useEffect(() => {
@@ -79,12 +89,16 @@ function AdminPage() {
       setIsAuthenticated(true);
       localStorage.setItem(ADMIN_STORAGE_KEY, keyToUse);
 
-      const [merchantsList, inquiriesList] = await Promise.all([
+      const [merchantsList, inquiriesList, ordersList, downloadsList] = await Promise.all([
         IshyuraClient.getAdminMerchants(keyToUse).catch(() => []),
         IshyuraClient.getAdminInquiries(keyToUse).catch(() => []),
+        IshyuraClient.getAdminOrders(keyToUse).catch(() => []),
+        IshyuraClient.getAdminDownloads(keyToUse).catch(() => []),
       ]);
       setMerchants(merchantsList);
       setInquiries(inquiriesList);
+      setOrders(ordersList);
+      setDownloads(downloadsList);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Authentication failed";
       setAuthError(`${msg} (Passcode: ishyura2026)`);
@@ -110,6 +124,8 @@ function AdminPage() {
     setStats(null);
     setMerchants([]);
     setInquiries([]);
+    setOrders([]);
+    setDownloads([]);
   };
 
   const handleToggleInquiryStatus = async (id: string, currentStatus: "new" | "resolved") => {
@@ -129,7 +145,27 @@ function AdminPage() {
         });
       }
     } catch (err: unknown) {
-      console.error("Failed to toggle status:", err);
+      console.error("Failed to toggle inquiry status:", err);
+    }
+  };
+
+  const handleUpdateOrderStatus = async (id: string, newStatus: OrderStatus) => {
+    try {
+      await IshyuraClient.updateOrderStatus(adminKey, id, newStatus);
+      setOrders((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, status: newStatus } : item)),
+      );
+      if (stats) {
+        setStats({
+          ...stats,
+          pending_orders:
+            newStatus === "pending"
+              ? stats.pending_orders + 1
+              : Math.max(0, stats.pending_orders - 1),
+        });
+      }
+    } catch (err: unknown) {
+      console.error("Failed to update order status:", err);
     }
   };
 
@@ -159,7 +195,7 @@ function AdminPage() {
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground hidden sm:block">
-                Secure Owner Management & Platform Reporting
+                Secure Owner Management &amp; Physical Orders Engine
               </p>
             </div>
           </div>
@@ -200,8 +236,8 @@ function AdminPage() {
             <div>
               <h1 className="text-xl font-bold text-foreground">Owner Portal Authentication</h1>
               <p className="text-xs text-muted-foreground mt-1.5">
-                This is a restricted URL. Enter your administrative passcode to access merchant
-                records, inquiries, and analytics.
+                This is a restricted administrative dashboard. Enter your passcode to view orders,
+                merchants, downloads, and inquiries.
               </p>
             </div>
 
@@ -239,86 +275,335 @@ function AdminPage() {
         ) : (
           /* Authenticated Dashboard View */
           <div className="space-y-6">
-            {/* KPI Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-              <div className="rounded-xl border border-border/70 bg-card p-4 shadow-xs">
+            {/* KPI Cards: 6 High-Impact Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {/* 1. Orders */}
+              <div className="rounded-xl border border-primary/30 bg-primary/5 p-3.5 shadow-xs">
                 <div className="flex items-center justify-between text-muted-foreground mb-1">
-                  <span className="text-xs font-semibold">Registered Merchants</span>
-                  <Users className="size-4 text-blue-500" />
-                </div>
-                <div className="text-2xl font-black text-foreground">
-                  {stats?.total_merchants ?? 0}
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
-                  <span className="text-emerald-600 dark:text-emerald-400 font-bold">● Active</span>
-                  <span>Soft &amp; full accounts</span>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-border/70 bg-card p-4 shadow-xs">
-                <div className="flex items-center justify-between text-muted-foreground mb-1">
-                  <span className="text-xs font-semibold">QR Payment Cards</span>
-                  <QrCode className="size-4 text-emerald-500" />
-                </div>
-                <div className="text-2xl font-black text-foreground">
-                  {stats?.total_qr_codes ?? 0}
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-1">
-                  Total generated across networks
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-border/70 bg-card p-4 shadow-xs">
-                <div className="flex items-center justify-between text-muted-foreground mb-1">
-                  <span className="text-xs font-semibold">Inquiries / Support</span>
-                  <MessageSquare className="size-4 text-amber-500" />
-                </div>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-black text-foreground">
-                    {stats?.total_inquiries ?? 0}
+                  <span className="text-[11px] font-semibold text-primary">
+                    Stands &amp; Stickers
                   </span>
-                  {(stats?.new_inquiries ?? 0) > 0 && (
-                    <Badge variant="destructive" className="text-[10px] px-1.5 py-0">
-                      {stats?.new_inquiries} new
+                  <Package className="size-3.5 text-primary" />
+                </div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-xl font-black text-foreground">
+                    {stats?.total_orders ?? orders.length}
+                  </span>
+                  {(stats?.pending_orders ?? orders.filter((o) => o.status === "pending").length) >
+                    0 && (
+                    <Badge variant="default" className="text-[9px] px-1 py-0 bg-primary">
+                      {stats?.pending_orders ?? orders.filter((o) => o.status === "pending").length}{" "}
+                      new
                     </Badge>
                   )}
                 </div>
-                <div className="text-[10px] text-muted-foreground mt-1">
-                  Pending customer questions
+                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  Physical merchandise
                 </div>
               </div>
 
-              <div className="rounded-xl border border-border/70 bg-card p-4 shadow-xs">
+              {/* 2. Download Timestamped Events */}
+              <div className="rounded-xl border border-border/70 bg-card p-3.5 shadow-xs">
                 <div className="flex items-center justify-between text-muted-foreground mb-1">
-                  <span className="text-xs font-semibold">Backend Engine</span>
-                  <Database className="size-4 text-purple-500" />
+                  <span className="text-[11px] font-semibold">Downloads Logged</span>
+                  <FileDown className="size-3.5 text-blue-500" />
                 </div>
-                <div className="text-sm font-bold text-foreground truncate mt-1">
+                <div className="text-xl font-black text-foreground">
+                  {stats?.total_downloads ?? downloads.length}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">Timestamped in DB</div>
+              </div>
+
+              {/* 3. Merchants */}
+              <div className="rounded-xl border border-border/70 bg-card p-3.5 shadow-xs">
+                <div className="flex items-center justify-between text-muted-foreground mb-1">
+                  <span className="text-[11px] font-semibold">Merchants</span>
+                  <Users className="size-3.5 text-emerald-500" />
+                </div>
+                <div className="text-xl font-black text-foreground">
+                  {stats?.total_merchants ?? merchants.length}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">Phone registered</div>
+              </div>
+
+              {/* 4. QR Cards */}
+              <div className="rounded-xl border border-border/70 bg-card p-3.5 shadow-xs">
+                <div className="flex items-center justify-between text-muted-foreground mb-1">
+                  <span className="text-[11px] font-semibold">QR Generated</span>
+                  <QrCode className="size-3.5 text-teal-500" />
+                </div>
+                <div className="text-xl font-black text-foreground">
+                  {stats?.total_qr_codes ?? 0}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">Across 3 networks</div>
+              </div>
+
+              {/* 5. Inquiries */}
+              <div className="rounded-xl border border-border/70 bg-card p-3.5 shadow-xs">
+                <div className="flex items-center justify-between text-muted-foreground mb-1">
+                  <span className="text-[11px] font-semibold">Inquiries</span>
+                  <MessageSquare className="size-3.5 text-amber-500" />
+                </div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-xl font-black text-foreground">
+                    {stats?.total_inquiries ?? inquiries.length}
+                  </span>
+                  {(stats?.new_inquiries ?? inquiries.filter((i) => i.status === "new").length) >
+                    0 && (
+                    <Badge variant="destructive" className="text-[9px] px-1 py-0">
+                      {stats?.new_inquiries ?? inquiries.filter((i) => i.status === "new").length}
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">Vendor support</div>
+              </div>
+
+              {/* 6. Database Engine */}
+              <div className="rounded-xl border border-border/70 bg-card p-3.5 shadow-xs">
+                <div className="flex items-center justify-between text-muted-foreground mb-1">
+                  <span className="text-[11px] font-semibold">Engine</span>
+                  <Database className="size-3.5 text-purple-500" />
+                </div>
+                <div className="text-xs font-bold text-foreground truncate mt-1">
                   {stats?.database_type || "Cloudflare D1"}
                 </div>
-                <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
+                <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1">
                   <span className="size-1.5 rounded-full bg-emerald-500" />
-                  <span>Edge SQL synchronized</span>
+                  <span>Resilient SQL</span>
                 </div>
               </div>
             </div>
 
             {/* Admin Tabs */}
-            <Tabs defaultValue="inquiries" className="w-full">
-              <TabsList className="grid grid-cols-4 w-full h-10">
-                <TabsTrigger value="inquiries" className="text-xs">
+            <Tabs defaultValue="orders" className="w-full">
+              <TabsList className="grid grid-cols-2 sm:grid-cols-6 w-full h-auto p-1 gap-1">
+                <TabsTrigger value="orders" className="text-xs py-2">
+                  Orders ({orders.length})
+                </TabsTrigger>
+                <TabsTrigger value="downloads" className="text-xs py-2">
+                  Downloads ({downloads.length})
+                </TabsTrigger>
+                <TabsTrigger value="inquiries" className="text-xs py-2">
                   Inquiries ({inquiries.length})
                 </TabsTrigger>
-                <TabsTrigger value="merchants" className="text-xs">
+                <TabsTrigger value="merchants" className="text-xs py-2">
                   Merchants ({merchants.length})
                 </TabsTrigger>
-                <TabsTrigger value="networks" className="text-xs">
+                <TabsTrigger value="networks" className="text-xs py-2">
                   Networks
                 </TabsTrigger>
-                <TabsTrigger value="export" className="text-xs">
+                <TabsTrigger value="export" className="text-xs py-2">
                   CSV Export
                 </TabsTrigger>
               </TabsList>
+
+              {/* ORDERS TAB */}
+              <TabsContent value="orders" className="mt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                      Physical Stands &amp; Waterproof Stickers Orders
+                    </h2>
+                    <p className="text-[11px] text-muted-foreground">
+                      Customer orders placed for acrylic stands and vinyl sticker bundles.
+                    </p>
+                  </div>
+                  <span className="text-xs font-semibold text-primary">
+                    {orders.filter((o) => o.status === "pending").length} pending delivery
+                  </span>
+                </div>
+
+                {orders.length === 0 ? (
+                  <div className="p-12 text-center border border-dashed rounded-xl text-muted-foreground text-xs">
+                    No physical orders received yet. Users can order stands and stickers directly
+                    from the generator page.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {orders.map((ord) => (
+                      <div
+                        key={ord.id}
+                        className={`rounded-xl border p-4 text-xs transition-colors ${
+                          ord.status === "pending"
+                            ? "bg-primary/5 border-primary/30"
+                            : ord.status === "processing"
+                              ? "bg-amber-500/5 border-amber-500/30"
+                              : ord.status === "delivered"
+                                ? "bg-emerald-500/5 border-emerald-500/25 opacity-90"
+                                : "bg-card border-border/60 opacity-60"
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-bold text-sm text-foreground bg-muted px-2 py-0.5 rounded">
+                                {ord.order_number}
+                              </span>
+                              <span className="font-bold text-sm text-foreground">
+                                {ord.customer_name}
+                              </span>
+                              <Badge
+                                variant={
+                                  ord.status === "pending"
+                                    ? "default"
+                                    : ord.status === "delivered"
+                                      ? "secondary"
+                                      : "outline"
+                                }
+                                className="text-[10px] font-semibold uppercase"
+                              >
+                                {ord.status}
+                              </Badge>
+                              <span className="text-xs font-black text-primary ml-auto sm:ml-0">
+                                {ord.total_price.toLocaleString()} RWF
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-muted-foreground">
+                              <span className="flex items-center gap-1 font-semibold text-foreground">
+                                <Phone className="size-3 text-primary" />
+                                {ord.customer_phone}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <MapPin className="size-3 text-muted-foreground" />
+                                Location: <strong>{ord.delivery_location}</strong>
+                              </span>
+                              <span>
+                                Item:{" "}
+                                <strong>
+                                  {ord.quantity}x {ord.item_type.replace(/_/g, " ")}
+                                </strong>
+                              </span>
+                              <span>Shop: {ord.business_name}</span>
+                              <span>Date: {new Date(ord.created_at).toLocaleString()}</span>
+                            </div>
+
+                            {ord.notes && (
+                              <p className="mt-2 text-[11px] bg-muted/60 p-2 rounded-lg text-foreground italic">
+                                "{ord.notes}"
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap w-full sm:w-auto justify-end pt-2 sm:pt-0 border-t sm:border-t-0 border-border/40">
+                            <a
+                              href={`https://wa.me/${ord.customer_phone.replace(/[^0-9]/g, "")}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[11px] font-semibold px-2.5 py-1.5 rounded bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 transition-colors flex items-center gap-1"
+                            >
+                              <span>WhatsApp</span>
+                              <ExternalLink className="size-2.5" />
+                            </a>
+
+                            <div className="flex items-center gap-1">
+                              {ord.status !== "delivered" && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleUpdateOrderStatus(ord.id, "delivered")}
+                                  className="h-7 text-[11px] gap-1 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10"
+                                >
+                                  <CheckCircle2 className="size-3" />
+                                  <span>Mark Delivered</span>
+                                </Button>
+                              )}
+                              {ord.status === "pending" && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleUpdateOrderStatus(ord.id, "processing")}
+                                  className="h-7 text-[11px] gap-1"
+                                >
+                                  <Truck className="size-3" />
+                                  <span>Processing</span>
+                                </Button>
+                              )}
+                              {ord.status === "delivered" && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleUpdateOrderStatus(ord.id, "pending")}
+                                  className="h-7 text-[10px] text-muted-foreground"
+                                >
+                                  Revert to Pending
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+
+              {/* DOWNLOADS LOG TAB */}
+              <TabsContent value="downloads" className="mt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                      Timestamped Card Download Events
+                    </h2>
+                    <p className="text-[11px] text-muted-foreground">
+                      Every high-resolution PNG or PDF downloaded leaves an audit timestamp in D1.
+                    </p>
+                  </div>
+                  <span className="text-xs text-muted-foreground font-semibold">
+                    {downloads.length} events logged
+                  </span>
+                </div>
+
+                {downloads.length === 0 ? (
+                  <div className="p-12 text-center border border-dashed rounded-xl text-muted-foreground text-xs">
+                    No download timestamps logged yet. When merchants download their cards, they are
+                    stored automatically here.
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-border/70 overflow-hidden bg-card">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-muted/50 border-b border-border/60 text-[11px] font-semibold text-muted-foreground uppercase">
+                          <tr>
+                            <th className="py-2.5 px-4">Business / Shop</th>
+                            <th className="py-2.5 px-4">Network</th>
+                            <th className="py-2.5 px-4">Dial Code</th>
+                            <th className="py-2.5 px-4">Format</th>
+                            <th className="py-2.5 px-4">User Phone</th>
+                            <th className="py-2.5 px-4">Timestamp (UTC)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border/40">
+                          {downloads.map((dl) => (
+                            <tr key={dl.id} className="hover:bg-muted/30 transition-colors">
+                              <td className="py-2.5 px-4 font-semibold text-foreground">
+                                {dl.business_name}
+                              </td>
+                              <td className="py-2.5 px-4">
+                                <Badge variant="outline" className="text-[10px]">
+                                  {dl.network}
+                                </Badge>
+                              </td>
+                              <td className="py-2.5 px-4 font-mono text-[11px] text-muted-foreground">
+                                {dl.dial_code}
+                              </td>
+                              <td className="py-2.5 px-4 uppercase font-bold text-[10px] text-primary">
+                                {dl.file_format}
+                              </td>
+                              <td className="py-2.5 px-4 text-muted-foreground">
+                                {dl.phone_number || "guest"}
+                              </td>
+                              <td className="py-2.5 px-4 text-muted-foreground text-[11px]">
+                                {new Date(dl.created_at).toLocaleString()}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </TabsContent>
 
               {/* INQUIRIES TAB */}
               <TabsContent value="inquiries" className="mt-4 space-y-3">
@@ -384,14 +669,24 @@ function AdminPage() {
                               onClick={() => handleToggleInquiryStatus(inq.id, inq.status)}
                               className="h-7 text-[11px]"
                             >
-                              {inq.status === "new" ? "Mark Resolved" : "Reopen"}
+                              {inq.status === "new" ? (
+                                <span className="flex items-center gap-1">
+                                  <CheckCircle2 className="size-3 text-emerald-500" />
+                                  Resolve
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1">
+                                  <Clock className="size-3" />
+                                  Reopen
+                                </span>
+                              )}
                             </Button>
                           </div>
                         </div>
 
-                        <div className="mt-3 pt-3 border-t border-border/40">
-                          <p className="font-semibold text-foreground">{inq.subject}</p>
-                          <p className="mt-1 text-muted-foreground leading-relaxed whitespace-pre-wrap">
+                        <div className="mt-2.5 pt-2.5 border-t border-border/40">
+                          <p className="font-semibold text-foreground mb-0.5">{inq.subject}</p>
+                          <p className="text-muted-foreground leading-relaxed whitespace-pre-wrap">
                             {inq.message}
                           </p>
                         </div>
@@ -405,48 +700,51 @@ function AdminPage() {
               <TabsContent value="merchants" className="mt-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <h2 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                    Merchants &amp; Users Registry
+                    Soft-Registered &amp; Fully Registered Merchant Directory
                   </h2>
-                  <span className="text-xs text-muted-foreground">{merchants.length} total</span>
+                  <span className="text-xs text-muted-foreground">{merchants.length} vendors</span>
                 </div>
 
-                <div className="border border-border/60 rounded-xl overflow-hidden bg-card">
+                <div className="rounded-xl border border-border/70 overflow-hidden bg-card">
                   <div className="overflow-x-auto">
-                    <table className="w-full text-xs text-left">
-                      <thead className="bg-muted/50 text-muted-foreground border-b border-border/60">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-muted/50 border-b border-border/60 text-[11px] font-semibold text-muted-foreground uppercase">
                         <tr>
-                          <th className="py-3 px-4 font-semibold">Phone Number</th>
-                          <th className="py-3 px-4 font-semibold">Status</th>
-                          <th className="py-3 px-4 font-semibold">Cards Saved</th>
-                          <th className="py-3 px-4 font-semibold">Registered</th>
-                          <th className="py-3 px-4 font-semibold">Last Active</th>
+                          <th className="py-3 px-4">Phone Number</th>
+                          <th className="py-3 px-4">Tier</th>
+                          <th className="py-3 px-4">Cards Generated</th>
+                          <th className="py-3 px-4">Email</th>
+                          <th className="py-3 px-4">First Joined</th>
+                          <th className="py-3 px-4">Last Active</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border/40">
                         {merchants.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="py-6 text-center text-muted-foreground">
-                              No merchant accounts found.
+                            <td colSpan={6} className="text-center py-8 text-muted-foreground">
+                              No merchants registered yet.
                             </td>
                           </tr>
                         ) : (
                           merchants.map((m) => (
-                            <tr key={m.id} className="hover:bg-muted/20">
-                              <td className="py-3 px-4 font-bold text-foreground">
+                            <tr key={m.id} className="hover:bg-muted/30 transition-colors">
+                              <td className="py-3 px-4 font-mono font-bold text-foreground">
                                 {m.phone_number}
                               </td>
                               <td className="py-3 px-4">
-                                {m.is_fully_registered ? (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded">
-                                    <CheckCircle2 className="size-3" /> Full Account
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600 bg-blue-500/10 px-2 py-0.5 rounded">
-                                    <Clock className="size-3" /> Soft Verified
-                                  </span>
-                                )}
+                                <Badge
+                                  variant={m.is_fully_registered ? "default" : "secondary"}
+                                  className="text-[10px]"
+                                >
+                                  {m.is_fully_registered ? "Full Account" : "Phone Soft-Auth"}
+                                </Badge>
                               </td>
-                              <td className="py-3 px-4 font-bold">{m.qr_count ?? 1}</td>
+                              <td className="py-3 px-4 font-bold text-foreground">
+                                {m.qr_count ?? 0}
+                              </td>
+                              <td className="py-3 px-4 text-muted-foreground">
+                                {m.email || <span className="opacity-40">—</span>}
+                              </td>
                               <td className="py-3 px-4 text-muted-foreground">
                                 {new Date(m.created_at).toLocaleDateString()}
                               </td>
@@ -514,34 +812,46 @@ function AdminPage() {
                 </h2>
                 <p className="text-xs text-muted-foreground">
                   Export complete data records formatted for Microsoft Excel, Google Sheets, or
-                  reporting.
+                  accounting.
                 </p>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
                   <a
-                    href={IshyuraClient.getAdminExportUrl(adminKey, "merchants")}
-                    download="merchants_report.csv"
+                    href={IshyuraClient.getAdminExportUrl(adminKey, "orders")}
+                    download="orders_report.csv"
                     className="flex flex-col items-center justify-center p-4 rounded-xl border border-border/70 bg-card hover:bg-muted/40 transition-colors text-center gap-2"
                   >
-                    <Download className="size-5 text-primary" />
+                    <Package className="size-5 text-primary" />
                     <div>
-                      <p className="text-xs font-bold text-foreground">Export Merchants</p>
+                      <p className="text-xs font-bold text-foreground">Export Orders</p>
                       <p className="text-[10px] text-muted-foreground">
-                        Phone numbers &amp; registration dates
+                        Physical stands &amp; stickers
                       </p>
                     </div>
                   </a>
 
                   <a
-                    href={IshyuraClient.getAdminExportUrl(adminKey, "qrs")}
-                    download="qr_codes_report.csv"
+                    href={IshyuraClient.getAdminExportUrl(adminKey, "downloads")}
+                    download="downloads_log.csv"
                     className="flex flex-col items-center justify-center p-4 rounded-xl border border-border/70 bg-card hover:bg-muted/40 transition-colors text-center gap-2"
                   >
-                    <Download className="size-5 text-primary" />
+                    <FileDown className="size-5 text-blue-500" />
                     <div>
-                      <p className="text-xs font-bold text-foreground">Export QR Cards</p>
+                      <p className="text-xs font-bold text-foreground">Export Downloads</p>
+                      <p className="text-[10px] text-muted-foreground">Timestamped PNG/PDF log</p>
+                    </div>
+                  </a>
+
+                  <a
+                    href={IshyuraClient.getAdminExportUrl(adminKey, "merchants")}
+                    download="merchants_report.csv"
+                    className="flex flex-col items-center justify-center p-4 rounded-xl border border-border/70 bg-card hover:bg-muted/40 transition-colors text-center gap-2"
+                  >
+                    <Download className="size-5 text-emerald-500" />
+                    <div>
+                      <p className="text-xs font-bold text-foreground">Export Merchants</p>
                       <p className="text-[10px] text-muted-foreground">
-                        All generated codes &amp; networks
+                        Phone numbers &amp; registration
                       </p>
                     </div>
                   </a>
@@ -551,11 +861,11 @@ function AdminPage() {
                     download="inquiries_report.csv"
                     className="flex flex-col items-center justify-center p-4 rounded-xl border border-border/70 bg-card hover:bg-muted/40 transition-colors text-center gap-2"
                   >
-                    <Download className="size-5 text-primary" />
+                    <Download className="size-5 text-amber-500" />
                     <div>
                       <p className="text-xs font-bold text-foreground">Export Inquiries</p>
                       <p className="text-[10px] text-muted-foreground">
-                        Customer questions &amp; feedback
+                        Support messages &amp; feedback
                       </p>
                     </div>
                   </a>
