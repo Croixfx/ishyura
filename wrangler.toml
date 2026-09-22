@@ -7,12 +7,10 @@ directory = "dist/client"
 binding = "ASSETS"
 
 # Cloudflare D1 Database Binding
-# Replace database_id with your real D1 ID after running:
-#   npx wrangler d1 create ishyura-db
 [[d1_databases]]
 binding = "DB"
 database_name = "ishyura-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "1fdb7bf0-71fb-40f7-b9e4-fa5334d11975"
 
 [vars]
 ADMIN_SECRET = "ishyura2026"
