@@ -23,8 +23,10 @@ import {
   LogIn,
   ChevronRight,
   Save,
+  MessageSquare,
 } from "lucide-react";
 
+import { InquiryDialog } from "@/components/InquiryDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -199,6 +201,9 @@ function Index() {
   // Verification & Confirmation state: prevents generating or exporting incomplete/miskeyed codes
   const [confirmedData, setConfirmedData] = useState<ConfirmedCardData | null>(null);
 
+  // Inquiries Dialog
+  const [inquiryDialogOpen, setInquiryDialogOpen] = useState(false);
+
   const cardRef = useRef<HTMLDivElement>(null);
   const { theme, toggle } = useTheme();
 
@@ -276,6 +281,13 @@ function Index() {
       setSavingQr(true);
       IshyuraClient.createQrCode(
         `${cardData.businessName} (${cardData.network} - ${cardData.sanitizedInput})`,
+        null,
+        {
+          business_name: cardData.businessName,
+          network: cardData.network,
+          payment_type: cardData.paymentType,
+          dial_code: cardData.ussdString,
+        },
       )
         .then(() => {
           setSavedSuccess(true);
@@ -371,6 +383,13 @@ function Index() {
         setSavingQr(true);
         IshyuraClient.createQrCode(
           `${confirmedData.businessName} (${confirmedData.network} - ${confirmedData.sanitizedInput})`,
+          null,
+          {
+            business_name: confirmedData.businessName,
+            network: confirmedData.network,
+            payment_type: confirmedData.paymentType,
+            dial_code: confirmedData.ussdString,
+          },
         )
           .then(() => {
             setSavedSuccess(true);
@@ -403,6 +422,13 @@ function Index() {
     try {
       await IshyuraClient.createQrCode(
         `${confirmedData.businessName} (${confirmedData.network} - ${confirmedData.sanitizedInput})`,
+        null,
+        {
+          business_name: confirmedData.businessName,
+          network: confirmedData.network,
+          payment_type: confirmedData.paymentType,
+          dial_code: confirmedData.ussdString,
+        },
       );
       setSavedSuccess(true);
       const updated = await IshyuraClient.listQrCodes();
@@ -712,6 +738,17 @@ function Index() {
                 </Dialog>
               </div>
             )}
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setInquiryDialogOpen(true)}
+              className="h-9 gap-1.5 text-xs font-semibold"
+            >
+              <MessageSquare className="size-3.5 text-primary" />
+              <span className="hidden sm:inline">Inquiries &amp; Help</span>
+              <span className="sm:hidden">Support</span>
+            </Button>
 
             <Button
               variant="ghost"
@@ -1160,6 +1197,42 @@ function Index() {
             )}
           </section>
         </main>
+
+        {/* Footer with Inquiries & Admin triggers */}
+        <footer className="mt-12 border-t border-border/50 pt-6 text-xs text-muted-foreground">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-foreground">Ishyura</span>
+              <span>—</span>
+              <span>Rwanda Instant Payment QR Cards</span>
+            </div>
+            <div className="flex items-center gap-4 text-xs">
+              <button
+                type="button"
+                onClick={() => setInquiryDialogOpen(true)}
+                className="hover:text-foreground hover:underline transition-colors flex items-center gap-1 font-medium"
+              >
+                <MessageSquare className="size-3 text-primary" />
+                Contact &amp; Inquiries
+              </button>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground/80">
+            <p>
+              Built for Rwandan Merchants: MTN MoMo (*182#), Airtel Money, and Equity eKash (*555#).
+            </p>
+            <p className="flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-emerald-500" />
+              Cloudflare D1 Database Active
+            </p>
+          </div>
+        </footer>
+
+        <InquiryDialog
+          open={inquiryDialogOpen}
+          onOpenChange={setInquiryDialogOpen}
+          defaultPhone={currentUser?.phone_number || sanitizedInput}
+        />
       </div>
     </div>
   );
