@@ -128,6 +128,7 @@ function RootShell({ children }: { children: ReactNode }) {
             __html: `try{if(localStorage.getItem('ishyura-theme')==='light'){document.documentElement.classList.remove('dark');}}catch(e){}`,
           }}
         />
+        <script src="https://accounts.google.com/gsi/client" async defer />
         <HeadContent />
       </head>
       <body suppressHydrationWarning>
