@@ -174,6 +174,7 @@ export class IshyuraClient {
     message: string;
     delivery_status?: string;
     provider?: string;
+    messageId?: string;
     detail?: string;
     error?: string;
     isTrialNotice?: boolean;

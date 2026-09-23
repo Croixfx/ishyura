@@ -191,6 +191,7 @@ function Index() {
   const [deliveryInfo, setDeliveryInfo] = useState<{
     status?: string;
     provider?: string;
+    messageId?: string;
     message?: string;
     detail?: string;
     error?: string;
@@ -371,6 +372,7 @@ function Index() {
       setDeliveryInfo({
         status: res.delivery_status,
         provider: res.provider,
+        messageId: res.messageId,
         message: res.message,
         detail: res.detail,
         error: res.error,
@@ -584,12 +586,18 @@ function Index() {
                             <Smartphone className="size-4" />
                           </div>
                           <h4 className="text-xs font-bold text-foreground">
-                            SMS Code Sent to Your Phone
+                            SMS Dispatched to Your Phone
                           </h4>
                           <p className="text-[11px] text-muted-foreground leading-relaxed">
-                            A 6-digit verification code was dispatched to{" "}
-                            <strong className="font-mono text-foreground">{authPhoneInput}</strong>.
-                            Please check your mobile phone's SMS inbox and enter the code below.
+                            Sent to <strong className="font-mono text-foreground">{authPhoneInput}</strong> via Twilio.
+                          </p>
+                          {deliveryInfo?.messageId ? (
+                            <p className="text-[10px] text-muted-foreground font-mono">
+                              Message SID: {deliveryInfo.messageId}
+                            </p>
+                          ) : null}
+                          <p className="text-[10px] text-muted-foreground pt-1 border-t border-border/40 mt-1">
+                            Tip: On MTN Rwanda / Airtel, the sender is usually an international number (+1 229 374 4607). If not in primary SMS, check your spam/unknown senders folder.
                           </p>
                         </div>
 

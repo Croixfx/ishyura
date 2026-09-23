@@ -376,6 +376,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           : `Security code generated for ${phone}. ${smsResult.detail}`,
         delivery_status: smsResult.success ? "sent" : "delivered",
         provider: smsResult.provider,
+        messageId: smsResult.messageId,
         detail: smsResult.detail,
         error: smsResult.error,
       });
