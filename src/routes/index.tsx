@@ -1,5 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AppLayout } from "@/components/AppLayout";
 import { QRCodeSVG } from "qrcode.react";
 import { toPng } from "html-to-image";
 import {
@@ -235,6 +236,7 @@ function Index() {
   const [orderDialogOpen, setOrderDialogOpen] = useState(false);
   const [selectedProductForOrder, setSelectedProductForOrder] =
     useState<OrderItemType>("acrylic_stand");
+  const [upsellDialogOpen, setUpsellDialogOpen] = useState(false);
 
   const openOrderModal = (product: OrderItemType = "acrylic_stand") => {
     setSelectedProductForOrder(product);
@@ -440,6 +442,11 @@ function Index() {
         phone_number:
           currentUser?.phone_number || (sanitizedInput.length >= 8 ? sanitizedInput : undefined),
       }).catch((err) => console.warn("Failed to record download timestamp:", err));
+
+      // Post-download / print physical merchandise upsell prompt
+      setTimeout(() => {
+        setUpsellDialogOpen(true);
+      }, 1000);
     } finally {
       setDownloading(false);
     }
@@ -704,117 +711,113 @@ function Index() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <AppLayout
+      currentUser={currentUser}
+      onUserChange={setCurrentUser}
+      onOpenAuthDialog={() => {
+        setAuthError(null);
+        if (!authPhoneInput && sanitizedInput.length >= 8) {
+          setAuthPhoneInput(sanitizedInput);
+        }
+        setAuthDialogOpen(true);
+      }}
+    >
       <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-4 pb-12 pt-6 sm:px-8 lg:px-12">
-        {/* Header */}
-        <header className="flex items-center justify-between border-b border-border/50 pb-5">
-          <div className="flex items-center gap-3">
-            <span className="flex size-10 items-center justify-center overflow-hidden rounded-xl shadow-md shadow-sky-500/20">
-              <img src="/favicon.svg" alt="Ishyura Scanner Logo" className="size-10 object-cover" />
+        {/* Page Title Header (Clean and focused) */}
+        <div className="border-b border-border/50 pb-5 mb-2">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+              Soft Tool Studio
             </span>
-            <div>
-              <span className="text-xl font-extrabold tracking-tight text-foreground">Ishyura</span>
-              <span className="ml-2 hidden text-xs font-semibold text-muted-foreground sm:inline-block">
-                Instant Payment QR Cards
-              </span>
-            </div>
+            <span className="text-xs text-muted-foreground">·</span>
+            <span className="text-xs text-muted-foreground">Instant Stand Generator</span>
           </div>
+          <h1 className="text-xl sm:text-2xl font-black tracking-tight text-foreground">
+            Payment QR Tent Card Generator
+          </h1>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+            Instant printable Mobile Money payment tent cards for MTN MoMo, Airtel Money &amp; Equity eKash.
+          </p>
+        </div>
 
-          <div className="flex items-center gap-2">
-            {!currentUser ? (
-              <Dialog open={authDialogOpen} onOpenChange={setAuthDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setAuthError(null);
-                      if (!authPhoneInput && sanitizedInput.length >= 8) {
-                        setAuthPhoneInput(sanitizedInput);
-                      }
-                    }}
-                    className="h-9 gap-1.5 text-xs font-semibold border-primary/40 bg-primary/5 text-primary hover:bg-primary/15"
-                  >
-                    <LogIn className="size-3.5" />
-                    <span>Register / Sign In</span>
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2">
-                      <ShieldCheck className="size-5 text-primary" />
-                      Merchant Sign In
-                    </DialogTitle>
-                    <DialogDescription>
-                      Sign in with your phone or Google account to unlock and permanently own your
-                      payment QR stands.
-                    </DialogDescription>
-                  </DialogHeader>
+        {/* Global Dialog for Sign In when triggered */}
+        <Dialog open={authDialogOpen} onOpenChange={setAuthDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <ShieldCheck className="size-5 text-primary" />
+                Merchant Sign In
+              </DialogTitle>
+              <DialogDescription>
+                Sign in with your phone or Google account to unlock and permanently own your
+                payment QR stands.
+              </DialogDescription>
+            </DialogHeader>
 
-                  <div className="mt-2 space-y-4">
-                    {authError && (
-                      <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
-                        <AlertTriangle className="size-4 shrink-0" />
-                        <span>{authError}</span>
-                      </div>
-                    )}
+            <div className="mt-2 space-y-4">
+              {authError && (
+                <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
+                  <AlertTriangle className="size-4 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
 
-                    {/* Google Sign In Direct 1-Click Button */}
-                    <button
-                      type="button"
-                      disabled={authLoading}
-                      onClick={handleContinueWithGoogle}
-                      className="w-full flex items-center justify-between p-3.5 rounded-2xl border border-border/80 bg-muted/20 hover:bg-muted/40 hover:border-primary/40 transition-all shadow-xs group text-left cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="size-9 rounded-full bg-white shadow-xs border border-border/60 flex items-center justify-center shrink-0">
-                          <svg className="size-5" viewBox="0 0 24 24">
-                            <path
-                              fill="#4285F4"
-                              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                            />
-                            <path
-                              fill="#34A853"
-                              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                            />
-                            <path
-                              fill="#FBBC05"
-                              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                            />
-                            <path
-                              fill="#EA4335"
-                              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                            />
-                          </svg>
-                        </div>
-                        <div>
-                          <p className="text-xs font-bold text-foreground group-hover:text-primary transition-colors">
-                            Continue with Google
-                          </p>
-                          <p className="text-[11px] text-muted-foreground">
-                            1-Click sign in or register with your Google account
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {authLoading ? (
-                          <Loader2 className="size-4 animate-spin text-primary" />
-                        ) : (
-                          <span className="text-[11px] font-bold bg-primary/10 text-primary px-2.5 py-1 rounded-lg group-hover:bg-primary group-hover:text-primary-foreground transition-all">
-                            Sign In
-                          </span>
-                        )}
-                      </div>
-                    </button>
+              {/* Google Sign In Direct 1-Click Button */}
+              <button
+                type="button"
+                disabled={authLoading}
+                onClick={handleContinueWithGoogle}
+                className="w-full flex items-center justify-between p-3.5 rounded-2xl border border-border/80 bg-muted/20 hover:bg-muted/40 hover:border-primary/40 transition-all shadow-xs group text-left cursor-pointer"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="size-9 rounded-full bg-white shadow-xs border border-border/60 flex items-center justify-center shrink-0">
+                    <svg className="size-5" viewBox="0 0 24 24">
+                      <path
+                        fill="#4285F4"
+                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                      />
+                      <path
+                        fill="#EA4335"
+                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                      />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-foreground group-hover:text-primary transition-colors">
+                      Continue with Google
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      1-Click sign in or register with your Google account
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  {authLoading ? (
+                    <Loader2 className="size-4 animate-spin text-primary" />
+                  ) : (
+                    <span className="text-[11px] font-bold bg-primary/10 text-primary px-2.5 py-1 rounded-lg group-hover:bg-primary group-hover:text-primary-foreground transition-all">
+                      Sign In
+                    </span>
+                  )}
+                </div>
+              </button>
 
-                    <div className="relative flex items-center justify-center">
-                      <div className="absolute inset-0 flex items-center">
-                        <div className="w-full border-t border-border/60" />
-                      </div>
-                      <span className="relative bg-background px-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                        Or with Phone Number
-                      </span>
-                    </div>
+              <div className="relative flex items-center justify-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-border/60" />
+                </div>
+                <span className="relative bg-background px-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Or with Phone Number
+                </span>
+              </div>
 
                     {/* Phone OTP Sign In Form */}
                     {authTab !== "password" ? (
@@ -1045,229 +1048,17 @@ function Index() {
                   </div>
                 </DialogContent>
               </Dialog>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-9 gap-1.5 text-xs font-semibold"
-                    >
-                      <UserCheck className="size-4 text-emerald-500" />
-                      <span className="max-w-[110px] truncate">{currentUser.phone_number}</span>
-                      {currentUser.is_fully_registered ? (
-                        <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
-                          Full
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
-                          Soft
-                        </span>
-                      )}
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                      <DialogTitle className="flex items-center gap-2">
-                        <ShieldCheck className="size-5 text-primary" />
-                        Ishyura Account &amp; History
-                      </DialogTitle>
-                      <DialogDescription>
-                        {currentUser.is_fully_registered
-                          ? "Your merchant account is verified with full profile protection."
-                          : "Your account is phone-verified. Upgrade with email & password anytime to enhance account recovery."}
-                      </DialogDescription>
-                    </DialogHeader>
-
-                    {currentUser.is_fully_registered ? (
-                      <div className="mt-2 p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-xs space-y-1">
-                        <div className="flex items-center gap-1.5 font-bold text-emerald-700 dark:text-emerald-300">
-                          <CheckCircle2 className="size-4 text-emerald-500" />
-                          <span>Full Verified Merchant Profile</span>
-                        </div>
-                        {currentUser.email && (
-                          <p className="text-[11px] text-muted-foreground">
-                            Linked email:{" "}
-                            <strong className="text-foreground">{currentUser.email}</strong>
-                          </p>
-                        )}
-                        <p className="text-[10px] text-muted-foreground">
-                          All generated QR payment tent cards are permanently secured to this
-                          profile.
-                        </p>
-                      </div>
-                    ) : (
-                      <form
-                        onSubmit={handleUpgradeAccount}
-                        className="mt-2 space-y-3 rounded-xl border border-border/60 bg-muted/40 p-4"
-                      >
-                        <div>
-                          <p className="text-xs font-bold text-foreground">
-                            Upgrade to Full Merchant Profile
-                          </p>
-                          <p className="text-[10px] text-muted-foreground mt-0.5">
-                            Add your email address and an optional password to secure your account.
-                          </p>
-                        </div>
-
-                        {upgradeError && (
-                          <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-2 text-xs text-red-600 dark:text-red-400 flex items-center gap-1.5">
-                            <AlertTriangle className="size-3.5 shrink-0" />
-                            <span>{upgradeError}</span>
-                          </div>
-                        )}
-
-                        <div className="space-y-1">
-                          <Label className="text-[11px] font-semibold">Email Address</Label>
-                          <Input
-                            type="email"
-                            placeholder="e.g. merchant@kigalibusiness.rw"
-                            value={upgradeEmail}
-                            onChange={(e) => setUpgradeEmail(e.target.value)}
-                            required
-                            className="h-9 text-xs"
-                          />
-                        </div>
-
-                        <div className="space-y-1">
-                          <Label className="text-[11px] font-semibold">Password (Optional)</Label>
-                          <Input
-                            type="password"
-                            placeholder="Create a password (min 6 chars)"
-                            value={upgradePassword}
-                            onChange={(e) => setUpgradePassword(e.target.value)}
-                            className="h-9 text-xs"
-                          />
-                        </div>
-
-                        <Button
-                          type="submit"
-                          size="sm"
-                          disabled={upgradeLoading || !upgradeEmail.trim()}
-                          className="w-full text-xs font-bold mt-1"
-                        >
-                          {upgradeLoading ? (
-                            <>
-                              <Loader2 className="size-3.5 animate-spin mr-1.5" />
-                              Upgrading...
-                            </>
-                          ) : (
-                            "Save & Upgrade Profile"
-                          )}
-                        </Button>
-                        {upgradeSuccess && (
-                          <p className="text-[11px] font-medium text-emerald-600 flex items-center gap-1 justify-center">
-                            <CheckCircle2 className="size-3.5" /> Account successfully upgraded!
-                          </p>
-                        )}
-                      </form>
-                    )}
-
-                    <div className="space-y-2 pt-2">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                          <History className="size-3.5" /> Saved QR Cards ({qrHistory.length})
-                        </p>
-                      </div>
-                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
-                        {qrHistory.length > 0 ? (
-                          qrHistory.map((item) => (
-                            <div
-                              key={item.id}
-                              className="rounded-lg border border-border/40 bg-card p-2 text-xs flex justify-between items-center"
-                            >
-                              <div>
-                                <p className="font-semibold">{item.description}</p>
-                                <p className="text-[10px] text-muted-foreground">
-                                  {new Date(item.created_at).toLocaleDateString()}
-                                </p>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <p className="text-xs text-muted-foreground py-2 text-center">
-                            No QR codes saved yet.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end pt-3 border-t border-border/50">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleLogout}
-                        className="text-xs text-red-500 hover:text-red-600"
-                      >
-                        <LogOut className="size-3.5 mr-1" /> Logout
-                      </Button>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            )}
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => openOrderModal("acrylic_stand")}
-              className="h-9 gap-1.5 text-xs font-semibold border-primary/30 text-primary hover:bg-primary/10"
-            >
-              <Package className="size-3.5" />
-              <span className="hidden sm:inline">Order Stands &amp; Stickers</span>
-              <span className="sm:hidden">Order</span>
-            </Button>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setInquiryDialogOpen(true)}
-              className="h-9 gap-1.5 text-xs font-semibold"
-            >
-              <MessageSquare className="size-3.5 text-primary" />
-              <span className="hidden sm:inline">Inquiries &amp; Help</span>
-              <span className="sm:hidden">Support</span>
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-              className="rounded-full text-muted-foreground hover:text-foreground"
-            >
-              <span className="relative flex size-5 items-center justify-center">
-                <Sun
-                  className={`absolute size-5 transition-all duration-300 ${
-                    theme === "dark"
-                      ? "scale-0 -rotate-90 opacity-0"
-                      : "scale-100 rotate-0 opacity-100"
-                  }`}
-                />
-                <Moon
-                  className={`absolute size-5 transition-all duration-300 ${
-                    theme === "dark"
-                      ? "scale-100 rotate-0 opacity-100"
-                      : "scale-0 rotate-90 opacity-0"
-                  }`}
-                />
-              </span>
-            </Button>
-          </div>
-        </header>
 
         {/* Main Content Grid */}
-        <main className="mt-8 grid flex-1 grid-cols-1 items-start gap-8 lg:mt-12 lg:grid-cols-12 lg:gap-12">
+        <main className="mt-6 grid flex-1 grid-cols-1 items-start gap-8 lg:grid-cols-12 lg:gap-10">
           {/* Left Column: Form & Confirmation step */}
           <section className="lg:col-span-6 xl:col-span-5">
             <div>
-              <h1 className="text-2xl font-extrabold tracking-tight text-foreground sm:text-3xl">
+              <h2 className="text-xl font-extrabold tracking-tight text-foreground sm:text-2xl">
                 Get paid with a scan
-              </h1>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground sm:text-base">
-                Create a printable payment QR tent card for your counter. Supports MTN MoMo, Airtel
-                Money, and Equity Bank eKash with optional account history.
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground sm:text-sm">
+                Enter your merchant code or phone number to generate a printable payment tent card.
               </p>
             </div>
 
@@ -1669,18 +1460,6 @@ function Index() {
                     {downloading ? "Preparing your card…" : "Download High-Res Card (PNG)"}
                   </Button>
 
-                  {/* Physical Merchandise Direct Order Button */}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="lg"
-                    onClick={() => openOrderModal("acrylic_stand")}
-                    className="w-full h-11 text-xs font-bold gap-2 border-primary/40 bg-primary/10 hover:bg-primary/20 text-primary transition-all shadow-xs"
-                  >
-                    <Package className="size-4 text-primary" />
-                    <span>Order Physical Acrylic Stand (5,000 RWF)</span>
-                  </Button>
-
                   {currentUser ? (
                     <div className="flex items-center justify-between rounded-xl bg-emerald-500/10 border border-emerald-500/25 px-3.5 py-2.5 text-xs text-emerald-700 dark:text-emerald-300">
                       <div className="flex items-center gap-2">
@@ -1719,8 +1498,7 @@ function Index() {
                 </div>
 
                 <p className="text-center text-xs text-muted-foreground">
-                  Print it yourself for free, or order a durable acrylic stand delivered to your
-                  shop counter.
+                  Print directly or save image to display on your shop counter.
                 </p>
               </div>
             ) : (
@@ -1750,173 +1528,13 @@ function Index() {
           </section>
         </main>
 
-        {/* Physical Products Advertising & Order Showcase */}
-        <section className="mt-14 rounded-3xl border border-border/80 bg-linear-to-b from-card/80 to-muted/30 p-6 sm:p-8 shadow-sm">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-border/60">
-            <div>
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary mb-2">
-                <Truck className="size-3.5" />
-                <span>Physical Delivery Across Rwanda (Kigali &amp; Upcountry)</span>
-              </div>
-              <h2 className="text-xl sm:text-2xl font-black text-foreground tracking-tight">
-                Upgrade Your Counter: Printed Acrylic Stands &amp; Waterproof Stickers
-              </h2>
-              <p className="text-xs sm:text-sm text-muted-foreground mt-1 max-w-2xl leading-relaxed">
-                Paper cards get wet, crumpled, or lost. Get high-durability acrylic tabletop stands
-                and laminated stickers pre-printed with your verified MoMo, Airtel, or eKash QR
-                code.
-              </p>
-            </div>
-            <div className="shrink-0 flex items-center gap-2">
-              <Button
-                size="lg"
-                onClick={() => openOrderModal("bundle")}
-                className="font-bold text-xs h-11 px-5 shadow-md shadow-primary/20 gap-2"
-              >
-                <Package className="size-4" />
-                <span>Order Starter Bundle (7,500 RWF)</span>
-              </Button>
-            </div>
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Acrylic Stand Card */}
-            <div className="rounded-2xl border border-border/70 bg-card p-5 flex flex-col justify-between hover:border-primary/50 transition-colors shadow-xs">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                    Tabletop Stand
-                  </span>
-                  <span className="text-sm font-extrabold text-primary">5,000 RWF</span>
-                </div>
-                <h3 className="mt-2 text-base font-bold text-foreground">
-                  A6 Clear Acrylic L-Stand
-                </h3>
-                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
-                  Sturdy, scratch-resistant acrylic base designed for shop counters, restaurants,
-                  bars, and reception desks.
-                </p>
-                <ul className="mt-3 space-y-1.5 text-[11px] text-muted-foreground font-medium">
-                  <li className="flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>Double-sided glossy print</span>
-                  </li>
-                  <li className="flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>Includes high-contrast color scheme</span>
-                  </li>
-                  <li className="flex items-center gap-1.5">
-                    <Radio className="size-3.5 text-blue-500 shrink-0" />
-                    <span>NFC tap tag ready upgrade available</span>
-                  </li>
-                </ul>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => openOrderModal("acrylic_stand")}
-                className="mt-5 w-full text-xs font-semibold gap-1.5 hover:bg-primary hover:text-primary-foreground"
-              >
-                <Package className="size-3.5" />
-                <span>Order Acrylic Stand</span>
-              </Button>
-            </div>
-
-            {/* Waterproof Stickers Card */}
-            <div className="rounded-2xl border border-border/70 bg-card p-5 flex flex-col justify-between hover:border-primary/50 transition-colors shadow-xs">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                    Laminated Pack
-                  </span>
-                  <span className="text-sm font-extrabold text-primary">3,000 RWF</span>
-                </div>
-                <h3 className="mt-2 text-base font-bold text-foreground">
-                  Pack of 5 Waterproof Stickers
-                </h3>
-                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
-                  Heavy-duty vinyl stickers that stick to glass doors, POS devices, tables, delivery
-                  bikes, or cash registers.
-                </p>
-                <ul className="mt-3 space-y-1.5 text-[11px] text-muted-foreground font-medium">
-                  <li className="flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>Waterproof &amp; UV sun resistant</span>
-                  </li>
-                  <li className="flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>Strong residue-free adhesive</span>
-                  </li>
-                  <li className="flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>5 identical cards in one pack</span>
-                  </li>
-                </ul>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => openOrderModal("stickers_pack")}
-                className="mt-5 w-full text-xs font-semibold gap-1.5 hover:bg-primary hover:text-primary-foreground"
-              >
-                <Package className="size-3.5" />
-                <span>Order Sticker Pack</span>
-              </Button>
-            </div>
-
-            {/* Merchant Bundle Card */}
-            <div className="rounded-2xl border-2 border-primary/50 bg-primary/5 p-5 flex flex-col justify-between relative overflow-hidden shadow-xs">
-              <div className="absolute top-2 right-2 bg-primary text-primary-foreground text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full">
-                Most Popular
-              </div>
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-primary">
-                    Full Kit
-                  </span>
-                  <span className="text-sm font-extrabold text-foreground">7,500 RWF</span>
-                </div>
-                <h3 className="mt-2 text-base font-bold text-foreground">
-                  Complete Merchant Bundle
-                </h3>
-                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
-                  Best value for active businesses: 1 Acrylic Tabletop Stand + 5 Waterproof Vinyl
-                  Stickers.
-                </p>
-                <ul className="mt-3 space-y-1.5 text-[11px] text-muted-foreground font-medium">
-                  <li className="flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>1x A6 clear acrylic stand</span>
-                  </li>
-                  <li className="flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>5x heavy-duty vinyl stickers</span>
-                  </li>
-                  <li className="flex items-center gap-1.5">
-                    <Truck className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>Express dispatch across Kigali</span>
-                  </li>
-                </ul>
-              </div>
-              <Button
-                size="sm"
-                onClick={() => openOrderModal("bundle")}
-                className="mt-5 w-full text-xs font-bold gap-1.5"
-              >
-                <Package className="size-3.5" />
-                <span>Order Merchant Bundle</span>
-              </Button>
-            </div>
-          </div>
-        </section>
-
-        {/* Footer with Inquiries & Admin triggers */}
+        {/* Minimal Footer */}
         <footer className="mt-12 border-t border-border/50 pt-6 text-xs text-muted-foreground">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <span className="font-bold text-foreground">Ishyura</span>
               <span>—</span>
-              <span>Rwanda Instant Payment QR Cards</span>
+              <span>Rwanda Payment QR Card Studio</span>
             </div>
             <div className="flex items-center gap-4 text-xs">
               <button
@@ -1929,16 +1547,63 @@ function Index() {
               </button>
             </div>
           </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground/80">
-            <p>
-              Built for Rwandan Merchants: MTN MoMo (*182#), Airtel Money, and Equity eKash (*555#).
-            </p>
-            <p className="flex items-center gap-1.5">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
-              Cloudflare D1 Database Active
-            </p>
-          </div>
         </footer>
+
+        {/* Post-Print / Post-Download Physical Merch Upsell Dialog */}
+        <Dialog open={upsellDialogOpen} onOpenChange={setUpsellDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <div className="size-10 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-2 border border-emerald-500/20">
+                <Sparkles className="size-5" />
+              </div>
+              <DialogTitle className="text-base font-bold text-foreground">
+                Your QR Card is Ready!
+              </DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground leading-relaxed">
+                Paper cards get wet or crumpled on busy shop counters. Would you like a durable,
+                crystal-clear acrylic stand or waterproof vinyl stickers delivered to your shop?
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2.5 my-2">
+              <div className="p-3 rounded-xl border border-border/70 bg-card/60 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold text-foreground">Premium Acrylic Counter Stand</p>
+                  <p className="text-[11px] text-muted-foreground">Laser-cut L-stand with your QR &amp; logo</p>
+                </div>
+                <span className="text-xs font-extrabold text-foreground tabular-nums">7,500 RWF</span>
+              </div>
+
+              <div className="p-3 rounded-xl border border-border/70 bg-card/60 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold text-foreground">Pack of 5 Vinyl Stickers</p>
+                  <p className="text-[11px] text-muted-foreground">Waterproof &amp; UV resistant</p>
+                </div>
+                <span className="text-xs font-extrabold text-foreground tabular-nums">4,500 RWF</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <Link to="/orders" className="flex-1">
+                <Button
+                  className="w-full text-xs font-bold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20"
+                  onClick={() => setUpsellDialogOpen(false)}
+                >
+                  <Package className="size-3.5" />
+                  <span>Explore Products &amp; Order</span>
+                </Button>
+              </Link>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setUpsellDialogOpen(false)}
+                className="text-xs text-muted-foreground"
+              >
+                Maybe Later
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <InquiryDialog
           open={inquiryDialogOpen}
@@ -1958,6 +1623,6 @@ function Index() {
           preselectedProduct={selectedProductForOrder}
         />
       </div>
-    </div>
+    </AppLayout>
   );
 }

@@ -164,6 +164,10 @@ export class IshyuraClient {
     }
   }
 
+  static getCurrentUser(): UserProfile | null {
+    return this.getSavedUser();
+  }
+
   static logout(): void {
     if (typeof window === "undefined") return;
     localStorage.removeItem(TOKEN_KEY);
@@ -585,6 +589,27 @@ export class IshyuraClient {
         order_number: orderNum,
         message: "Order placed successfully! We will contact you via WhatsApp/Phone.",
       };
+    }
+  }
+
+  static async listOrders(): Promise<OrderRecord[]> {
+    try {
+      const res = await fetch(getApiEndpoint("orders"));
+      if (res.ok) {
+        return await res.json();
+      }
+      return this.getLocalOrders();
+    } catch {
+      return this.getLocalOrders();
+    }
+  }
+
+  static getLocalOrders(): OrderRecord[] {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(localStorage.getItem("pending_orders") || "[]");
+    } catch {
+      return [];
     }
   }
 

@@ -1112,6 +1112,33 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       });
     }
 
+    if (path === "/orders" && request.method === "GET") {
+      const phoneParam = url.searchParams.get("phone");
+      if (env.DB) {
+        try {
+          if (phoneParam) {
+            const rows = await env.DB.prepare(
+              "SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 50",
+            )
+              .bind(phoneParam)
+              .all();
+            return jsonResponse(rows.results || []);
+          }
+          const rows = await env.DB.prepare(
+            "SELECT * FROM orders ORDER BY created_at DESC LIMIT 50",
+          ).all();
+          return jsonResponse(rows.results || []);
+        } catch {
+          return jsonResponse(memOrders);
+        }
+      }
+
+      if (phoneParam) {
+        return jsonResponse(memOrders.filter((o) => o.customer_phone === phoneParam));
+      }
+      return jsonResponse(memOrders);
+    }
+
     // ----------------------------------------------------
     // 5. ADMIN: Stats & Reporting
     // ----------------------------------------------------

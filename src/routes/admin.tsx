@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import React, { useState, useEffect } from "react";
+import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -252,18 +253,12 @@ function AdminPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Top Header */}
-      <header className="border-b border-border/60 bg-card/60 backdrop-blur-md sticky top-0 z-30">
+    <AppLayout>
+      <div className="min-h-screen bg-background text-foreground flex flex-col">
+        {/* Top Header */}
+        <header className="border-b border-border/60 bg-card/60 backdrop-blur-md sticky top-0 z-30">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link
-              to="/"
-              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mr-2 px-2 py-1 rounded-md hover:bg-muted/50"
-            >
-              <ArrowLeft className="size-3.5" />
-              <span>Back to Ishyura</span>
-            </Link>
             <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center">
               <ShieldCheck className="size-4 text-primary" />
             </div>
@@ -1274,5 +1269,6 @@ function AdminPage() {
         )}
       </main>
     </div>
+    </AppLayout>
   );
 }
