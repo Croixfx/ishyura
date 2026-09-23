@@ -32,7 +32,60 @@ TWILIO_VERIFY_SERVICE_SID=
 
 ---
 
-## 2. Deploying the Frontend to Cloudflare Pages
+## 1. Automated Cloudflare D1 Database Migrations (On Git Push)
+
+Whenever you push code changes to GitHub, the database migrations will automatically execute on your production D1 database (`ishyura-db`) before deployment!
+
+### How the Automatic Migration Works:
+1. **Migration File**: Located at `migrations/0001_initial_schema.sql`. It defines all tables (`merchants`, `qr_codes`, `otps`, `inquiries`, `orders`, `download_events`) and indexes.
+2. **Configuration in `wrangler.toml`**:
+   ```toml
+   [[d1_databases]]
+   binding = "DB"
+   database_name = "ishyura-db"
+   database_id = "e4e60ef4-0a65-4f90-8f9e-b67f444741f9"
+   migrations_dir = "migrations"
+   ```
+3. **GitHub Actions Automation**: `.github/workflows/deploy.yml` automatically triggers on `git push` to `main` or `master`. It runs:
+   ```bash
+   npx wrangler d1 migrations apply ishyura-db --remote
+   ```
+   and then deploys the worker.
+
+### Required GitHub Secrets:
+In your GitHub Repository (`Settings` > `Secrets and variables` > `Actions`), add these two repository secrets:
+- `CLOUDFLARE_API_TOKEN`: Your Cloudflare API Token (with Workers/D1 Edit permissions from Cloudflare Dashboard > My Profile > API Tokens).
+- `CLOUDFLARE_ACCOUNT_ID`: Your Cloudflare Account ID (visible on Cloudflare Dashboard sidebar).
+
+### Running Migrations from your Terminal (One-Command):
+You can also run migrations at any time using the npm script:
+```bash
+npm run d1:migrate
+```
+Or to build, migrate D1, and deploy in one single command:
+```bash
+npm run deploy
+```
+
+---
+
+## 2. Twilio Secrets Configuration for SMS OTPs
+Cloudflare Workers require your Twilio API credentials to dispatch SMS:
+```bash
+npx wrangler secret put TWILIO_ACCOUNT_SID
+# Paste your Account SID (AC...)
+
+npx wrangler secret put TWILIO_AUTH_TOKEN
+# Paste your Auth Token
+
+npx wrangler secret put TWILIO_PHONE_NUMBER
+# Paste your Twilio number (+12293744607)
+```
+Or set them directly in the **Cloudflare Dashboard** > **Workers & Pages** > **ishyura** > **Settings** > **Variables and Secrets**.
+
+---
+
+## 2. Deploying to Cloudflare Workers
 
 ### Option A: Git Integration (Recommended)
 1. Push this repository to your **GitHub** or **GitLab** account.

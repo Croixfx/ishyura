@@ -292,10 +292,10 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
 
     for (const sql of statements) {
       try {
-        if (typeof db.exec === "function") {
-          await db.exec(sql);
-        } else if (typeof db.prepare === "function") {
+        if (typeof db.prepare === "function") {
           await db.prepare(sql).run();
+        } else if (typeof db.exec === "function") {
+          await db.exec(sql);
         }
       } catch (e) {
         console.warn("Table creation statement warning:", e);

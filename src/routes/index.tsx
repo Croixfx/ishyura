@@ -589,7 +589,9 @@ function Index() {
                             SMS Dispatched to Your Phone
                           </h4>
                           <p className="text-[11px] text-muted-foreground leading-relaxed">
-                            Sent to <strong className="font-mono text-foreground">{authPhoneInput}</strong> via Twilio.
+                            Sent to{" "}
+                            <strong className="font-mono text-foreground">{authPhoneInput}</strong>{" "}
+                            via Twilio.
                           </p>
                           {deliveryInfo?.messageId ? (
                             <p className="text-[10px] text-muted-foreground font-mono">
@@ -597,7 +599,9 @@ function Index() {
                             </p>
                           ) : null}
                           <p className="text-[10px] text-muted-foreground pt-1 border-t border-border/40 mt-1">
-                            Tip: On MTN Rwanda / Airtel, the sender is usually an international number (+1 229 374 4607). If not in primary SMS, check your spam/unknown senders folder.
+                            Tip: On MTN Rwanda / Airtel, the sender is usually an international
+                            number (+1 229 374 4607). If not in primary SMS, check your spam/unknown
+                            senders folder.
                           </p>
                         </div>
 
