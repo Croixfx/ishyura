@@ -174,7 +174,6 @@ export class IshyuraClient {
     message: string;
     delivery_status?: string;
     provider?: string;
-    otp_preview?: string;
     detail?: string;
     error?: string;
     isTrialNotice?: boolean;
@@ -212,7 +211,6 @@ export class IshyuraClient {
     return {
       message: `Security code generated for ${cleanPhone}.`,
       delivery_status: "instant",
-      otp_preview: dummyOtp,
     };
   }
 

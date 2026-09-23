@@ -188,7 +188,6 @@ function Index() {
   const [authPhoneInput, setAuthPhoneInput] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState("");
-  const [otpPreview, setOtpPreview] = useState<string | null>(null);
   const [deliveryInfo, setDeliveryInfo] = useState<{
     status?: string;
     provider?: string;
@@ -377,12 +376,8 @@ function Index() {
         error: res.error,
         isTrialNotice: res.isTrialNotice,
       });
-      if (res.otp_preview) {
-        setOtpPreview(res.otp_preview);
-        setOtpCode(res.otp_preview);
-      } else {
-        setOtpPreview(null);
-      }
+      // Always reset input so user types code directly from SMS
+      setOtpCode("");
     } catch (err: unknown) {
       setAuthError(err instanceof Error ? err.message : "Failed to send OTP.");
     } finally {
@@ -583,75 +578,41 @@ function Index() {
                     </div>
 
                     {otpSent && (
-                      <div className="space-y-3 rounded-xl border border-border/60 bg-muted/30 p-3.5">
-                        {deliveryInfo?.status === "sent" ? (
-                          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-center space-y-1">
-                            <div className="inline-flex items-center justify-center size-8 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 mb-1">
-                              <Smartphone className="size-4" />
-                            </div>
-                            <h4 className="text-xs font-bold text-foreground">
-                              SMS Sent via Twilio to Physical Device
-                            </h4>
-                            <p className="text-[11px] text-muted-foreground leading-relaxed">
-                              Twilio dispatched your 6-digit verification code to{" "}
-                              <strong className="font-mono text-foreground">
-                                {authPhoneInput}
-                              </strong>
-                              . Please check your SMS inbox.
-                            </p>
+                      <div className="space-y-3.5 rounded-xl border border-border/60 bg-muted/30 p-4">
+                        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center space-y-1">
+                          <div className="inline-flex items-center justify-center size-8 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 mb-1">
+                            <Smartphone className="size-4" />
                           </div>
-                        ) : otpPreview ? (
-                          <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 text-center space-y-2">
-                            <div className="flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                              <Smartphone className="size-3 text-primary" />
-                              <span>Security Verification Code</span>
-                            </div>
-                            <div className="flex items-center justify-center gap-1.5">
-                              {otpPreview.split("").map((digit, idx) => (
-                                <span
-                                  key={idx}
-                                  className="inline-flex size-9 items-center justify-center rounded-lg border border-primary/30 bg-background font-mono text-base font-bold text-foreground shadow-xs"
-                                >
-                                  {digit}
-                                </span>
-                              ))}
-                            </div>
-                            {deliveryInfo?.isTrialNotice ? (
-                              <div className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md p-2 text-left leading-relaxed">
-                                <strong>Twilio Trial Notice:</strong> To receive physical SMS on a
-                                Twilio Trial account, the phone number must be added to your Twilio
-                                Verified Caller IDs. The OTP has been pre-filled below so you can
-                                proceed.
-                              </div>
-                            ) : (
-                              <p className="text-[11px] text-muted-foreground">
-                                {deliveryInfo?.message ||
-                                  "Code generated. Enter below to authenticate."}
-                              </p>
-                            )}
-                          </div>
-                        ) : null}
+                          <h4 className="text-xs font-bold text-foreground">
+                            SMS Code Sent to Your Phone
+                          </h4>
+                          <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            A 6-digit verification code was dispatched to{" "}
+                            <strong className="font-mono text-foreground">{authPhoneInput}</strong>.
+                            Please check your mobile phone's SMS inbox and enter the code below.
+                          </p>
+                        </div>
 
-                        <div>
+                        <div className="space-y-1.5">
                           <Label className="text-xs font-semibold">
-                            Enter 6-Digit Code from SMS
+                            Enter 6-Digit Verification Code
                           </Label>
-                          <div className="mt-1 flex gap-2">
+                          <div className="flex gap-2">
                             <Input
                               type="text"
                               inputMode="numeric"
-                              placeholder="e.g. 123456"
+                              autoFocus
                               value={otpCode}
                               maxLength={6}
                               onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ""))}
-                              className="h-9 font-mono text-sm tracking-widest text-center"
+                              className="h-10 font-mono text-base tracking-widest text-center"
                             />
                             <Button
                               type="button"
                               size="sm"
                               disabled={otpCode.length < 6 || authLoading}
                               onClick={() => handleVerifyOtp(authPhoneInput)}
-                              className="h-9 shrink-0 text-xs font-semibold"
+                              className="h-10 shrink-0 text-xs font-semibold px-4"
                             >
                               {authLoading ? (
                                 <Loader2 className="size-3.5 animate-spin mr-1" />

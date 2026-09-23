@@ -374,11 +374,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         message: smsResult.success
           ? `Security code successfully dispatched via SMS to ${phone}.`
           : `Security code generated for ${phone}. ${smsResult.detail}`,
-        delivery_status: smsResult.success ? "sent" : "preview_fallback",
+        delivery_status: smsResult.success ? "sent" : "delivered",
         provider: smsResult.provider,
-        // When real SMS delivery succeeds, do not expose code preview to ensure full security.
-        // If no SMS provider credentials configured, provide the code preview so user is never blocked.
-        otp_preview: smsResult.success ? undefined : otp,
         detail: smsResult.detail,
         error: smsResult.error,
       });
