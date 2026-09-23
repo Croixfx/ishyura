@@ -547,7 +547,7 @@ function Index() {
       const user = await IshyuraClient.signInWithGoogle({
         email: googleRes.email,
         name: displayName,
-        sub: googleRes.user.uid,
+        sub: googleRes.uid,
       });
 
       setCurrentUser(user);
