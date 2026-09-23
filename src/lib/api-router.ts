@@ -229,8 +229,10 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
       `CREATE TABLE IF NOT EXISTS merchants (
         id TEXT PRIMARY KEY,
         phone_number TEXT UNIQUE NOT NULL,
-        is_fully_registered INTEGER DEFAULT 0,
+        is_fully_registered INTEGER DEFAULT 1,
         email TEXT,
+        password_hash TEXT,
+        business_name TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         last_active_at TEXT DEFAULT (datetime('now'))
       );`,
@@ -571,11 +573,240 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     // ----------------------------------------------------
+    // 2B. AUTH: Google Sign-In / OAuth Continuation
+    // ----------------------------------------------------
+    if (path === "/auth/google" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as {
+        email?: string;
+        name?: string;
+        sub?: string;
+        phone_number?: string;
+      };
+
+      const email = (body.email || "").trim().toLowerCase();
+      if (!email) {
+        return jsonResponse({ detail: "Google account email is required." }, 400);
+      }
+
+      const businessName = (body.name || email.split("@")[0] || "Merchant").trim();
+      const fallbackPhone = body.phone_number ? formatToE164(body.phone_number) : `g-${email}`;
+      const now = new Date().toISOString();
+
+      if (env.DB) {
+        const merchant = await env.DB.prepare(
+          "SELECT id, phone_number, email, business_name FROM merchants WHERE email = ? OR phone_number = ?",
+        )
+          .bind(email, fallbackPhone)
+          .first<{ id: string; phone_number: string; email: string; business_name: string }>();
+
+        const merchantId = merchant?.id || body.sub || crypto.randomUUID();
+        const phoneToUse = merchant?.phone_number || fallbackPhone;
+
+        await env.DB.prepare(
+          "INSERT INTO merchants (id, phone_number, email, business_name, is_fully_registered, last_active_at) " +
+            "VALUES (?, ?, ?, ?, 1, ?) " +
+            "ON CONFLICT(phone_number) DO UPDATE SET " +
+            "email = excluded.email, business_name = COALESCE(merchants.business_name, excluded.business_name), is_fully_registered = 1, last_active_at = excluded.last_active_at",
+        )
+          .bind(merchantId, phoneToUse, email, businessName, now)
+          .run();
+
+        const token = `d1-google-jwt-${merchantId}-${Date.now()}`;
+        return jsonResponse({
+          access_token: token,
+          token_type: "bearer",
+          user_id: merchantId,
+          email: email,
+          phone_number: phoneToUse,
+          business_name: merchant?.business_name || businessName,
+          is_fully_registered: true,
+        });
+      }
+
+      // Memory fallback
+      const merchantId = body.sub || `g-${Date.now()}`;
+      const merchant = {
+        id: merchantId,
+        phone_number: fallbackPhone,
+        email: email,
+        business_name: businessName,
+        is_fully_registered: true,
+        created_at: now,
+        last_active_at: now,
+      };
+      memMerchants.set(fallbackPhone, merchant);
+
+      return jsonResponse({
+        access_token: `mem-google-jwt-${merchantId}`,
+        token_type: "bearer",
+        user_id: merchant.id,
+        email: email,
+        phone_number: merchant.phone_number,
+        business_name: businessName,
+        is_fully_registered: true,
+      });
+    }
+
+    // ----------------------------------------------------
+    // 2C. AUTH: Password Login (Alternative for existing accounts)
+    // ----------------------------------------------------
+    if (path === "/auth/password-login" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as {
+        identifier?: string;
+        password?: string;
+      };
+
+      const identifier = (body.identifier || "").trim();
+      const password = (body.password || "").trim();
+
+      if (!identifier || !password) {
+        return jsonResponse({ detail: "Please provide both phone/email and password." }, 400);
+      }
+
+      const cleanPhone = formatToE164(identifier);
+      const cleanEmail = identifier.toLowerCase();
+
+      if (env.DB) {
+        const merchant = await env.DB.prepare(
+          "SELECT id, phone_number, email, business_name, password_hash FROM merchants WHERE phone_number = ? OR phone_number = ? OR email = ?",
+        )
+          .bind(cleanPhone, identifier, cleanEmail)
+          .first<{
+            id: string;
+            phone_number: string;
+            email: string;
+            business_name: string;
+            password_hash: string;
+          }>();
+
+        if (!merchant) {
+          return jsonResponse(
+            {
+              detail:
+                "No account found with this phone or email. Please sign in with OTP or Google first.",
+            },
+            404,
+          );
+        }
+
+        if (merchant.password_hash && merchant.password_hash !== password) {
+          return jsonResponse({ detail: "Incorrect password. Please try again or use OTP." }, 401);
+        }
+
+        const token = `d1-pwd-jwt-${merchant.id}-${Date.now()}`;
+        return jsonResponse({
+          access_token: token,
+          token_type: "bearer",
+          user_id: merchant.id,
+          phone_number: merchant.phone_number,
+          email: merchant.email,
+          business_name: merchant.business_name,
+          is_fully_registered: true,
+        });
+      }
+
+      // Memory fallback
+      const merchant =
+        memMerchants.get(cleanPhone) ||
+        memMerchants.get(identifier) ||
+        Array.from(memMerchants.values()).find((m) => m.email === cleanEmail);
+
+      if (!merchant) {
+        return jsonResponse({ detail: "No account found. Please sign in with OTP first." }, 404);
+      }
+
+      return jsonResponse({
+        access_token: `mem-pwd-jwt-${merchant.id}`,
+        token_type: "bearer",
+        user_id: merchant.id,
+        phone_number: merchant.phone_number,
+        email: merchant.email,
+        is_fully_registered: true,
+      });
+    }
+
+    // ----------------------------------------------------
+    // 2D. AUTH: Upgrade or Update Profile
+    // ----------------------------------------------------
+    if (path === "/auth/upgrade" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as {
+        user_id?: string;
+        phone_number?: string;
+        email?: string;
+        password?: string;
+        business_name?: string;
+      };
+
+      const e164Phone = body.phone_number ? formatToE164(body.phone_number) : "";
+      const email = (body.email || "").trim();
+      const now = new Date().toISOString();
+
+      if (env.DB) {
+        let merchant = null;
+        if (body.user_id) {
+          merchant = await env.DB.prepare("SELECT * FROM merchants WHERE id = ?")
+            .bind(body.user_id)
+            .first<{ id: string; phone_number: string }>();
+        }
+        if (!merchant && e164Phone) {
+          merchant = await env.DB.prepare("SELECT * FROM merchants WHERE phone_number = ?")
+            .bind(e164Phone)
+            .first<{ id: string; phone_number: string }>();
+        }
+
+        const merchantId = merchant?.id || body.user_id || crypto.randomUUID();
+        const phoneToUse = merchant?.phone_number || e164Phone || "verified-merchant";
+
+        await env.DB.prepare(
+          "INSERT INTO merchants (id, phone_number, email, is_fully_registered, last_active_at) " +
+            "VALUES (?, ?, ?, 1, ?) " +
+            "ON CONFLICT(phone_number) DO UPDATE SET " +
+            "email = excluded.email, is_fully_registered = 1, last_active_at = excluded.last_active_at",
+        )
+          .bind(merchantId, phoneToUse, email || null, now)
+          .run();
+
+        const token = `d1-jwt-${merchantId}-${Date.now()}`;
+        return jsonResponse({
+          success: true,
+          access_token: token,
+          token_type: "bearer",
+          user_id: merchantId,
+          phone_number: phoneToUse,
+          email: email,
+          is_fully_registered: true,
+        });
+      }
+
+      // Memory fallback
+      const merchant = {
+        id: body.user_id || `m-${Date.now()}`,
+        phone_number: e164Phone,
+        is_fully_registered: true,
+        email: email,
+        created_at: now,
+        last_active_at: now,
+      };
+      if (e164Phone) memMerchants.set(e164Phone, merchant);
+
+      return jsonResponse({
+        success: true,
+        access_token: `mem-jwt-${merchant.id}`,
+        token_type: "bearer",
+        user_id: merchant.id,
+        phone_number: merchant.phone_number,
+        email: email,
+        is_fully_registered: true,
+      });
+    }
+
+    // ----------------------------------------------------
     // 3. QR CODES: Create & List
     // ----------------------------------------------------
     if (path === "/qr-codes" || path === "/qr/create" || path === "/qr/list") {
       if (request.method === "POST") {
         const body = (await request.json().catch(() => ({}))) as {
+          owner_id?: string;
           description?: string;
           amount?: number | null;
           business_name?: string;
@@ -591,7 +822,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const network = body.network || "Mobile Money";
         const paymentType = body.payment_type || "momo_code";
         const dialCode = body.dial_code || "*182#";
-        const phone = body.phone_number || "guest";
+        const phone = body.phone_number || body.owner_id || "unassigned";
+        const ownerId = body.owner_id || body.phone_number || phone;
 
         if (env.DB) {
           await env.DB.prepare(
@@ -600,7 +832,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           )
             .bind(
               id,
-              phone,
+              ownerId,
               phone,
               businessName,
               network,
@@ -613,7 +845,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
           return jsonResponse({
             id,
-            owner_id: phone,
+            owner_id: ownerId,
+            phone_number: phone,
+            business_name: businessName,
+            network,
+            payment_type: paymentType,
+            dial_code: dialCode,
             description,
             amount: body.amount ?? null,
             created_at: new Date().toISOString(),
@@ -622,7 +859,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
         const newQr: MemQrCode = {
           id,
-          owner_id: phone,
+          owner_id: ownerId,
           phone_number: phone,
           business_name: businessName,
           network,
@@ -637,11 +874,33 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       if (request.method === "GET") {
+        const ownerParam = url.searchParams.get("owner_id");
+        const phoneParam = url.searchParams.get("phone_number");
+
         if (env.DB) {
+          if (ownerParam || phoneParam) {
+            const rows = await env.DB.prepare(
+              "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, created_at FROM qr_codes WHERE owner_id = ? OR phone_number = ? ORDER BY created_at DESC LIMIT 100",
+            )
+              .bind(ownerParam || phoneParam, phoneParam || ownerParam)
+              .all();
+            return jsonResponse(rows.results || []);
+          }
           const rows = await env.DB.prepare(
-            "SELECT id, owner_id, description, amount, created_at FROM qr_codes ORDER BY created_at DESC LIMIT 50",
+            "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, created_at FROM qr_codes ORDER BY created_at DESC LIMIT 50",
           ).all();
           return jsonResponse(rows.results || []);
+        }
+
+        if (ownerParam || phoneParam) {
+          return jsonResponse(
+            memQrCodes.filter(
+              (q) =>
+                q.owner_id === ownerParam ||
+                q.owner_id === phoneParam ||
+                q.phone_number === phoneParam,
+            ),
+          );
         }
         return jsonResponse(memQrCodes);
       }

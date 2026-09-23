@@ -272,6 +272,118 @@ export class IshyuraClient {
     return tokenResponse;
   }
 
+  static async signInWithGoogle(profile: {
+    email: string;
+    name?: string;
+    sub?: string;
+  }): Promise<UserProfile> {
+    const email = profile.email.trim().toLowerCase();
+    try {
+      const res = await fetch(getApiEndpoint("auth/google"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          name: profile.name,
+          sub: profile.sub,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const user: UserProfile = {
+          id: data.user_id,
+          phone_number: data.phone_number || email,
+          email: data.email || email,
+          is_fully_registered: true,
+        };
+        this.setSession(data.access_token, user);
+        return user;
+      }
+    } catch {
+      // Local fallback
+    }
+
+    const localUser: UserProfile = {
+      id: profile.sub || `g-${Date.now()}`,
+      phone_number: email,
+      email: email,
+      is_fully_registered: true,
+    };
+    this.setSession(`jwt-google-${localUser.id}`, localUser);
+    return localUser;
+  }
+
+  static async signInWithPassword(identifier: string, password: string): Promise<UserProfile> {
+    const cleanId = identifier.trim();
+    const res = await fetch(getApiEndpoint("auth/password-login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: cleanId, password }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Login failed." }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
+    }
+
+    const data = await res.json();
+    const user: UserProfile = {
+      id: data.user_id,
+      phone_number: data.phone_number,
+      email: data.email,
+      is_fully_registered: true,
+    };
+    this.setSession(data.access_token, user);
+    return user;
+  }
+
+  static async upgradeAccount(
+    email: string,
+    password?: string,
+    businessName?: string,
+  ): Promise<UserProfile> {
+    const token = this.getToken();
+    const user = this.getSavedUser();
+    if (!user) {
+      throw new Error("No active merchant session found. Please log in first.");
+    }
+
+    const res = await fetch(getApiEndpoint("auth/upgrade"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        user_id: user.id,
+        phone_number: user.phone_number,
+        email: email.trim(),
+        password: password?.trim() || "",
+        business_name: businessName?.trim() || "",
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Failed to upgrade account." }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
+    }
+
+    const data = await res.json();
+    const updatedUser: UserProfile = {
+      ...user,
+      id: data.user_id || user.id,
+      email: data.email || email.trim(),
+      is_fully_registered: true,
+    };
+    if (data.access_token) {
+      this.setSession(data.access_token, updatedUser);
+    } else {
+      localStorage.setItem(USER_KEY, JSON.stringify(updatedUser));
+    }
+    return updatedUser;
+  }
+
   static async createQrCode(
     description: string,
     amount?: number | null,
@@ -284,9 +396,11 @@ export class IshyuraClient {
   ): Promise<QRCodeRecord> {
     const token = this.getToken();
     const user = this.getSavedUser();
-    const phone = user?.phone_number || "guest";
+    const phone = user?.phone_number || "";
+    const ownerId = user?.id || phone || "unassigned";
 
     const payload = {
+      owner_id: ownerId,
       description,
       amount: amount ?? null,
       phone_number: phone,
@@ -320,7 +434,8 @@ export class IshyuraClient {
 
     const newRecord: QRCodeRecord = {
       id: crypto.randomUUID(),
-      owner_id: user?.id || "guest",
+      owner_id: ownerId,
+      phone_number: phone,
       business_name: metadata?.business_name,
       network: metadata?.network,
       payment_type: metadata?.payment_type,
@@ -332,7 +447,7 @@ export class IshyuraClient {
 
     const existingList = this.getLocalQrList();
     const existingDuplicate = existingList.find(
-      (item) => item.description === description && item.owner_id === (user?.id || "guest"),
+      (item) => item.description === description && item.owner_id === ownerId,
     );
     if (existingDuplicate) {
       return existingDuplicate;
@@ -345,13 +460,23 @@ export class IshyuraClient {
 
   static async listQrCodes(): Promise<QRCodeRecord[]> {
     const token = this.getToken();
+    const user = this.getSavedUser();
+    const phone = user?.phone_number || "";
+    const ownerId = user?.id || phone || "";
+
     try {
-      const res = await fetch(getApiEndpoint("qr-codes"), {
+      const queryParams = new URLSearchParams();
+      if (ownerId) queryParams.set("owner_id", ownerId);
+      if (phone) queryParams.set("phone_number", phone);
+
+      const queryString = queryParams.toString();
+      const url = getApiEndpoint(queryString ? `qr-codes?${queryString}` : "qr-codes");
+      const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (res.ok) {
         const list: QRCodeRecord[] = await res.json();
-        if (Array.isArray(list) && list.length > 0) {
+        if (Array.isArray(list)) {
           localStorage.setItem(QR_STORE_KEY, JSON.stringify(list));
           return list;
         }
@@ -359,7 +484,13 @@ export class IshyuraClient {
     } catch {
       // Local fallback
     }
-    return this.getLocalQrList();
+    const local = this.getLocalQrList();
+    if (ownerId || phone) {
+      return local.filter(
+        (q) => q.owner_id === ownerId || q.owner_id === phone || q.phone_number === phone,
+      );
+    }
+    return local;
   }
 
   // ------------------------------------------------------------------
