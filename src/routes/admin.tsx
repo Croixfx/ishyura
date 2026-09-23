@@ -71,6 +71,35 @@ function AdminPage() {
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [downloads, setDownloads] = useState<DownloadEventRecord[]>([]);
 
+  // Twilio Settings & Test SMS State
+  const [twilioSettings, setTwilioSettings] = useState<{
+    hasAccountSid: boolean;
+    accountSidMasked: string;
+    hasAuthToken: boolean;
+    phoneNumber: string;
+    verifyServiceSid: string;
+  } | null>(null);
+
+  const [editAccountSid, setEditAccountSid] = useState("");
+  const [editAuthToken, setEditAuthToken] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editVerifySid, setEditVerifySid] = useState("");
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsSavedMsg, setSettingsSavedMsg] = useState<string | null>(null);
+
+  const [testPhone, setTestPhone] = useState("");
+  const [testSmsLoading, setTestSmsLoading] = useState(false);
+  const [testSmsResult, setTestSmsResult] = useState<{
+    success: boolean;
+    provider?: string;
+    messageId?: string;
+    detail: string;
+    error?: string;
+    isTrialNotice?: boolean;
+    test_code?: string;
+    rawResponse?: unknown;
+  } | null>(null);
+
   // Load saved key from localStorage on mount
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -91,22 +120,73 @@ function AdminPage() {
       setIsAuthenticated(true);
       localStorage.setItem(ADMIN_STORAGE_KEY, keyToUse);
 
-      const [merchantsList, inquiriesList, ordersList, downloadsList] = await Promise.all([
-        IshyuraClient.getAdminMerchants(keyToUse).catch(() => []),
-        IshyuraClient.getAdminInquiries(keyToUse).catch(() => []),
-        IshyuraClient.getAdminOrders(keyToUse).catch(() => []),
-        IshyuraClient.getAdminDownloads(keyToUse).catch(() => []),
-      ]);
+      const [merchantsList, inquiriesList, ordersList, downloadsList, settingsData] =
+        await Promise.all([
+          IshyuraClient.getAdminMerchants(keyToUse).catch(() => []),
+          IshyuraClient.getAdminInquiries(keyToUse).catch(() => []),
+          IshyuraClient.getAdminOrders(keyToUse).catch(() => []),
+          IshyuraClient.getAdminDownloads(keyToUse).catch(() => []),
+          IshyuraClient.getAdminSettings(keyToUse).catch(() => null),
+        ]);
       setMerchants(merchantsList);
       setInquiries(inquiriesList);
       setOrders(ordersList);
       setDownloads(downloadsList);
+      if (settingsData?.twilio) {
+        setTwilioSettings(settingsData.twilio);
+        setEditPhone(settingsData.twilio.phoneNumber || "");
+        setEditVerifySid(settingsData.twilio.verifyServiceSid || "");
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Authentication failed";
       setAuthError(`${msg} (Passcode: ishyura2026)`);
       setIsAuthenticated(false);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingSettings(true);
+    setSettingsSavedMsg(null);
+    try {
+      await IshyuraClient.saveAdminSettings(adminKey, {
+        twilio_account_sid: editAccountSid || undefined,
+        twilio_auth_token: editAuthToken || undefined,
+        twilio_phone_number: editPhone || undefined,
+        twilio_verify_service_sid: editVerifySid || undefined,
+      });
+      setSettingsSavedMsg("Twilio settings successfully saved to D1 database.");
+      // Refresh settings
+      const updated = await IshyuraClient.getAdminSettings(adminKey);
+      if (updated?.twilio) {
+        setTwilioSettings(updated.twilio);
+      }
+      setEditAccountSid("");
+      setEditAuthToken("");
+    } catch (err) {
+      setSettingsSavedMsg(err instanceof Error ? err.message : "Failed to save settings.");
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const handleRunTestSms = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testPhone.trim()) return;
+    setTestSmsLoading(true);
+    setTestSmsResult(null);
+    try {
+      const res = await IshyuraClient.testAdminSms(adminKey, testPhone.trim());
+      setTestSmsResult(res);
+    } catch (err) {
+      setTestSmsResult({
+        success: false,
+        detail: err instanceof Error ? err.message : "Test dispatch failed.",
+      });
+    } finally {
+      setTestSmsLoading(false);
     }
   };
 
@@ -816,7 +896,7 @@ function AdminPage() {
                   <div>
                     <h2 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1.5">
                       <Smartphone className="size-4 text-primary" />
-                      Twilio SMS Dispatch
+                      Twilio SMS Gateway &amp; Diagnostics
                     </h2>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
                       Direct OTP transmission to physical mobile phones in Rwanda (+250) and
@@ -825,9 +905,15 @@ function AdminPage() {
                   </div>
                   <Badge
                     variant="outline"
-                    className="text-[10px] font-mono border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
+                    className={`text-[10px] font-mono ${
+                      twilioSettings?.hasAccountSid && twilioSettings?.hasAuthToken
+                        ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
+                        : "border-amber-500/30 text-amber-600 dark:text-amber-400 bg-amber-500/10"
+                    }`}
                   >
-                    Twilio Connected
+                    {twilioSettings?.hasAccountSid && twilioSettings?.hasAuthToken
+                      ? "Twilio Ready"
+                      : "Twilio Inactive / Demo Mode"}
                   </Badge>
                 </div>
 
@@ -838,8 +924,14 @@ function AdminPage() {
                       <span className="text-xs font-bold text-foreground">
                         Twilio Programmable SMS
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 font-bold">
-                        Active Provider
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                          twilioSettings?.phoneNumber
+                            ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                            : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {twilioSettings?.phoneNumber ? "Sender Active" : "No Sender Number"}
                       </span>
                     </div>
                     <p className="text-[11px] text-muted-foreground leading-relaxed">
@@ -848,14 +940,17 @@ function AdminPage() {
                     </p>
                     <div className="text-[10px] font-mono bg-muted/60 p-2.5 rounded text-muted-foreground space-y-1">
                       <div>
-                        <strong className="text-foreground">TWILIO_ACCOUNT_SID:</strong> Configured
+                        <strong className="text-foreground">TWILIO_ACCOUNT_SID:</strong>{" "}
+                        {twilioSettings?.accountSidMasked ||
+                          (twilioSettings?.hasAccountSid ? "Configured" : "Not configured")}
                       </div>
                       <div>
-                        <strong className="text-foreground">TWILIO_AUTH_TOKEN:</strong> Configured
+                        <strong className="text-foreground">TWILIO_AUTH_TOKEN:</strong>{" "}
+                        {twilioSettings?.hasAuthToken ? "Configured" : "Not configured"}
                       </div>
                       <div>
                         <strong className="text-foreground">TWILIO_PHONE_NUMBER:</strong>{" "}
-                        +12293744607
+                        {twilioSettings?.phoneNumber || "Not configured"}
                       </div>
                     </div>
                   </div>
@@ -866,78 +961,245 @@ function AdminPage() {
                       <span className="text-xs font-bold text-foreground">
                         Twilio Verify Service
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold">
-                        Service Active
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                          twilioSettings?.verifyServiceSid
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                            : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {twilioSettings?.verifyServiceSid ? "Service Active" : "Optional"}
                       </span>
                     </div>
                     <p className="text-[11px] text-muted-foreground leading-relaxed">
-                      Fallback verification routing with carrier lookup and deliverability
-                      safeguards.
+                      Ideal for Free/Trial accounts. Uses Twilio managed OTP templates with carrier
+                      deliverability routing.
                     </p>
                     <div className="text-[10px] font-mono bg-muted/60 p-2.5 rounded text-muted-foreground space-y-1">
                       <div>
                         <strong className="text-foreground">TWILIO_VERIFY_SERVICE_SID:</strong>{" "}
-                        Configured
+                        {twilioSettings?.verifyServiceSid || "Not configured"}
                       </div>
                       <div>
-                        <strong className="text-foreground">Status:</strong> Ready
+                        <strong className="text-foreground">Status:</strong>{" "}
+                        {twilioSettings?.verifyServiceSid ? "Ready" : "Not Set"}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-border/60 bg-muted/20 p-4 space-y-2 text-xs">
-                  <h4 className="font-bold text-foreground flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5 text-emerald-500" />
-                    Automatic E.164 Number Normalization
-                  </h4>
-                  <p className="text-muted-foreground leading-relaxed text-[11px]">
-                    Merchants can type local Rwandan numbers (e.g. <code>0788 123 456</code> or{" "}
-                    <code>782693724</code>). The backend automatically normalizes them to E.164
-                    standard (<code>+250788123456</code>) before sending to Twilio.
-                  </p>
+                {/* Interactive Live SMS Dispatch Tester */}
+                <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <Smartphone className="size-4 text-primary" />
+                      Live SMS Dispatch Tester
+                    </h3>
+                    <span className="text-[10px] text-muted-foreground">
+                      Test real SMS delivery to your physical phone
+                    </span>
+                  </div>
+                  <form onSubmit={handleRunTestSms} className="flex flex-col sm:flex-row gap-2">
+                    <Input
+                      type="tel"
+                      placeholder="e.g. 0788 123 456 or +250..."
+                      value={testPhone}
+                      onChange={(e) => setTestPhone(e.target.value)}
+                      className="h-9 text-xs font-mono bg-background flex-1"
+                    />
+                    <Button
+                      type="submit"
+                      disabled={testSmsLoading || !testPhone.trim()}
+                      className="h-9 text-xs font-semibold px-4 shrink-0"
+                    >
+                      {testSmsLoading ? (
+                        <Loader2 className="size-3.5 animate-spin mr-1.5" />
+                      ) : (
+                        <Smartphone className="size-3.5 mr-1.5" />
+                      )}
+                      Send Real SMS Now
+                    </Button>
+                  </form>
+
+                  {testSmsResult && (
+                    <div
+                      className={`p-3 rounded-lg text-xs space-y-1.5 border ${
+                        testSmsResult.success
+                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300"
+                          : "bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300"
+                      }`}
+                    >
+                      <div className="font-bold flex items-center gap-1.5">
+                        {testSmsResult.success ? (
+                          <CheckCircle2 className="size-4 text-emerald-600" />
+                        ) : (
+                          <AlertCircle className="size-4 text-amber-600" />
+                        )}
+                        <span>
+                          {testSmsResult.success
+                            ? "SMS Dispatch Initiated"
+                            : "SMS Dispatch Returned Notice"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed">{testSmsResult.detail}</p>
+                      {testSmsResult.isTrialNotice && (
+                        <div className="p-2 rounded bg-background/80 text-[10px] text-foreground font-mono">
+                          Twilio Trial Notice: Free/Trial accounts require Rwandan numbers to be in
+                          Twilio Console &gt; Phone Numbers &gt; Verified Caller IDs.
+                        </div>
+                      )}
+                      {testSmsResult.messageId && (
+                        <div className="text-[10px] font-mono text-muted-foreground">
+                          Message SID: {testSmsResult.messageId} | Test Code Generated:{" "}
+                          <strong>{testSmsResult.test_code}</strong>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Cloudflare Setup & Testing Checklist */}
                 <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4 space-y-3 text-xs">
                   <h4 className="font-bold text-foreground flex items-center gap-1.5">
                     <Smartphone className="size-3.5 text-blue-500" />
-                    Cloudflare Pages &amp; Physical Device Checklist
+                    Twilio Free / Trial Account Checklist for Rwanda
                   </h4>
                   <div className="space-y-2 text-[11px] text-muted-foreground leading-relaxed">
                     <p>
-                      <strong>1. Set Cloudflare Environment Variables:</strong> In your Cloudflare
-                      Dashboard, go to{" "}
-                      <em>
-                        Workers &amp; Pages &gt; [Project] &gt; Settings &gt; Environment variables
-                      </em>{" "}
-                      and ensure the following variables are saved:
+                      <strong>Why Free Twilio Accounts Require Number Verification:</strong> Twilio
+                      Trial accounts prevent sending SMS to numbers that are not verified in your
+                      Twilio Console.
                     </p>
-                    <ul className="list-disc list-inside space-y-1 font-mono pl-1 text-[10px]">
-                      <li>TWILIO_ACCOUNT_SID</li>
-                      <li>TWILIO_AUTH_TOKEN</li>
-                      <li>TWILIO_PHONE_NUMBER (e.g. +12293744607)</li>
-                      <li>TWILIO_VERIFY_SERVICE_SID (optional)</li>
+                    <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
+                      <li>
+                        <strong>Step 1:</strong> Go to{" "}
+                        <a
+                          href="https://console.twilio.com/us1/develop/phone-numbers/manage/verified"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary underline font-medium"
+                        >
+                          Twilio Console &gt; Phone Numbers &gt; Verified Caller IDs
+                        </a>{" "}
+                        and add your physical phone number (+250...).
+                      </li>
+                      <li>
+                        <strong>Step 2:</strong> Under{" "}
+                        <a
+                          href="https://console.twilio.com/us1/develop/sms/settings/geo-permissions"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary underline font-medium"
+                        >
+                          Messaging &gt; Settings &gt; Geo-Permissions
+                        </a>
+                        , ensure Rwanda (+250) is enabled.
+                      </li>
+                      <li>
+                        <strong>Step 3:</strong> If using Twilio Verify, ensure your Verify Service
+                        SID (VA...) is configured.
+                      </li>
+                      <li>
+                        <strong>Instant Demo Code:</strong> Code{" "}
+                        <code className="bg-background px-1 py-0.5 rounded font-mono font-bold text-primary">
+                          123456
+                        </code>{" "}
+                        can always be entered in the sign-in modal for instant login without carrier
+                        latency.
+                      </li>
                     </ul>
-                    <p>
-                      <strong>2. Twilio Trial Accounts:</strong> If your Twilio account is a free
-                      trial, Twilio will only deliver SMS to phone numbers added to{" "}
-                      <em>Twilio Console &gt; Phone Numbers &gt; Verified Caller IDs</em>.
-                    </p>
-                    <p>
-                      <strong>3. Twilio Geo-Permissions:</strong> Ensure international SMS to Rwanda
-                      (+250) is enabled under{" "}
-                      <em>Twilio Console &gt; Messaging &gt; Settings &gt; Geo-Permissions</em>.
-                    </p>
-                    <p>
-                      <strong>4. Universal Test &amp; Demo Code:</strong> Code{" "}
-                      <code className="bg-background px-1 py-0.5 rounded font-mono font-bold text-primary">
-                        123456
-                      </code>{" "}
-                      is always accepted for instant login and testing without SMS delays or carrier
-                      filters.
-                    </p>
                   </div>
+                </div>
+
+                {/* Configure / Update Twilio Settings in D1 */}
+                <div className="rounded-xl border border-border/70 bg-card p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <Key className="size-4 text-primary" />
+                      Configure Twilio Credentials (Saved to Database)
+                    </h3>
+                    <span className="text-[10px] text-muted-foreground">
+                      Overrides or supplements environment variables
+                    </span>
+                  </div>
+
+                  <form onSubmit={handleSaveSettings} className="space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+                          TWILIO_ACCOUNT_SID (AC...)
+                        </label>
+                        <Input
+                          type="text"
+                          placeholder={twilioSettings?.accountSidMasked || "ACxxxxxxxxxxxxxxxx"}
+                          value={editAccountSid}
+                          onChange={(e) => setEditAccountSid(e.target.value)}
+                          className="h-8 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+                          TWILIO_AUTH_TOKEN
+                        </label>
+                        <Input
+                          type="password"
+                          placeholder={
+                            twilioSettings?.hasAuthToken ? "••••••••••••••••" : "Auth Token"
+                          }
+                          value={editAuthToken}
+                          onChange={(e) => setEditAuthToken(e.target.value)}
+                          className="h-8 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+                          TWILIO_PHONE_NUMBER (e.g. +12293744607)
+                        </label>
+                        <Input
+                          type="text"
+                          placeholder="+12293744607"
+                          value={editPhone}
+                          onChange={(e) => setEditPhone(e.target.value)}
+                          className="h-8 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+                          TWILIO_VERIFY_SERVICE_SID (VA...)
+                        </label>
+                        <Input
+                          type="text"
+                          placeholder="VAxxxxxxxxxxxxxxxx"
+                          value={editVerifySid}
+                          onChange={(e) => setEditVerifySid(e.target.value)}
+                          className="h-8 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      {settingsSavedMsg ? (
+                        <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                          {settingsSavedMsg}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">
+                          Changes take effect immediately across all client sign-in requests.
+                        </span>
+                      )}
+                      <Button
+                        type="submit"
+                        disabled={savingSettings}
+                        size="sm"
+                        className="h-8 text-xs font-semibold px-4"
+                      >
+                        {savingSettings ? (
+                          <Loader2 className="size-3.5 animate-spin mr-1.5" />
+                        ) : null}
+                        Save Settings
+                      </Button>
+                    </div>
+                  </form>
                 </div>
               </TabsContent>
 

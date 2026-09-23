@@ -571,6 +571,75 @@ export class IshyuraClient {
     return `${getApiEndpoint("admin/export")}?type=${type}&key=${encodeURIComponent(adminKey)}`;
   }
 
+  static async getAdminSettings(adminKey: string): Promise<{
+    twilio: {
+      hasAccountSid: boolean;
+      accountSidMasked: string;
+      hasAuthToken: boolean;
+      phoneNumber: string;
+      verifyServiceSid: string;
+    };
+  }> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/settings?key=${encodeURIComponent(cleanKey)}`), {
+      headers: { "x-admin-key": cleanKey },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  static async saveAdminSettings(
+    adminKey: string,
+    settings: {
+      twilio_account_sid?: string;
+      twilio_auth_token?: string;
+      twilio_phone_number?: string;
+      twilio_verify_service_sid?: string;
+    },
+  ): Promise<void> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint("admin/settings"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": cleanKey,
+      },
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || "Failed to save settings.");
+    }
+  }
+
+  static async testAdminSms(
+    adminKey: string,
+    phoneNumber: string,
+  ): Promise<{
+    success: boolean;
+    provider?: string;
+    messageId?: string;
+    detail: string;
+    error?: string;
+    isTrialNotice?: boolean;
+    test_code?: string;
+    rawResponse?: unknown;
+  }> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint("admin/test-sms"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": cleanKey,
+      },
+      body: JSON.stringify({ phone_number: phoneNumber }),
+    });
+    return await res.json();
+  }
+
   private static getLocalQrList(): QRCodeRecord[] {
     if (typeof window === "undefined") return [];
     const raw = localStorage.getItem(QR_STORE_KEY);

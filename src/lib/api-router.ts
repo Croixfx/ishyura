@@ -1,6 +1,11 @@
 // Serverless API Router supporting Cloudflare D1 and Local In-Memory Fallback
 
-import { sendRealOtpSms, formatToE164, type SmsEnvConfig } from "./sms-service";
+import {
+  sendRealOtpSms,
+  checkTwilioVerifyCode,
+  formatToE164,
+  type SmsEnvConfig,
+} from "./sms-service";
 
 export interface D1Database {
   prepare(query: string): {
@@ -283,6 +288,11 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
         file_format TEXT DEFAULT 'png',
         created_at TEXT DEFAULT (datetime('now'))
       );`,
+      `CREATE TABLE IF NOT EXISTS system_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+      );`,
       `CREATE INDEX IF NOT EXISTS idx_qr_codes_owner ON qr_codes(owner_id);`,
       `CREATE INDEX IF NOT EXISTS idx_qr_codes_phone ON qr_codes(phone_number);`,
       `CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);`,
@@ -317,6 +327,58 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
   } catch (err) {
     console.warn("D1 table init notice:", err);
   }
+}
+
+async function loadMergedTwilioConfig(env: AppEnv): Promise<SmsEnvConfig> {
+  const config: SmsEnvConfig = {
+    TWILIO_ACCOUNT_SID: (
+      env.TWILIO_ACCOUNT_SID ||
+      (typeof process !== "undefined" ? process.env?.TWILIO_ACCOUNT_SID : "") ||
+      ""
+    ).trim(),
+    TWILIO_AUTH_TOKEN: (
+      env.TWILIO_AUTH_TOKEN ||
+      (typeof process !== "undefined" ? process.env?.TWILIO_AUTH_TOKEN : "") ||
+      ""
+    ).trim(),
+    TWILIO_PHONE_NUMBER: (
+      env.TWILIO_PHONE_NUMBER ||
+      (typeof process !== "undefined" ? process.env?.TWILIO_PHONE_NUMBER : "") ||
+      ""
+    ).trim(),
+    TWILIO_VERIFY_SERVICE_SID: (
+      env.TWILIO_VERIFY_SERVICE_SID ||
+      (typeof process !== "undefined" ? process.env?.TWILIO_VERIFY_SERVICE_SID : "") ||
+      ""
+    ).trim(),
+  };
+
+  if (env.DB) {
+    try {
+      const rows = await env.DB.prepare(
+        "SELECT key, value FROM system_settings WHERE key LIKE 'TWILIO_%'",
+      ).all<{ key: string; value: string }>();
+
+      if (rows?.results) {
+        for (const row of rows.results) {
+          const val = (row.value || "").trim();
+          if (row.key === "TWILIO_ACCOUNT_SID" && !config.TWILIO_ACCOUNT_SID) {
+            config.TWILIO_ACCOUNT_SID = val;
+          } else if (row.key === "TWILIO_AUTH_TOKEN" && !config.TWILIO_AUTH_TOKEN) {
+            config.TWILIO_AUTH_TOKEN = val;
+          } else if (row.key === "TWILIO_PHONE_NUMBER" && !config.TWILIO_PHONE_NUMBER) {
+            config.TWILIO_PHONE_NUMBER = val;
+          } else if (row.key === "TWILIO_VERIFY_SERVICE_SID" && !config.TWILIO_VERIFY_SERVICE_SID) {
+            config.TWILIO_VERIFY_SERVICE_SID = val;
+          }
+        }
+      }
+    } catch {
+      // Table may not exist yet or offline
+    }
+  }
+
+  return config;
 }
 
 export async function handleApiRequest(request: Request, rawEnv?: unknown): Promise<Response> {
@@ -391,7 +453,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       // Attempt real physical SMS delivery via configured provider
-      const smsResult = await sendRealOtpSms(e164Phone, otp, env);
+      const twilioConfig = await loadMergedTwilioConfig(env);
+      const smsResult = await sendRealOtpSms(e164Phone, otp, twilioConfig);
 
       return jsonResponse({
         success: smsResult.success,
@@ -433,8 +496,18 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           .bind(e164Phone, cleanDigits)
           .first<{ code: string }>();
 
-        if (row && (row.code === otp || valid)) {
+        if (row && row.code === otp) {
           valid = true;
+        }
+
+        if (!valid) {
+          const twilioConfig = await loadMergedTwilioConfig(env);
+          if (twilioConfig.TWILIO_VERIFY_SERVICE_SID) {
+            const verifyCheck = await checkTwilioVerifyCode(e164Phone, otp, twilioConfig);
+            if (verifyCheck.approved) {
+              valid = true;
+            }
+          }
         }
 
         if (!valid) {
@@ -462,6 +535,16 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       // Memory fallback
       const memOtp = memOtps.get(e164Phone) || memOtps.get(cleanDigits);
       if (memOtp && memOtp === otp) valid = true;
+
+      if (!valid) {
+        const twilioConfig = await loadMergedTwilioConfig(env);
+        if (twilioConfig.TWILIO_VERIFY_SERVICE_SID) {
+          const verifyCheck = await checkTwilioVerifyCode(e164Phone, otp, twilioConfig);
+          if (verifyCheck.approved) {
+            valid = true;
+          }
+        }
+      }
 
       if (!valid) {
         return jsonResponse({ detail: "Invalid verification code." }, 401);
@@ -1172,6 +1255,91 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           },
         });
       }
+    }
+
+    // ----------------------------------------------------
+    // 8D. ADMIN: System Settings & Twilio Dynamic Config
+    // ----------------------------------------------------
+    if (path === "/admin/settings") {
+      if (!verifyAdminAuth(request, env)) {
+        return jsonResponse({ detail: "Unauthorized admin access." }, 401);
+      }
+
+      if (request.method === "GET") {
+        const twilio = await loadMergedTwilioConfig(env);
+        return jsonResponse({
+          twilio: {
+            hasAccountSid: Boolean(twilio.TWILIO_ACCOUNT_SID),
+            accountSidMasked: twilio.TWILIO_ACCOUNT_SID
+              ? `${twilio.TWILIO_ACCOUNT_SID.slice(0, 6)}...${twilio.TWILIO_ACCOUNT_SID.slice(-4)}`
+              : "",
+            hasAuthToken: Boolean(twilio.TWILIO_AUTH_TOKEN),
+            phoneNumber: twilio.TWILIO_PHONE_NUMBER || "",
+            verifyServiceSid: twilio.TWILIO_VERIFY_SERVICE_SID || "",
+          },
+        });
+      }
+
+      if (request.method === "POST") {
+        const body = (await request.json().catch(() => ({}))) as {
+          twilio_account_sid?: string;
+          twilio_auth_token?: string;
+          twilio_phone_number?: string;
+          twilio_verify_service_sid?: string;
+        };
+
+        if (env.DB) {
+          const now = new Date().toISOString();
+          const upsertSetting = async (key: string, val?: string) => {
+            if (val !== undefined && val.trim() !== "") {
+              await env.DB.prepare(
+                "INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+              )
+                .bind(key, val.trim(), now)
+                .run();
+            }
+          };
+
+          await upsertSetting("TWILIO_ACCOUNT_SID", body.twilio_account_sid);
+          await upsertSetting("TWILIO_AUTH_TOKEN", body.twilio_auth_token);
+          await upsertSetting("TWILIO_PHONE_NUMBER", body.twilio_phone_number);
+          await upsertSetting("TWILIO_VERIFY_SERVICE_SID", body.twilio_verify_service_sid);
+        }
+
+        return jsonResponse({ success: true, message: "Settings saved successfully." });
+      }
+    }
+
+    // ----------------------------------------------------
+    // 8E. ADMIN: Test SMS Dispatch
+    // ----------------------------------------------------
+    if (path === "/admin/test-sms" && request.method === "POST") {
+      if (!verifyAdminAuth(request, env)) {
+        return jsonResponse({ detail: "Unauthorized admin access." }, 401);
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        phone_number?: string;
+      };
+
+      if (!body.phone_number) {
+        return jsonResponse({ detail: "Phone number required." }, 400);
+      }
+
+      const twilioConfig = await loadMergedTwilioConfig(env);
+      const testOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      const res = await sendRealOtpSms(body.phone_number, testOtp, twilioConfig);
+
+      return jsonResponse({
+        success: res.success,
+        provider: res.provider,
+        messageId: res.messageId,
+        detail: res.detail,
+        error: res.error,
+        isTrialNotice: res.isTrialNotice,
+        rawResponse: res.rawResponse,
+        test_code: testOtp,
+      });
     }
 
     return jsonResponse({ detail: `Route not found: ${request.method} ${path}` }, 404);

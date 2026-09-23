@@ -6,11 +6,12 @@
 
 export interface SmsSendResult {
   success: boolean;
-  provider: "twilio";
+  provider: "twilio" | "twilio-verify";
   messageId?: string;
   detail: string;
   error?: string;
   isTrialNotice?: boolean;
+  rawResponse?: unknown;
 }
 
 export interface SmsEnvConfig {
@@ -56,7 +57,9 @@ export function formatToE164(phone: string): string {
 }
 
 /**
- * Sends a real SMS OTP directly to a physical device using Twilio
+ * Sends a real SMS OTP directly to a physical device using Twilio.
+ * Prioritizes Twilio Verify Service if configured (ideal for free/trial accounts),
+ * with seamless fallback to Twilio Programmable Messages API.
  */
 export async function sendRealOtpSms(
   phoneNumber: string,
@@ -64,21 +67,28 @@ export async function sendRealOtpSms(
   env: SmsEnvConfig = {},
 ): Promise<SmsSendResult> {
   const e164Phone = formatToE164(phoneNumber);
-  // Keep SMS message compact (single GSM-7 segment without multi-part concatenation)
-  // to avoid Rwandan telecom carrier filtering (error 30008).
   const textMessage = `Your Ishyura verification code is ${otpCode}. It expires in 5 minutes.`;
 
-  const twilioSid =
+  const twilioSid = (
     env.TWILIO_ACCOUNT_SID ||
-    (typeof process !== "undefined" ? process.env?.TWILIO_ACCOUNT_SID : "");
-  const twilioToken =
-    env.TWILIO_AUTH_TOKEN || (typeof process !== "undefined" ? process.env?.TWILIO_AUTH_TOKEN : "");
-  const twilioPhone =
+    (typeof process !== "undefined" ? process.env?.TWILIO_ACCOUNT_SID : "") ||
+    ""
+  ).trim();
+  const twilioToken = (
+    env.TWILIO_AUTH_TOKEN ||
+    (typeof process !== "undefined" ? process.env?.TWILIO_AUTH_TOKEN : "") ||
+    ""
+  ).trim();
+  const twilioPhone = (
     env.TWILIO_PHONE_NUMBER ||
-    (typeof process !== "undefined" ? process.env?.TWILIO_PHONE_NUMBER : "");
-  const twilioVerifySid =
+    (typeof process !== "undefined" ? process.env?.TWILIO_PHONE_NUMBER : "") ||
+    ""
+  ).trim();
+  const twilioVerifySid = (
     env.TWILIO_VERIFY_SERVICE_SID ||
-    (typeof process !== "undefined" ? process.env?.TWILIO_VERIFY_SERVICE_SID : "");
+    (typeof process !== "undefined" ? process.env?.TWILIO_VERIFY_SERVICE_SID : "") ||
+    ""
+  ).trim();
 
   if (!twilioSid || !twilioToken) {
     return {
@@ -86,7 +96,7 @@ export async function sendRealOtpSms(
       provider: "twilio",
       error: "Missing Twilio credentials",
       detail:
-        "Twilio credentials (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN) are not configured in your Cloudflare Pages environment variables.",
+        "Twilio credentials (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN) are not configured in your Cloudflare Pages environment variables or system settings.",
     };
   }
 
@@ -94,28 +104,98 @@ export async function sendRealOtpSms(
     return {
       success: false,
       provider: "twilio",
-      error: "Missing Twilio sender number",
+      error: "Missing Twilio sender or verify service",
       detail:
-        "TWILIO_PHONE_NUMBER is not configured in your Cloudflare Pages environment variables.",
+        "Neither TWILIO_VERIFY_SERVICE_SID nor TWILIO_PHONE_NUMBER is configured. On free Twilio accounts, Twilio Verify Service is recommended.",
     };
   }
 
-  const authHeader = `Basic ${btoa(`${twilioSid.trim()}:${twilioToken.trim()}`)}`;
+  const authHeader = `Basic ${btoa(`${twilioSid}:${twilioToken}`)}`;
 
-  // 1. First attempt: Twilio Messages API with standard sender phone number
+  // -----------------------------------------------------------------
+  // 1. Preferred Method for Free/Trial Accounts: Twilio Verify Service
+  // -----------------------------------------------------------------
+  if (twilioVerifySid) {
+    try {
+      const verifyParams = new URLSearchParams();
+      verifyParams.append("To", e164Phone);
+      verifyParams.append("Channel", "sms");
+
+      const verifyRes = await fetch(
+        `https://verify.twilio.com/v2/Services/${twilioVerifySid}/Verifications`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: authHeader,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: verifyParams.toString(),
+        },
+      );
+
+      const verifyData = (await verifyRes.json().catch(() => ({}))) as {
+        sid?: string;
+        status?: string;
+        code?: number;
+        message?: string;
+      };
+
+      if (verifyRes.ok && verifyData.sid) {
+        return {
+          success: true,
+          provider: "twilio-verify",
+          messageId: verifyData.sid,
+          detail: `SMS successfully sent via Twilio Verify to physical device ${e164Phone} (SID: ${verifyData.sid}).`,
+          rawResponse: verifyData,
+        };
+      }
+
+      console.warn("Twilio Verify API response not ok:", verifyData);
+
+      // If Verify failed and no Programmable Phone Number is configured, report Verify error
+      if (!twilioPhone) {
+        const isTrial =
+          verifyData.code === 21608 ||
+          (typeof verifyData.message === "string" &&
+            verifyData.message.toLowerCase().includes("trial"));
+        return {
+          success: false,
+          provider: "twilio-verify",
+          error: verifyData.message || `Twilio Verify error status ${verifyRes.status}`,
+          isTrialNotice: isTrial,
+          detail: isTrial
+            ? `Twilio Trial restriction: ${e164Phone} must be added to Verified Caller IDs in your Twilio Console (twilio.com/console/phone-numbers/verified).`
+            : `Twilio Verify failed: ${verifyData.message || "Unknown error"}`,
+          rawResponse: verifyData,
+        };
+      }
+      // If twilioPhone is also present, we proceed to fallback to Programmable SMS below
+    } catch (verifyErr) {
+      console.warn("Twilio Verify exception, trying Programmable SMS fallback:", verifyErr);
+      if (!twilioPhone) {
+        const errorMsg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
+        return {
+          success: false,
+          provider: "twilio-verify",
+          error: errorMsg,
+          detail: `Twilio Verify connection error: ${errorMsg}`,
+        };
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // 2. Twilio Programmable Messages API (Standard SMS)
+  // -----------------------------------------------------------------
   try {
+    const cleanFrom = twilioPhone.startsWith("+") ? twilioPhone : `+${twilioPhone}`;
     const bodyParams = new URLSearchParams();
     bodyParams.append("To", e164Phone);
     bodyParams.append("Body", textMessage);
-    if (twilioPhone) {
-      const cleanFrom = twilioPhone.trim().startsWith("+")
-        ? twilioPhone.trim()
-        : `+${twilioPhone.trim()}`;
-      bodyParams.append("From", cleanFrom);
-    }
+    bodyParams.append("From", cleanFrom);
 
     const res = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${twilioSid.trim()}/Messages.json`,
+      `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
       {
         method: "POST",
         headers: {
@@ -139,54 +219,17 @@ export async function sendRealOtpSms(
         provider: "twilio",
         messageId: data.sid,
         detail: `SMS successfully sent via Twilio to physical device ${e164Phone} (SID: ${data.sid}).`,
+        rawResponse: data,
       };
     }
 
-    // Check if error is due to Twilio trial account restriction (unverified physical number)
     const isTrial =
       data.code === 21608 ||
       (typeof data.message === "string" && data.message.includes("Trial accounts"));
 
-    // Check if error is due to Geo-Permissions (Rwanda +250 not enabled in Twilio Console)
     const isGeoPermission =
       data.code === 21408 ||
       (typeof data.message === "string" && data.message.toLowerCase().includes("permission"));
-
-    // 2. If Messages API returned unverified error, check if Twilio Verify Service is configured
-    if (twilioVerifySid && !isTrial) {
-      try {
-        const verifyParams = new URLSearchParams();
-        verifyParams.append("To", e164Phone);
-        verifyParams.append("Channel", "sms");
-
-        const verifyRes = await fetch(
-          `https://verify.twilio.com/v2/Services/${twilioVerifySid.trim()}/Verifications`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: authHeader,
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
-            body: verifyParams.toString(),
-          },
-        );
-
-        const verifyData = (await verifyRes.json().catch(() => ({}))) as {
-          sid?: string;
-          message?: string;
-        };
-        if (verifyRes.ok && verifyData.sid) {
-          return {
-            success: true,
-            provider: "twilio",
-            messageId: verifyData.sid,
-            detail: `SMS successfully sent via Twilio Verify to physical device ${e164Phone}.`,
-          };
-        }
-      } catch (verifyErr) {
-        console.warn("Twilio Verify fallback error:", verifyErr);
-      }
-    }
 
     let failureDetail = data.message || `Twilio error status ${res.status}`;
     if (isTrial) {
@@ -201,6 +244,7 @@ export async function sendRealOtpSms(
       error: data.message || `Twilio error status ${res.status}`,
       isTrialNotice: isTrial,
       detail: failureDetail,
+      rawResponse: data,
     };
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -210,5 +254,73 @@ export async function sendRealOtpSms(
       error: errorMsg,
       detail: `Twilio connection error: ${errorMsg}`,
     };
+  }
+}
+
+/**
+ * Checks a verification code with Twilio Verify Service API
+ */
+export async function checkTwilioVerifyCode(
+  phoneNumber: string,
+  code: string,
+  env: SmsEnvConfig = {},
+): Promise<{ success: boolean; approved: boolean; detail?: string; error?: string }> {
+  const e164Phone = formatToE164(phoneNumber);
+  const twilioSid = (
+    env.TWILIO_ACCOUNT_SID ||
+    (typeof process !== "undefined" ? process.env?.TWILIO_ACCOUNT_SID : "") ||
+    ""
+  ).trim();
+  const twilioToken = (
+    env.TWILIO_AUTH_TOKEN ||
+    (typeof process !== "undefined" ? process.env?.TWILIO_AUTH_TOKEN : "") ||
+    ""
+  ).trim();
+  const twilioVerifySid = (
+    env.TWILIO_VERIFY_SERVICE_SID ||
+    (typeof process !== "undefined" ? process.env?.TWILIO_VERIFY_SERVICE_SID : "") ||
+    ""
+  ).trim();
+
+  if (!twilioSid || !twilioToken || !twilioVerifySid) {
+    return { success: false, approved: false };
+  }
+
+  try {
+    const authHeader = `Basic ${btoa(`${twilioSid}:${twilioToken}`)}`;
+    const checkParams = new URLSearchParams();
+    checkParams.append("To", e164Phone);
+    checkParams.append("Code", code.trim());
+
+    const res = await fetch(
+      `https://verify.twilio.com/v2/Services/${twilioVerifySid}/VerificationCheck`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: checkParams.toString(),
+      },
+    );
+
+    const data = (await res.json().catch(() => ({}))) as {
+      status?: string;
+      valid?: boolean;
+      message?: string;
+    };
+
+    if (res.ok && (data.status === "approved" || data.valid === true)) {
+      return { success: true, approved: true, detail: "Approved by Twilio Verify." };
+    }
+
+    return {
+      success: true,
+      approved: false,
+      detail: data.message || "Twilio Verify code does not match.",
+    };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, approved: false, error: errorMsg };
   }
 }
