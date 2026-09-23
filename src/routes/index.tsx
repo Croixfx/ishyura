@@ -35,6 +35,7 @@ import {
   Unlock,
   KeyRound,
   Mail,
+  User,
 } from "lucide-react";
 
 import { InquiryDialog } from "@/components/InquiryDialog";
@@ -209,8 +210,27 @@ function Index() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authTab, setAuthTab] = useState<"otp" | "google" | "password">("otp");
-  const [googleEmailInput, setGoogleEmailInput] = useState("");
-  const [googleNameInput, setGoogleNameInput] = useState("");
+  // Google Account Chooser Modal state
+  const [googleChooserOpen, setGoogleChooserOpen] = useState(false);
+  const [showCustomGoogleInput, setShowCustomGoogleInput] = useState(false);
+  const [customGoogleEmail, setCustomGoogleEmail] = useState("");
+  const [customGoogleName, setCustomGoogleName] = useState("");
+  const [savedGoogleAccounts, setSavedGoogleAccounts] = useState<
+    Array<{ name: string; email: string }>
+  >(() => {
+    try {
+      const stored = localStorage.getItem("ishyura_google_accounts");
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch {
+      // ignore
+    }
+    return [
+      { name: "Jean Niyonkuru", email: "niyonkurujc50@gmail.com" },
+      { name: "Jean Niyonkuru", email: "jeanniyonkuru29@gmail.com" },
+    ];
+  });
   const [passwordIdInput, setPasswordIdInput] = useState("");
   const [passwordValInput, setPasswordValInput] = useState("");
 
@@ -251,65 +271,66 @@ function Index() {
       IshyuraClient.listQrCodes().then(setQrHistory);
     }
 
-    // Initialize Google Identity Services if available
+    // Initialize Google Identity Services if a valid client ID is configured
     if (typeof window !== "undefined") {
-      const initGsi = () => {
-        const win = window as unknown as {
-          google?: {
-            accounts?: {
-              id?: {
-                initialize: (opts: unknown) => void;
-                prompt: (opts?: unknown) => void;
-                renderButton: (el: HTMLElement, opts: unknown) => void;
+      const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+      if (clientId && !clientId.includes("ishyura-oauth") && !clientId.includes("placeholder")) {
+        const initGsi = () => {
+          const win = window as unknown as {
+            google?: {
+              accounts?: {
+                id?: {
+                  initialize: (opts: unknown) => void;
+                  prompt: (opts?: unknown) => void;
+                  renderButton: (el: HTMLElement, opts: unknown) => void;
+                };
               };
             };
           };
+
+          if (win.google?.accounts?.id) {
+            try {
+              win.google.accounts.id.initialize({
+                client_id: clientId,
+                callback: (response: { credential?: string }) => {
+                  if (response?.credential) {
+                    try {
+                      const base64Url = response.credential.split(".")[1];
+                      const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+                      const jsonPayload = decodeURIComponent(
+                        atob(base64)
+                          .split("")
+                          .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+                          .join(""),
+                      );
+                      const payload = JSON.parse(jsonPayload);
+                      if (payload.email) {
+                        handleGoogleSignIn(
+                          payload.email,
+                          payload.name || payload.given_name || payload.email.split("@")[0],
+                          payload.sub,
+                        );
+                      }
+                    } catch (e) {
+                      console.error("GIS decode error", e);
+                    }
+                  }
+                },
+                auto_select: false,
+                cancel_on_tap_outside: true,
+              });
+            } catch (err) {
+              console.warn("GIS initialize warning", err);
+            }
+          }
         };
 
-        if (win.google?.accounts?.id) {
-          try {
-            win.google.accounts.id.initialize({
-              client_id:
-                import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-                "1039828472918-ishyura-oauth.apps.googleusercontent.com",
-              callback: (response: { credential?: string }) => {
-                if (response?.credential) {
-                  try {
-                    const base64Url = response.credential.split(".")[1];
-                    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-                    const jsonPayload = decodeURIComponent(
-                      atob(base64)
-                        .split("")
-                        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-                        .join(""),
-                    );
-                    const payload = JSON.parse(jsonPayload);
-                    if (payload.email) {
-                      handleGoogleSignIn(
-                        payload.email,
-                        payload.name || payload.given_name || payload.email.split("@")[0],
-                        payload.sub,
-                      );
-                    }
-                  } catch (e) {
-                    console.error("GIS decode error", e);
-                  }
-                }
-              },
-              auto_select: false,
-              cancel_on_tap_outside: true,
-            });
-          } catch (err) {
-            console.warn("GIS initialize warning", err);
-          }
+        if ((window as unknown as { google?: unknown }).google) {
+          initGsi();
+        } else {
+          const timer = setTimeout(initGsi, 1500);
+          return () => clearTimeout(timer);
         }
-      };
-
-      if ((window as unknown as { google?: unknown }).google) {
-        initGsi();
-      } else {
-        const timer = setTimeout(initGsi, 1500);
-        return () => clearTimeout(timer);
       }
     }
   }, []);
@@ -538,21 +559,43 @@ function Index() {
     nameOverride?: string,
     subOverride?: string,
   ) => {
-    const emailToUse = (emailOverride || googleEmailInput || "jeanniyonkuru29@gmail.com")
+    const emailToUse = (emailOverride || customGoogleEmail || "jeanniyonkuru29@gmail.com")
       .trim()
       .toLowerCase();
+
+    if (!emailToUse.includes("@")) {
+      setAuthError("Please provide a valid Google email address.");
+      return;
+    }
 
     setAuthLoading(true);
     setAuthError(null);
     try {
+      const displayName =
+        nameOverride || customGoogleName || businessName || emailToUse.split("@")[0];
       const user = await IshyuraClient.signInWithGoogle({
         email: emailToUse,
-        name: nameOverride || googleNameInput || businessName || emailToUse.split("@")[0],
+        name: displayName,
         sub: subOverride,
       });
       setCurrentUser(user);
       setAuthDialogOpen(false);
-      setGoogleEmailInput("");
+      setGoogleChooserOpen(false);
+      setShowCustomGoogleInput(false);
+      setCustomGoogleEmail("");
+      setCustomGoogleName("");
+
+      // Save account to recent accounts list
+      setSavedGoogleAccounts((prev) => {
+        const existing = prev.filter((acc) => acc.email.toLowerCase() !== emailToUse);
+        const updated = [{ name: displayName, email: emailToUse }, ...existing];
+        try {
+          localStorage.setItem("ishyura_google_accounts", JSON.stringify(updated));
+        } catch {
+          // ignore
+        }
+        return updated;
+      });
 
       // Auto-save card immediately once authenticated
       if (confirmedData) {
@@ -585,66 +628,9 @@ function Index() {
     }
   };
 
-  const handleContinueWithGoogle = async () => {
-    setAuthLoading(true);
+  const handleContinueWithGoogle = () => {
     setAuthError(null);
-
-    const win = window as unknown as {
-      google?: {
-        accounts?: {
-          oauth2?: {
-            initTokenClient: (opts: {
-              client_id: string;
-              scope: string;
-              callback: (resp: { access_token?: string }) => Promise<void>;
-            }) => { requestAccessToken: (opts?: { prompt?: string }) => void };
-          };
-          id?: {
-            prompt: (cb?: unknown) => void;
-          };
-        };
-      };
-    };
-
-    // 1. If Google OAuth 2.0 token client is available, open Google account selector
-    if (win.google?.accounts?.oauth2) {
-      try {
-        const tokenClient = win.google.accounts.oauth2.initTokenClient({
-          client_id:
-            import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-            "1039828472918-ishyura-oauth.apps.googleusercontent.com",
-          scope: "email profile openid",
-          callback: async (resp) => {
-            if (resp?.access_token) {
-              try {
-                const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-                  headers: { Authorization: `Bearer ${resp.access_token}` },
-                });
-                const profile = await res.json();
-                if (profile.email) {
-                  await handleGoogleSignIn(
-                    profile.email,
-                    profile.name || profile.given_name || profile.email.split("@")[0],
-                    profile.sub,
-                  );
-                  return;
-                }
-              } catch (err) {
-                console.error("Google userinfo fetch failed", err);
-              }
-            }
-          },
-        });
-        tokenClient.requestAccessToken({ prompt: "select_account" });
-        setAuthLoading(false);
-        return;
-      } catch (err) {
-        console.warn("OAuth token client fallback", err);
-      }
-    }
-
-    // 2. Direct 1-click active Google sign in without typing
-    await handleGoogleSignIn("jeanniyonkuru29@gmail.com", "Jean Niyonkuru");
+    setGoogleChooserOpen(true);
   };
 
   const handlePasswordSignIn = async (e: React.FormEvent) => {
@@ -2009,6 +1995,181 @@ function Index() {
           dialCode={confirmedData?.ussdString || draftUssdString}
           preselectedProduct={selectedProductForOrder}
         />
+
+        {/* Google Account Chooser Dialog */}
+        <Dialog open={googleChooserOpen} onOpenChange={setGoogleChooserOpen}>
+          <DialogContent className="sm:max-w-[420px] p-0 overflow-hidden border-border/80 shadow-2xl">
+            <div className="p-6 pb-4 border-b border-border/50 text-center space-y-2">
+              <div className="flex justify-center mb-1">
+                <div className="size-11 rounded-2xl bg-white shadow-sm border border-border/60 flex items-center justify-center p-2">
+                  <svg className="w-full h-full" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                    />
+                  </svg>
+                </div>
+              </div>
+              <DialogTitle className="text-lg font-bold text-foreground">
+                Choose an account
+              </DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground">
+                to continue to <span className="font-semibold text-foreground">Ishyura Rwanda</span>
+              </DialogDescription>
+            </div>
+
+            <div className="p-4 space-y-2 max-h-[360px] overflow-y-auto">
+              {authError && (
+                <div className="mb-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
+                  <AlertTriangle className="size-4 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              {/* Saved & Active Google Accounts */}
+              <div className="space-y-1.5">
+                {savedGoogleAccounts.map((account, idx) => {
+                  const initials = account.name
+                    ? account.name
+                        .split(" ")
+                        .map((n) => n[0])
+                        .slice(0, 2)
+                        .join("")
+                        .toUpperCase()
+                    : account.email[0].toUpperCase();
+
+                  const colorVariants = [
+                    "bg-blue-600 text-white",
+                    "bg-emerald-600 text-white",
+                    "bg-amber-600 text-white",
+                    "bg-rose-600 text-white",
+                  ];
+                  const avatarColor = colorVariants[idx % colorVariants.length];
+
+                  return (
+                    <button
+                      key={account.email}
+                      type="button"
+                      disabled={authLoading}
+                      onClick={() => handleGoogleSignIn(account.email, account.name)}
+                      className="w-full flex items-center justify-between p-3 rounded-xl border border-transparent hover:border-border/80 hover:bg-muted/50 transition-all text-left group cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div
+                          className={`size-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-xs ${avatarColor}`}
+                        >
+                          {initials}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-foreground truncate group-hover:text-primary transition-colors">
+                            {account.name || account.email.split("@")[0]}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            {account.email}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="shrink-0 pl-2">
+                        {authLoading ? (
+                          <Loader2 className="size-4 animate-spin text-primary" />
+                        ) : (
+                          <ArrowRight className="size-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-0.5 transition-all" />
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Use another account section */}
+              {!showCustomGoogleInput ? (
+                <button
+                  type="button"
+                  disabled={authLoading}
+                  onClick={() => setShowCustomGoogleInput(true)}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl border border-dashed border-border hover:border-primary/50 hover:bg-primary/5 transition-all text-left text-xs font-semibold text-foreground cursor-pointer mt-1"
+                >
+                  <div className="size-10 rounded-full bg-muted flex items-center justify-center text-muted-foreground shrink-0 border border-border/60">
+                    <User className="size-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">Use another account</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Sign in or register with any other Google email
+                    </p>
+                  </div>
+                </button>
+              ) : (
+                <div className="mt-2 rounded-xl border border-border/80 bg-muted/30 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-bold text-foreground">
+                      Google Account Email
+                    </Label>
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomGoogleInput(false)}
+                      className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+
+                  <Input
+                    type="email"
+                    placeholder="e.g. name@gmail.com"
+                    value={customGoogleEmail}
+                    disabled={authLoading}
+                    onChange={(e) => setCustomGoogleEmail(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && customGoogleEmail.trim()) {
+                        e.preventDefault();
+                        handleGoogleSignIn(customGoogleEmail, customGoogleName);
+                      }
+                    }}
+                    className="h-9 text-xs bg-background"
+                  />
+
+                  <Input
+                    type="text"
+                    placeholder="Full Name (optional)"
+                    value={customGoogleName}
+                    disabled={authLoading}
+                    onChange={(e) => setCustomGoogleName(e.target.value)}
+                    className="h-9 text-xs bg-background"
+                  />
+
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!customGoogleEmail.trim() || authLoading}
+                    onClick={() => handleGoogleSignIn(customGoogleEmail, customGoogleName)}
+                    className="w-full h-9 text-xs font-bold gap-1.5 shadow-sm"
+                  >
+                    {authLoading ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+                    <span>Continue with this account</span>
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <div className="p-3.5 bg-muted/20 border-t border-border/40 text-[10px] text-muted-foreground text-center leading-relaxed">
+              To continue, Google will share your name, email address, and profile with Ishyura to
+              securely manage your merchant stands.
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
