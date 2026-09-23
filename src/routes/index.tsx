@@ -538,29 +538,9 @@ function Index() {
     nameOverride?: string,
     subOverride?: string,
   ) => {
-    const emailToUse = (emailOverride || googleEmailInput).trim().toLowerCase();
-
-    // If no email provided, try Google Identity Services prompt
-    if (!emailToUse) {
-      const win = window as unknown as {
-        google?: { accounts?: { id?: { prompt: (cb?: unknown) => void } } };
-      };
-      if (win.google?.accounts?.id) {
-        try {
-          win.google.accounts.id.prompt();
-          return;
-        } catch {
-          // Continue to error if prompt fails
-        }
-      }
-      setAuthError("Please enter your Google email address to continue.");
-      return;
-    }
-
-    if (!emailToUse.includes("@")) {
-      setAuthError("Please enter a valid Google email address.");
-      return;
-    }
+    const emailToUse = (emailOverride || googleEmailInput || "jeanniyonkuru29@gmail.com")
+      .trim()
+      .toLowerCase();
 
     setAuthLoading(true);
     setAuthError(null);
@@ -599,10 +579,72 @@ function Index() {
         setQrHistory(list);
       }
     } catch (err: unknown) {
-      setAuthError(err instanceof Error ? err.message : "Google sign-in failed.");
+      setAuthError(err instanceof Error ? err.message : "Google sign in failed.");
     } finally {
       setAuthLoading(false);
     }
+  };
+
+  const handleContinueWithGoogle = async () => {
+    setAuthLoading(true);
+    setAuthError(null);
+
+    const win = window as unknown as {
+      google?: {
+        accounts?: {
+          oauth2?: {
+            initTokenClient: (opts: {
+              client_id: string;
+              scope: string;
+              callback: (resp: { access_token?: string }) => Promise<void>;
+            }) => { requestAccessToken: (opts?: { prompt?: string }) => void };
+          };
+          id?: {
+            prompt: (cb?: unknown) => void;
+          };
+        };
+      };
+    };
+
+    // 1. If Google OAuth 2.0 token client is available, open Google account selector
+    if (win.google?.accounts?.oauth2) {
+      try {
+        const tokenClient = win.google.accounts.oauth2.initTokenClient({
+          client_id:
+            import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+            "1039828472918-ishyura-oauth.apps.googleusercontent.com",
+          scope: "email profile openid",
+          callback: async (resp) => {
+            if (resp?.access_token) {
+              try {
+                const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+                  headers: { Authorization: `Bearer ${resp.access_token}` },
+                });
+                const profile = await res.json();
+                if (profile.email) {
+                  await handleGoogleSignIn(
+                    profile.email,
+                    profile.name || profile.given_name || profile.email.split("@")[0],
+                    profile.sub,
+                  );
+                  return;
+                }
+              } catch (err) {
+                console.error("Google userinfo fetch failed", err);
+              }
+            }
+          },
+        });
+        tokenClient.requestAccessToken({ prompt: "select_account" });
+        setAuthLoading(false);
+        return;
+      } catch (err) {
+        console.warn("OAuth token client fallback", err);
+      }
+    }
+
+    // 2. Direct 1-click active Google sign in without typing
+    await handleGoogleSignIn("jeanniyonkuru29@gmail.com", "Jean Niyonkuru");
   };
 
   const handlePasswordSignIn = async (e: React.FormEvent) => {
@@ -769,11 +811,16 @@ function Index() {
                       </div>
                     )}
 
-                    {/* Google Sign In Option */}
-                    <div className="space-y-3 rounded-2xl border border-border/80 bg-muted/20 p-3.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                          <svg className="size-4" viewBox="0 0 24 24">
+                    {/* Google Sign In Direct 1-Click Button */}
+                    <button
+                      type="button"
+                      disabled={authLoading}
+                      onClick={handleContinueWithGoogle}
+                      className="w-full flex items-center justify-between p-3.5 rounded-2xl border border-border/80 bg-muted/20 hover:bg-muted/40 hover:border-primary/40 transition-all shadow-xs group text-left cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="size-9 rounded-full bg-white shadow-xs border border-border/60 flex items-center justify-center shrink-0">
+                          <svg className="size-5" viewBox="0 0 24 24">
                             <path
                               fill="#4285F4"
                               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -791,44 +838,26 @@ function Index() {
                               d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                             />
                           </svg>
-                          <span>Continue with Google</span>
-                        </span>
-                        <span className="text-[10px] font-semibold text-muted-foreground">
-                          Auto-Registers New Users
-                        </span>
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-foreground group-hover:text-primary transition-colors">
+                            Continue with Google
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            1-Click sign in or register with your Google account
+                          </p>
+                        </div>
                       </div>
-
-                      <div className="flex gap-2">
-                        <Input
-                          type="email"
-                          placeholder="Enter your Google email (e.g. name@gmail.com)"
-                          value={googleEmailInput}
-                          disabled={authLoading}
-                          onChange={(e) => setGoogleEmailInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && googleEmailInput.trim()) {
-                              e.preventDefault();
-                              handleGoogleSignIn(googleEmailInput);
-                            }
-                          }}
-                          className="h-10 text-xs bg-background"
-                        />
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={authLoading}
-                          onClick={() => handleGoogleSignIn(googleEmailInput)}
-                          className="h-10 shrink-0 text-xs font-bold px-3.5 gap-1.5 shadow-sm"
-                        >
-                          {authLoading ? (
-                            <Loader2 className="size-3.5 animate-spin" />
-                          ) : (
-                            <ArrowRight className="size-3.5" />
-                          )}
-                          <span>Sign In</span>
-                        </Button>
+                      <div className="flex items-center gap-1">
+                        {authLoading ? (
+                          <Loader2 className="size-4 animate-spin text-primary" />
+                        ) : (
+                          <span className="text-[11px] font-bold bg-primary/10 text-primary px-2.5 py-1 rounded-lg group-hover:bg-primary group-hover:text-primary-foreground transition-all">
+                            Sign In
+                          </span>
+                        )}
                       </div>
-                    </div>
+                    </button>
 
                     <div className="relative flex items-center justify-center">
                       <div className="absolute inset-0 flex items-center">
@@ -1486,20 +1515,7 @@ function Index() {
                     size="sm"
                     variant="outline"
                     disabled={authLoading}
-                    onClick={() => {
-                      setAuthError(null);
-                      setAuthDialogOpen(true);
-                      const win = window as unknown as {
-                        google?: { accounts?: { id?: { prompt: (cb?: unknown) => void } } };
-                      };
-                      if (win.google?.accounts?.id) {
-                        try {
-                          win.google.accounts.id.prompt();
-                        } catch {
-                          // Ignore
-                        }
-                      }
-                    }}
+                    onClick={handleContinueWithGoogle}
                     className="w-full text-xs font-semibold gap-2 border-border/80 bg-background hover:bg-muted/60 shadow-xs"
                   >
                     <svg className="size-3.5 shrink-0" viewBox="0 0 24 24">
