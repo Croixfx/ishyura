@@ -175,6 +175,9 @@ export class IshyuraClient {
     delivery_status?: string;
     provider?: string;
     otp_preview?: string;
+    detail?: string;
+    error?: string;
+    isTrialNotice?: boolean;
   }> {
     const cleanPhone = phoneNumber.replace(/[^0-9+]/g, "").trim();
 

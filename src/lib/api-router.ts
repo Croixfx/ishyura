@@ -1,5 +1,7 @@
 // Serverless API Router supporting Cloudflare D1 and Local In-Memory Fallback
 
+import { sendRealOtpSms, type SmsEnvConfig } from "./sms-service";
+
 export interface D1Database {
   prepare(query: string): {
     bind(...params: unknown[]): {
@@ -11,7 +13,7 @@ export interface D1Database {
   exec(query: string): Promise<unknown>;
 }
 
-export interface AppEnv {
+export interface AppEnv extends SmsEnvConfig {
   DB?: D1Database;
   ADMIN_SECRET?: string;
 }
@@ -365,10 +367,20 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         }
       }
 
+      // Attempt real physical SMS delivery via configured provider
+      const smsResult = await sendRealOtpSms(phone, otp, env);
+
       return jsonResponse({
-        message: `Security code generated for ${phone}.`,
-        delivery_status: "instant",
-        otp_preview: otp,
+        message: smsResult.success
+          ? `Security code successfully dispatched via SMS to ${phone}.`
+          : `Security code generated for ${phone}. ${smsResult.detail}`,
+        delivery_status: smsResult.success ? "sent" : "preview_fallback",
+        provider: smsResult.provider,
+        // When real SMS delivery succeeds, do not expose code preview to ensure full security.
+        // If no SMS provider credentials configured, provide the code preview so user is never blocked.
+        otp_preview: smsResult.success ? undefined : otp,
+        detail: smsResult.detail,
+        error: smsResult.error,
       });
     }
 

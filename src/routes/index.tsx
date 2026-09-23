@@ -29,6 +29,7 @@ import {
   FileDown,
   Printer,
   Radio,
+  Smartphone,
 } from "lucide-react";
 
 import { InquiryDialog } from "@/components/InquiryDialog";
@@ -192,6 +193,9 @@ function Index() {
     status?: string;
     provider?: string;
     message?: string;
+    detail?: string;
+    error?: string;
+    isTrialNotice?: boolean;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -369,6 +373,9 @@ function Index() {
         status: res.delivery_status,
         provider: res.provider,
         message: res.message,
+        detail: res.detail,
+        error: res.error,
+        isTrialNotice: res.isTrialNotice,
       });
       if (res.otp_preview) {
         setOtpPreview(res.otp_preview);
@@ -577,12 +584,29 @@ function Index() {
 
                     {otpSent && (
                       <div className="space-y-3 rounded-xl border border-border/60 bg-muted/30 p-3.5">
-                        {otpPreview && (
-                          <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 text-center">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Security Verification Code
-                            </span>
-                            <div className="mt-2 flex items-center justify-center gap-1.5">
+                        {deliveryInfo?.status === "sent" ? (
+                          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-center space-y-1">
+                            <div className="inline-flex items-center justify-center size-8 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 mb-1">
+                              <Smartphone className="size-4" />
+                            </div>
+                            <h4 className="text-xs font-bold text-foreground">
+                              SMS Sent via Twilio to Physical Device
+                            </h4>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                              Twilio dispatched your 6-digit verification code to{" "}
+                              <strong className="font-mono text-foreground">
+                                {authPhoneInput}
+                              </strong>
+                              . Please check your SMS inbox.
+                            </p>
+                          </div>
+                        ) : otpPreview ? (
+                          <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 text-center space-y-2">
+                            <div className="flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                              <Smartphone className="size-3 text-primary" />
+                              <span>Security Verification Code</span>
+                            </div>
+                            <div className="flex items-center justify-center gap-1.5">
                               {otpPreview.split("").map((digit, idx) => (
                                 <span
                                   key={idx}
@@ -592,21 +616,34 @@ function Index() {
                                 </span>
                               ))}
                             </div>
-                            <p className="mt-2 text-[11px] text-muted-foreground">
-                              Pre-filled below. Click confirm to activate your merchant account.
-                            </p>
+                            {deliveryInfo?.isTrialNotice ? (
+                              <div className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md p-2 text-left leading-relaxed">
+                                <strong>Twilio Trial Notice:</strong> To receive physical SMS on a
+                                Twilio Trial account, the phone number must be added to your Twilio
+                                Verified Caller IDs. The OTP has been pre-filled below so you can
+                                proceed.
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-muted-foreground">
+                                {deliveryInfo?.message ||
+                                  "Code generated. Enter below to authenticate."}
+                              </p>
+                            )}
                           </div>
-                        )}
+                        ) : null}
 
                         <div>
-                          <Label className="text-xs font-semibold">6-Digit Confirmation Code</Label>
+                          <Label className="text-xs font-semibold">
+                            Enter 6-Digit Code from SMS
+                          </Label>
                           <div className="mt-1 flex gap-2">
                             <Input
                               type="text"
-                              placeholder="6-digit code"
+                              inputMode="numeric"
+                              placeholder="e.g. 123456"
                               value={otpCode}
                               maxLength={6}
-                              onChange={(e) => setOtpCode(e.target.value)}
+                              onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ""))}
                               className="h-9 font-mono text-sm tracking-widest text-center"
                             />
                             <Button

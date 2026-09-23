@@ -57,7 +57,11 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname.startsWith("/api/")) {
-        return await handleApiRequest(request, env);
+        const mergedEnv = {
+          ...(typeof process !== "undefined" ? process.env : {}),
+          ...(typeof env === "object" && env !== null ? env : {}),
+        };
+        return await handleApiRequest(request, mergedEnv);
       }
 
       // If running on Cloudflare Workers with [assets] binding

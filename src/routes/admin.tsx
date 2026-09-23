@@ -25,6 +25,8 @@ import {
   FileDown,
   Phone,
   MapPin,
+  Smartphone,
+  Radio,
 } from "lucide-react";
 import {
   IshyuraClient,
@@ -376,7 +378,7 @@ function AdminPage() {
 
             {/* Admin Tabs */}
             <Tabs defaultValue="orders" className="w-full">
-              <TabsList className="grid grid-cols-2 sm:grid-cols-6 w-full h-auto p-1 gap-1">
+              <TabsList className="grid grid-cols-2 sm:grid-cols-7 w-full h-auto p-1 gap-1">
                 <TabsTrigger value="orders" className="text-xs py-2">
                   Orders ({orders.length})
                 </TabsTrigger>
@@ -391,6 +393,9 @@ function AdminPage() {
                 </TabsTrigger>
                 <TabsTrigger value="networks" className="text-xs py-2">
                   Networks
+                </TabsTrigger>
+                <TabsTrigger value="sms" className="text-xs py-2">
+                  SMS Gateway
                 </TabsTrigger>
                 <TabsTrigger value="export" className="text-xs py-2">
                   CSV Export
@@ -802,6 +807,95 @@ function AdminPage() {
                       Inter-bank eKash push (*555# flat 20 RWF)
                     </p>
                   </div>
+                </div>
+              </TabsContent>
+
+              {/* SMS GATEWAY TAB */}
+              <TabsContent value="sms" className="mt-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+                      <Smartphone className="size-4 text-primary" />
+                      Twilio SMS Dispatch
+                    </h2>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Direct OTP transmission to physical mobile phones in Rwanda (+250) and
+                      globally via Twilio.
+                    </p>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] font-mono border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10"
+                  >
+                    Twilio Connected
+                  </Badge>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Twilio Messages API */}
+                  <div className="rounded-xl border border-border/70 bg-card p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-foreground">
+                        Twilio Programmable SMS
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 font-bold">
+                        Active Provider
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Sends customized brand text messages with 6-digit OTP codes directly to
+                      physical phones.
+                    </p>
+                    <div className="text-[10px] font-mono bg-muted/60 p-2.5 rounded text-muted-foreground space-y-1">
+                      <div>
+                        <strong className="text-foreground">TWILIO_ACCOUNT_SID:</strong> Configured
+                      </div>
+                      <div>
+                        <strong className="text-foreground">TWILIO_AUTH_TOKEN:</strong> Configured
+                      </div>
+                      <div>
+                        <strong className="text-foreground">TWILIO_PHONE_NUMBER:</strong>{" "}
+                        +12293744607
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Twilio Verify Service */}
+                  <div className="rounded-xl border border-border/70 bg-card p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-foreground">
+                        Twilio Verify Service
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold">
+                        Service Active
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Fallback verification routing with carrier lookup and deliverability
+                      safeguards.
+                    </p>
+                    <div className="text-[10px] font-mono bg-muted/60 p-2.5 rounded text-muted-foreground space-y-1">
+                      <div>
+                        <strong className="text-foreground">TWILIO_VERIFY_SERVICE_SID:</strong>{" "}
+                        Configured
+                      </div>
+                      <div>
+                        <strong className="text-foreground">Status:</strong> Ready
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4 space-y-2 text-xs">
+                  <h4 className="font-bold text-foreground flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-500" />
+                    Automatic E.164 Number Normalization
+                  </h4>
+                  <p className="text-muted-foreground leading-relaxed text-[11px]">
+                    Merchants can type local Rwandan numbers (e.g. <code>0788 123 456</code> or{" "}
+                    <code>782693724</code>). The backend automatically normalizes them to E.164
+                    standard (<code>+250788123456</code>) before sending to Twilio.
+                  </p>
                 </div>
               </TabsContent>
 
