@@ -9,7 +9,34 @@ import {
 } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const firebaseOptions = {
+  apiKey:
+    firebaseConfig.apiKey ||
+    import.meta.env.VITE_FIREBASE_API_KEY ||
+    "AIzaSyChR6P0sbdN-DVLYOxsbPlHUQ_0vEp7Ryk",
+  authDomain:
+    firebaseConfig.authDomain ||
+    import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ||
+    "gen-lang-client-0261411374.firebaseapp.com",
+  projectId:
+    firebaseConfig.projectId ||
+    import.meta.env.VITE_FIREBASE_PROJECT_ID ||
+    "gen-lang-client-0261411374",
+  storageBucket:
+    firebaseConfig.storageBucket ||
+    import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ||
+    "gen-lang-client-0261411374.firebasestorage.app",
+  messagingSenderId:
+    firebaseConfig.messagingSenderId ||
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
+    "502837741120",
+  appId:
+    firebaseConfig.appId ||
+    import.meta.env.VITE_FIREBASE_APP_ID ||
+    "1:502837741120:web:16bcf4ca9b915e8b44c1a5",
+};
+
+const app = getApps().length === 0 ? initializeApp(firebaseOptions) : getApp();
 export const auth = getAuth(app);
 
 const googleProvider = new GoogleAuthProvider();
