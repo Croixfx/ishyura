@@ -64,7 +64,9 @@ export async function sendRealOtpSms(
   env: SmsEnvConfig = {},
 ): Promise<SmsSendResult> {
   const e164Phone = formatToE164(phoneNumber);
-  const textMessage = `Your Ishyura verification code is: ${otpCode}. Valid for 10 minutes. (Ishyura Rwanda MoMo & QR)`;
+  // Keep SMS message compact (single GSM-7 segment without multi-part concatenation)
+  // to avoid Rwandan telecom carrier filtering (error 30008).
+  const textMessage = `Your Ishyura verification code is ${otpCode}. It expires in 5 minutes.`;
 
   const twilioSid =
     env.TWILIO_ACCOUNT_SID ||
