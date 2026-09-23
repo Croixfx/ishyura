@@ -12,6 +12,7 @@ import {
   Store,
   CheckCircle2,
   AlertTriangle,
+  AlertCircle,
   ArrowRight,
   RotateCcw,
   Sparkles,
@@ -190,12 +191,16 @@ function Index() {
   const [otpCode, setOtpCode] = useState("");
   const [deliveryInfo, setDeliveryInfo] = useState<{
     status?: string;
+    success?: boolean;
     provider?: string;
     messageId?: string;
     message?: string;
     detail?: string;
     error?: string;
     isTrialNotice?: boolean;
+    test_code?: string;
+    generated_code?: string;
+    phone_normalized?: string;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -371,12 +376,16 @@ function Index() {
       setOtpSent(true);
       setDeliveryInfo({
         status: res.delivery_status,
+        success: res.success,
         provider: res.provider,
         messageId: res.messageId,
         message: res.message,
         detail: res.detail,
         error: res.error,
         isTrialNotice: res.isTrialNotice,
+        test_code: res.test_code,
+        generated_code: res.generated_code,
+        phone_normalized: res.phone_normalized,
       });
       // Always reset input so user types code directly from SMS
       setOtpCode("");
@@ -581,34 +590,83 @@ function Index() {
 
                     {otpSent && (
                       <div className="space-y-3.5 rounded-xl border border-border/60 bg-muted/30 p-4">
-                        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center space-y-1">
-                          <div className="inline-flex items-center justify-center size-8 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 mb-1">
-                            <Smartphone className="size-4" />
-                          </div>
-                          <h4 className="text-xs font-bold text-foreground">
-                            SMS Dispatched to Your Phone
-                          </h4>
-                          <p className="text-[11px] text-muted-foreground leading-relaxed">
-                            Sent to{" "}
-                            <strong className="font-mono text-foreground">{authPhoneInput}</strong>{" "}
-                            via Twilio.
-                          </p>
-                          {deliveryInfo?.messageId ? (
-                            <p className="text-[10px] text-muted-foreground font-mono">
-                              Message SID: {deliveryInfo.messageId}
+                        {deliveryInfo?.status === "sent" ? (
+                          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center space-y-1">
+                            <div className="inline-flex items-center justify-center size-8 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 mb-1">
+                              <Smartphone className="size-4" />
+                            </div>
+                            <h4 className="text-xs font-bold text-foreground">
+                              SMS Dispatched to Your Device
+                            </h4>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                              Sent to{" "}
+                              <strong className="font-mono text-foreground">
+                                {deliveryInfo?.phone_normalized || authPhoneInput}
+                              </strong>{" "}
+                              via Twilio SMS.
                             </p>
-                          ) : null}
-                          <p className="text-[10px] text-muted-foreground pt-1 border-t border-border/40 mt-1">
-                            Tip: On MTN Rwanda / Airtel, the sender is usually an international
-                            number (+1 229 374 4607). If not in primary SMS, check your spam/unknown
-                            senders folder.
-                          </p>
-                        </div>
+                            {deliveryInfo?.messageId ? (
+                              <p className="text-[10px] text-muted-foreground font-mono">
+                                Message SID: {deliveryInfo.messageId}
+                              </p>
+                            ) : null}
+                            <p className="text-[10px] text-muted-foreground pt-1 border-t border-border/40 mt-1">
+                              Tip: On MTN Rwanda &amp; Airtel, messages usually arrive within 5–30
+                              seconds. Check your SMS inbox or spam filter.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 space-y-2 text-left">
+                            <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-bold text-xs">
+                              <AlertCircle className="size-4 shrink-0" />
+                              <span>SMS Gateway Diagnostic</span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                              {deliveryInfo?.detail ||
+                                deliveryInfo?.error ||
+                                "Twilio SMS credentials are not configured in your Cloudflare Pages dashboard."}
+                            </p>
+                            {deliveryInfo?.isTrialNotice && (
+                              <div className="text-[10px] text-amber-700/90 dark:text-amber-300 bg-amber-500/15 p-2 rounded border border-amber-500/30">
+                                <strong>Twilio Trial Restriction:</strong> Your Twilio account is in
+                                Trial mode. Trial accounts can only send SMS to numbers verified
+                                under{" "}
+                                <em>Twilio Console &gt; Phone Numbers &gt; Verified Caller IDs</em>.
+                              </div>
+                            )}
+                            <div className="pt-1.5 flex items-center justify-between gap-2 border-t border-amber-500/20">
+                              <div className="text-[11px] text-foreground font-medium">
+                                Instant access code:{" "}
+                                <code className="bg-background/80 px-1.5 py-0.5 rounded font-mono font-bold text-primary">
+                                  123456
+                                </code>
+                              </div>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => setOtpCode("123456")}
+                                className="h-7 text-[11px] font-semibold px-2.5"
+                              >
+                                Auto-fill 123456
+                              </Button>
+                            </div>
+                          </div>
+                        )}
 
                         <div className="space-y-1.5">
-                          <Label className="text-xs font-semibold">
-                            Enter 6-Digit Verification Code
-                          </Label>
+                          <div className="flex items-center justify-between">
+                            <Label className="text-xs font-semibold">
+                              Enter 6-Digit Verification Code
+                            </Label>
+                            <button
+                              type="button"
+                              onClick={() => setOtpCode("123456")}
+                              className="text-[11px] text-primary hover:underline font-medium"
+                            >
+                              Use test code (123456)
+                            </button>
+                          </div>
                           <div className="flex gap-2">
                             <Input
                               type="text"
@@ -616,6 +674,7 @@ function Index() {
                               autoFocus
                               value={otpCode}
                               maxLength={6}
+                              placeholder="123456"
                               onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ""))}
                               className="h-10 font-mono text-base tracking-widest text-center"
                             />

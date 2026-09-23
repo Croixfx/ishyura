@@ -85,7 +85,18 @@ export async function sendRealOtpSms(
       success: false,
       provider: "twilio",
       error: "Missing Twilio credentials",
-      detail: "Twilio credentials are not set in the environment.",
+      detail:
+        "Twilio credentials (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN) are not configured in your Cloudflare Pages environment variables.",
+    };
+  }
+
+  if (!twilioPhone && !twilioVerifySid) {
+    return {
+      success: false,
+      provider: "twilio",
+      error: "Missing Twilio sender number",
+      detail:
+        "TWILIO_PHONE_NUMBER is not configured in your Cloudflare Pages environment variables.",
     };
   }
 
@@ -97,7 +108,10 @@ export async function sendRealOtpSms(
     bodyParams.append("To", e164Phone);
     bodyParams.append("Body", textMessage);
     if (twilioPhone) {
-      bodyParams.append("From", twilioPhone.trim());
+      const cleanFrom = twilioPhone.trim().startsWith("+")
+        ? twilioPhone.trim()
+        : `+${twilioPhone.trim()}`;
+      bodyParams.append("From", cleanFrom);
     }
 
     const res = await fetch(
@@ -112,7 +126,12 @@ export async function sendRealOtpSms(
       },
     );
 
-    const data = await res.json().catch(() => ({}));
+    const data = (await res.json().catch(() => ({}))) as {
+      sid?: string;
+      code?: number;
+      message?: string;
+      status?: string;
+    };
 
     if (res.ok && data.sid) {
       return {
@@ -127,6 +146,11 @@ export async function sendRealOtpSms(
     const isTrial =
       data.code === 21608 ||
       (typeof data.message === "string" && data.message.includes("Trial accounts"));
+
+    // Check if error is due to Geo-Permissions (Rwanda +250 not enabled in Twilio Console)
+    const isGeoPermission =
+      data.code === 21408 ||
+      (typeof data.message === "string" && data.message.toLowerCase().includes("permission"));
 
     // 2. If Messages API returned unverified error, check if Twilio Verify Service is configured
     if (twilioVerifySid && !isTrial) {
@@ -147,7 +171,10 @@ export async function sendRealOtpSms(
           },
         );
 
-        const verifyData = await verifyRes.json().catch(() => ({}));
+        const verifyData = (await verifyRes.json().catch(() => ({}))) as {
+          sid?: string;
+          message?: string;
+        };
         if (verifyRes.ok && verifyData.sid) {
           return {
             success: true,
@@ -161,14 +188,19 @@ export async function sendRealOtpSms(
       }
     }
 
+    let failureDetail = data.message || `Twilio error status ${res.status}`;
+    if (isTrial) {
+      failureDetail = `Twilio Trial restriction: ${e164Phone} is not yet verified in your Twilio Console (twilio.com/console/phone-numbers/verified). To receive SMS on trial accounts, add this phone number to Twilio Verified Caller IDs.`;
+    } else if (isGeoPermission) {
+      failureDetail = `Twilio Geo-Permission blocked: International SMS to Rwanda (+250) must be enabled in Twilio Console > Messaging > Settings > Geo-Permissions.`;
+    }
+
     return {
       success: false,
       provider: "twilio",
       error: data.message || `Twilio error status ${res.status}`,
       isTrialNotice: isTrial,
-      detail: isTrial
-        ? `Twilio Trial restriction: ${e164Phone} is not yet verified in your Twilio Console (twilio.com/user/account/phone-numbers/verified). To receive SMS on trial accounts, add the phone number to Twilio Verified Caller IDs or upgrade the Twilio project.`
-        : `Twilio delivery failed: ${data.message || "Unknown error"}`,
+      detail: failureDetail,
     };
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);

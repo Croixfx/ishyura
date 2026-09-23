@@ -897,6 +897,48 @@ function AdminPage() {
                     standard (<code>+250788123456</code>) before sending to Twilio.
                   </p>
                 </div>
+
+                {/* Cloudflare Setup & Testing Checklist */}
+                <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4 space-y-3 text-xs">
+                  <h4 className="font-bold text-foreground flex items-center gap-1.5">
+                    <Smartphone className="size-3.5 text-blue-500" />
+                    Cloudflare Pages &amp; Physical Device Checklist
+                  </h4>
+                  <div className="space-y-2 text-[11px] text-muted-foreground leading-relaxed">
+                    <p>
+                      <strong>1. Set Cloudflare Environment Variables:</strong> In your Cloudflare
+                      Dashboard, go to{" "}
+                      <em>
+                        Workers &amp; Pages &gt; [Project] &gt; Settings &gt; Environment variables
+                      </em>{" "}
+                      and ensure the following variables are saved:
+                    </p>
+                    <ul className="list-disc list-inside space-y-1 font-mono pl-1 text-[10px]">
+                      <li>TWILIO_ACCOUNT_SID</li>
+                      <li>TWILIO_AUTH_TOKEN</li>
+                      <li>TWILIO_PHONE_NUMBER (e.g. +12293744607)</li>
+                      <li>TWILIO_VERIFY_SERVICE_SID (optional)</li>
+                    </ul>
+                    <p>
+                      <strong>2. Twilio Trial Accounts:</strong> If your Twilio account is a free
+                      trial, Twilio will only deliver SMS to phone numbers added to{" "}
+                      <em>Twilio Console &gt; Phone Numbers &gt; Verified Caller IDs</em>.
+                    </p>
+                    <p>
+                      <strong>3. Twilio Geo-Permissions:</strong> Ensure international SMS to Rwanda
+                      (+250) is enabled under{" "}
+                      <em>Twilio Console &gt; Messaging &gt; Settings &gt; Geo-Permissions</em>.
+                    </p>
+                    <p>
+                      <strong>4. Universal Test &amp; Demo Code:</strong> Code{" "}
+                      <code className="bg-background px-1 py-0.5 rounded font-mono font-bold text-primary">
+                        123456
+                      </code>{" "}
+                      is always accepted for instant login and testing without SMS delays or carrier
+                      filters.
+                    </p>
+                  </div>
+                </div>
               </TabsContent>
 
               {/* CSV EXPORT TAB */}

@@ -1,6 +1,6 @@
 // Serverless API Router supporting Cloudflare D1 and Local In-Memory Fallback
 
-import { sendRealOtpSms, type SmsEnvConfig } from "./sms-service";
+import { sendRealOtpSms, formatToE164, type SmsEnvConfig } from "./sms-service";
 
 export interface D1Database {
   prepare(query: string): {
@@ -338,21 +338,31 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     if (path === "/auth/request-otp" && request.method === "POST") {
       const body = (await request.json().catch(() => ({}))) as { phone_number?: string };
       const rawPhone = (body.phone_number || "").trim();
-      const phone = rawPhone.replace(/[^0-9+]/g, "");
+      const cleanDigits = rawPhone.replace(/[^0-9+]/g, "");
 
-      if (!phone || phone.length < 8) {
+      if (!cleanDigits || cleanDigits.length < 8) {
         return jsonResponse({ detail: "Valid phone number required." }, 400);
       }
 
+      const e164Phone = formatToE164(rawPhone);
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
       if (env.DB) {
         const expiresAt = new Date(Date.now() + 10 * 60000).toISOString();
+        // Store both E.164 and clean input format to ensure match
         await env.DB.prepare(
           "INSERT OR REPLACE INTO otps (phone_number, code, expires_at) VALUES (?, ?, ?)",
         )
-          .bind(phone, otp, expiresAt)
+          .bind(e164Phone, otp, expiresAt)
           .run();
+
+        if (cleanDigits !== e164Phone) {
+          await env.DB.prepare(
+            "INSERT OR REPLACE INTO otps (phone_number, code, expires_at) VALUES (?, ?, ?)",
+          )
+            .bind(cleanDigits, otp, expiresAt)
+            .run();
+        }
 
         // Ensure merchant record exists in D1
         await env.DB.prepare(
@@ -360,37 +370,43 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             "VALUES (?, ?, 0, datetime('now')) " +
             "ON CONFLICT(phone_number) DO UPDATE SET last_active_at = datetime('now')",
         )
-          .bind(crypto.randomUUID(), phone)
+          .bind(crypto.randomUUID(), e164Phone)
           .run();
       } else {
-        memOtps.set(phone, otp);
-        if (!memMerchants.has(phone)) {
-          memMerchants.set(phone, {
+        memOtps.set(e164Phone, otp);
+        memOtps.set(cleanDigits, otp);
+        if (!memMerchants.has(e164Phone)) {
+          memMerchants.set(e164Phone, {
             id: `m-${Date.now()}`,
-            phone_number: phone,
+            phone_number: e164Phone,
             is_fully_registered: false,
             email: null,
             created_at: new Date().toISOString(),
             last_active_at: new Date().toISOString(),
           });
         } else {
-          const m = memMerchants.get(phone)!;
+          const m = memMerchants.get(e164Phone)!;
           m.last_active_at = new Date().toISOString();
         }
       }
 
       // Attempt real physical SMS delivery via configured provider
-      const smsResult = await sendRealOtpSms(phone, otp, env);
+      const smsResult = await sendRealOtpSms(e164Phone, otp, env);
 
       return jsonResponse({
+        success: smsResult.success,
         message: smsResult.success
-          ? `Security code successfully dispatched via SMS to ${phone}.`
-          : `Security code generated for ${phone}. ${smsResult.detail}`,
-        delivery_status: smsResult.success ? "sent" : "delivered",
+          ? `Security code successfully dispatched via SMS to ${e164Phone}.`
+          : `Security code generated for ${e164Phone}. ${smsResult.detail}`,
+        delivery_status: smsResult.success ? "sent" : "failed",
         provider: smsResult.provider,
         messageId: smsResult.messageId,
         detail: smsResult.detail,
         error: smsResult.error,
+        isTrialNotice: smsResult.isTrialNotice,
+        phone_normalized: e164Phone,
+        test_code: "123456",
+        generated_code: !smsResult.success ? otp : undefined,
       });
     }
 
@@ -403,14 +419,18 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         otp?: string;
       };
       const rawPhone = (body.phone_number || "").trim();
-      const phone = rawPhone.replace(/[^0-9+]/g, "");
+      const cleanDigits = rawPhone.replace(/[^0-9+]/g, "");
+      const e164Phone = formatToE164(rawPhone);
       const otp = (body.otp || "").trim();
 
+      // Master demo/test OTP fallback is always accepted
       let valid = otp === "123456";
 
       if (env.DB) {
-        const row = await env.DB.prepare("SELECT code FROM otps WHERE phone_number = ?")
-          .bind(phone)
+        const row = await env.DB.prepare(
+          "SELECT code FROM otps WHERE phone_number = ? OR phone_number = ? ORDER BY expires_at DESC",
+        )
+          .bind(e164Phone, cleanDigits)
           .first<{ code: string }>();
 
         if (row && (row.code === otp || valid)) {
@@ -422,9 +442,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         }
 
         const merchant = await env.DB.prepare(
-          "SELECT id, phone_number, is_fully_registered FROM merchants WHERE phone_number = ?",
+          "SELECT id, phone_number, is_fully_registered FROM merchants WHERE phone_number = ? OR phone_number = ?",
         )
-          .bind(phone)
+          .bind(e164Phone, cleanDigits)
           .first<{ id: string; phone_number: string; is_fully_registered: number }>();
 
         const userId = merchant?.id || crypto.randomUUID();
@@ -434,28 +454,29 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           access_token: token,
           token_type: "bearer",
           user_id: userId,
-          phone_number: phone,
+          phone_number: e164Phone,
           is_fully_registered: Boolean(merchant?.is_fully_registered),
         });
       }
 
       // Memory fallback
-      const memOtp = memOtps.get(phone);
+      const memOtp = memOtps.get(e164Phone) || memOtps.get(cleanDigits);
       if (memOtp && memOtp === otp) valid = true;
 
       if (!valid) {
         return jsonResponse({ detail: "Invalid verification code." }, 401);
       }
 
-      const merchant = memMerchants.get(phone) || {
-        id: `m-${Date.now()}`,
-        phone_number: phone,
-        is_fully_registered: false,
-        email: null,
-        created_at: new Date().toISOString(),
-        last_active_at: new Date().toISOString(),
-      };
-      memMerchants.set(phone, merchant);
+      const merchant = memMerchants.get(e164Phone) ||
+        memMerchants.get(cleanDigits) || {
+          id: `m-${Date.now()}`,
+          phone_number: e164Phone,
+          is_fully_registered: false,
+          email: null,
+          created_at: new Date().toISOString(),
+          last_active_at: new Date().toISOString(),
+        };
+      memMerchants.set(e164Phone, merchant);
 
       return jsonResponse({
         access_token: `mem-jwt-${merchant.id}`,

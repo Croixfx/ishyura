@@ -172,12 +172,16 @@ export class IshyuraClient {
 
   static async requestOtp(phoneNumber: string): Promise<{
     message: string;
+    success?: boolean;
     delivery_status?: string;
     provider?: string;
     messageId?: string;
     detail?: string;
     error?: string;
     isTrialNotice?: boolean;
+    test_code?: string;
+    generated_code?: string;
+    phone_normalized?: string;
   }> {
     const cleanPhone = phoneNumber.replace(/[^0-9+]/g, "").trim();
 
