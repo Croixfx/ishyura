@@ -24,6 +24,8 @@ dist-ssr
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
+bun.lock
+bun.lockb
 
 # Editor directories and files
 .vscode/*

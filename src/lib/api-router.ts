@@ -287,13 +287,25 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_qr_codes_phone ON qr_codes(phone_number);`,
       `CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);`,
       `CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`,
+      `CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);`,
       `CREATE INDEX IF NOT EXISTS idx_downloads_created ON download_events(created_at);`,
     ];
 
+    if (typeof db.exec === "function") {
+      try {
+        await db.exec(statements.join("\n"));
+        d1Initialized = true;
+        return;
+      } catch (execErr) {
+        console.warn("db.exec batch notice, trying prepare:", execErr);
+      }
+    }
+
     for (const sql of statements) {
       try {
+        const cleanSql = sql.trim().replace(/;$/, "");
         if (typeof db.prepare === "function") {
-          await db.prepare(sql).run();
+          await db.prepare(cleanSql).run();
         } else if (typeof db.exec === "function") {
           await db.exec(sql);
         }
