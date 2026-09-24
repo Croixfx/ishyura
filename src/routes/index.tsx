@@ -62,7 +62,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { IshyuraClient, UserProfile, QRCodeRecord } from "@/lib/ishyura-client";
+import { IshyuraClient, UserProfile, QRCodeRecord, isAdminUser } from "@/lib/ishyura-client";
 
 interface IndexSearch {
   tab?: string;
@@ -263,6 +263,8 @@ function Index() {
     useState<OrderItemType>("acrylic_stand");
   const [upsellDialogOpen, setUpsellDialogOpen] = useState(false);
 
+  const isAdmin = isAdminUser(currentUser);
+
   const openOrderModal = (product: OrderItemType = "acrylic_stand") => {
     setSelectedProductForOrder(product);
     setOrderDialogOpen(true);
@@ -281,7 +283,7 @@ function Index() {
     const user = IshyuraClient.getSavedUser();
     if (user) {
       setCurrentUser(user);
-      if (user.role === "admin") {
+      if (isAdminUser(user)) {
         if (!searchParams.tab) {
           setActiveTab("inquiries");
         }
@@ -296,9 +298,10 @@ function Index() {
             }
           })
           .catch(() => {});
-      } else {
-        IshyuraClient.listQrCodes().then(setQrHistory);
       }
+      IshyuraClient.listQrCodes()
+        .then(setQrHistory)
+        .catch(() => {});
     }
   }, [searchParams.tab]);
 
@@ -444,7 +447,7 @@ function Index() {
     setCheckingDuplicate(true);
     try {
       const checkRes = await IshyuraClient.checkQrExists(ussdString, network);
-      if (checkRes.exists && checkRes.existing && currentUser.role !== "admin") {
+      if (checkRes.exists && checkRes.existing && !isAdmin) {
         setCheckingDuplicate(false);
         setDuplicateWarning({
           businessName: checkRes.existing.business_name || businessName.trim(),
@@ -591,15 +594,20 @@ function Index() {
     setAuthError(null);
     try {
       const res = await IshyuraClient.verifyOtp(raw, otpCode.trim());
-      const loggedUser = {
+      const loggedUser = IshyuraClient.getSavedUser() || {
         id: res.user_id,
         phone_number: res.phone_number,
         is_fully_registered: res.is_fully_registered,
+        role: res.role,
       };
       setCurrentUser(loggedUser);
       setOtpSent(false);
       setOtpCode("");
       setAuthDialogOpen(false);
+
+      if (isAdminUser(loggedUser) && !confirmedData) {
+        setActiveTab("inquiries");
+      }
 
       // Auto-save card immediately once authenticated
       if (confirmedData) {
@@ -650,6 +658,10 @@ function Index() {
 
       setCurrentUser(user);
       setAuthDialogOpen(false);
+
+      if (isAdminUser(user) && !confirmedData) {
+        setActiveTab("inquiries");
+      }
 
       // Auto-save card immediately once authenticated
       if (confirmedData) {
@@ -703,6 +715,10 @@ function Index() {
       setCurrentUser(user);
       setAuthDialogOpen(false);
       setPasswordValInput("");
+
+      if (isAdminUser(user) && !confirmedData) {
+        setActiveTab("inquiries");
+      }
 
       // Auto-save card immediately once authenticated
       if (confirmedData) {
@@ -810,7 +826,7 @@ function Index() {
       setConfirmedData(null);
       setDuplicateWarning(null);
       setActiveTab("generator");
-    } else if (newUser.role === "admin") {
+    } else if (isAdminUser(newUser)) {
       setActiveTab("inquiries");
     }
   };
@@ -1211,15 +1227,21 @@ function Index() {
       />
 
       {/* Tab-driven View Switching */}
-      {currentUser?.role === "admin" && activeTab !== "generator" ? (
+      {isAdmin &&
+      (activeTab === "inquiries" ||
+        activeTab === "orders" ||
+        activeTab === "qrs" ||
+        activeTab === "merchants" ||
+        activeTab === "admins" ||
+        activeTab === "logs") ? (
         <div className="p-4 sm:p-6 lg:p-8">
           <AdminWorkspace
             activeTab={activeTab}
-            currentUser={currentUser}
+            currentUser={currentUser!}
             onTabChange={setActiveTab}
           />
         </div>
-      ) : currentUser && currentUser.role !== "admin" && activeTab === "records" ? (
+      ) : currentUser && activeTab === "records" ? (
         <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/60 pb-5">
             <div>
@@ -1334,7 +1356,7 @@ function Index() {
             </div>
           )}
         </div>
-      ) : currentUser && currentUser.role !== "admin" && activeTab === "store" ? (
+      ) : activeTab === "store" ? (
         <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 space-y-6">
           <div className="border-b border-border/60 pb-5">
             <h1 className="text-xl font-black tracking-tight text-foreground sm:text-2xl">
@@ -1659,7 +1681,7 @@ function Index() {
                               <Package className="size-3.5" />
                               <span>Order Stand / Stickers</span>
                             </Button>
-                            {currentUser?.role === "admin" && (
+                            {isAdmin && (
                               <Badge
                                 variant="outline"
                                 className="border-primary/40 text-primary bg-primary/10 text-[10px]"

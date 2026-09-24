@@ -21,7 +21,7 @@ import {
   Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { IshyuraClient, type UserProfile } from "@/lib/ishyura-client";
+import { IshyuraClient, type UserProfile, isAdminUser } from "@/lib/ishyura-client";
 
 interface AppSidebarProps {
   currentUser?: UserProfile | null;
@@ -119,7 +119,7 @@ export function AppSidebar({
     if (onUserChange) onUserChange(null);
   };
 
-  const isAdmin = mounted && currentUser?.role === "admin";
+  const isAdmin = mounted && isAdminUser(currentUser);
 
   const handleTabClick = (tabKey: string) => {
     if (onSelectTab) {
@@ -283,8 +283,11 @@ export function AppSidebar({
               </div>
             </button>
 
-            {/* 7. Switch to QR Generator Preview */}
-            <div className="pt-2 border-t border-border/40 mt-3">
+            {/* 7. Merchant Tools Quick Access for Admin */}
+            <div className="pt-2 border-t border-border/40 mt-3 space-y-1">
+              <p className="px-3 text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase mb-1">
+                Merchant Tools Access
+              </p>
               <button
                 type="button"
                 onClick={() => handleTabClick("generator")}
@@ -295,12 +298,40 @@ export function AppSidebar({
                 }`}
               >
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <Sparkles className="size-4 shrink-0 text-amber-500" />
-                  <span className="truncate">QR Generator Preview</span>
+                  <QrCode className="size-4 shrink-0 text-amber-500" />
+                  <span className="truncate">Payment Tent Card</span>
                 </div>
                 <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
                   Tool
                 </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTabClick("records")}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                  activeTab === "records"
+                    ? "bg-primary text-primary-foreground shadow-xs font-bold"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <CreditCard className="size-4 shrink-0 text-sky-500" />
+                  <span className="truncate">My Cards & Records</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTabClick("store")}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                  activeTab === "store"
+                    ? "bg-primary text-primary-foreground shadow-xs font-bold"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <ShoppingBag className="size-4 shrink-0 text-emerald-500" />
+                  <span className="truncate">Stands & Stickers</span>
+                </div>
               </button>
             </div>
           </div>
@@ -458,7 +489,11 @@ export function AppSidebar({
                     {currentUser.name || currentUser.email || currentUser.phone_number}
                   </p>
                   <p className="text-[10px] text-muted-foreground truncate">
-                    {isAdmin ? "Superadmin (Owner)" : "Merchant Account"}
+                    {isAdmin
+                      ? currentUser.email === "jeanniyonkuru29@gmail.com"
+                        ? "Superadmin (Owner)"
+                        : "System Admin"
+                      : "Merchant Account"}
                   </p>
                 </div>
               </div>

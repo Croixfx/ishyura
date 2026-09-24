@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { Menu, X, MessageSquare, QrCode, LogIn } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { InquiryDialog } from "@/components/InquiryDialog";
-import { type UserProfile } from "@/lib/ishyura-client";
+import { type UserProfile, isAdminUser } from "@/lib/ishyura-client";
 import { Button } from "@/components/ui/button";
 
 interface AppLayoutProps {
@@ -159,7 +159,7 @@ export function AppLayout({
           </div>
 
           <div className="flex items-center gap-2">
-            {currentUser?.role !== "admin" && (
+            {!isAdminUser(currentUser) && (
               <Button
                 variant="ghost"
                 size="sm"

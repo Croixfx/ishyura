@@ -7,6 +7,23 @@ export interface UserProfile {
   role?: "admin" | "merchant";
 }
 
+export const KNOWN_ADMIN_EMAILS = new Set<string>([
+  "jeanniyonkuru29@gmail.com",
+  "valensbikorimana70@gmail.com",
+]);
+
+export function isKnownAdminEmail(email?: string | null): boolean {
+  if (!email) return false;
+  return KNOWN_ADMIN_EMAILS.has(email.trim().toLowerCase());
+}
+
+export function isAdminUser(user: UserProfile | null | undefined): boolean {
+  if (!user) return false;
+  if (user.role === "admin") return true;
+  if (isKnownAdminEmail(user.email)) return true;
+  return false;
+}
+
 export interface AuthTokenResponse {
   access_token: string;
   token_type: string;
@@ -163,6 +180,12 @@ export class IshyuraClient {
 
   static setSession(token: string, user: UserProfile): void {
     if (typeof window === "undefined") return;
+    // Auto-promote known admin accounts to admin role
+    if (user && (isKnownAdminEmail(user.email) || user.role === "admin")) {
+      user.role = "admin";
+    } else if (user && !user.role) {
+      user.role = "merchant";
+    }
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(USER_KEY, JSON.stringify(user));
   }
@@ -172,7 +195,15 @@ export class IshyuraClient {
     const raw = localStorage.getItem(USER_KEY);
     if (!raw) return null;
     try {
-      return JSON.parse(raw);
+      const parsed: UserProfile = JSON.parse(raw);
+      // Auto-heal admin role if previously saved without it
+      if (parsed && (isKnownAdminEmail(parsed.email) || parsed.role === "admin")) {
+        if (parsed.role !== "admin") {
+          parsed.role = "admin";
+          localStorage.setItem(USER_KEY, JSON.stringify(parsed));
+        }
+      }
+      return parsed;
     } catch {
       return null;
     }
@@ -248,12 +279,20 @@ export class IshyuraClient {
       });
       if (res.ok) {
         const data: AuthTokenResponse = await res.json();
+        const role: "admin" | "merchant" =
+          data.role === "admin" || isKnownAdminEmail(data.email) ? "admin" : "merchant";
         this.setSession(data.access_token, {
           id: data.user_id,
           phone_number: data.phone_number,
+          email: data.email,
+          name: data.name,
+          role,
           is_fully_registered: data.is_fully_registered,
         });
-        return data;
+        return {
+          ...data,
+          role,
+        };
       }
     } catch {
       // Local fallback
@@ -277,12 +316,16 @@ export class IshyuraClient {
       };
     }
 
+    const role: "admin" | "merchant" = isKnownAdminEmail(user.email) ? "admin" : "merchant";
+    user.role = role;
+
     const token = `jwt-${user.id}-${Date.now()}`;
     const tokenResponse: AuthTokenResponse = {
       access_token: token,
       token_type: "bearer",
       user_id: user.id,
       phone_number: user.phone_number,
+      role,
       is_fully_registered: user.is_fully_registered,
     };
 
@@ -309,10 +352,14 @@ export class IshyuraClient {
 
       if (res.ok) {
         const data = await res.json();
+        const role: "admin" | "merchant" =
+          data.role === "admin" || isKnownAdminEmail(data.email || email) ? "admin" : "merchant";
         const user: UserProfile = {
           id: data.user_id,
           phone_number: data.phone_number || email,
           email: data.email || email,
+          name: data.name || profile.name || (data.email || email).split("@")[0],
+          role,
           is_fully_registered: true,
         };
         this.setSession(data.access_token, user);
@@ -322,10 +369,13 @@ export class IshyuraClient {
       // Local fallback
     }
 
+    const localRole: "admin" | "merchant" = isKnownAdminEmail(email) ? "admin" : "merchant";
     const localUser: UserProfile = {
       id: profile.sub || `g-${Date.now()}`,
       phone_number: email,
       email: email,
+      name: profile.name || email.split("@")[0],
+      role: localRole,
       is_fully_registered: true,
     };
     this.setSession(`jwt-google-${localUser.id}`, localUser);
@@ -346,10 +396,14 @@ export class IshyuraClient {
     }
 
     const data = await res.json();
+    const role: "admin" | "merchant" =
+      data.role === "admin" || isKnownAdminEmail(data.email || identifier) ? "admin" : "merchant";
     const user: UserProfile = {
       id: data.user_id,
       phone_number: data.phone_number,
       email: data.email,
+      name: data.name || (data.email ? data.email.split("@")[0] : data.phone_number),
+      role,
       is_fully_registered: true,
     };
     this.setSession(data.access_token, user);
@@ -669,8 +723,18 @@ export class IshyuraClient {
   // ------------------------------------------------------------------
   // ADMIN DASHBOARD & OWNER REPORTING
   // ------------------------------------------------------------------
-  static async getAdminStats(adminKey: string): Promise<AdminStats> {
-    const cleanKey = adminKey.trim();
+  static getEffectiveAdminKey(providedKey?: string): string {
+    if (providedKey && providedKey.trim()) return providedKey.trim();
+    const user = this.getSavedUser();
+    if (user?.email && isKnownAdminEmail(user.email)) return user.email.trim();
+    if (user?.email) return user.email.trim();
+    const token = this.getToken();
+    if (token) return token;
+    return "ishyura2026";
+  }
+
+  static async getAdminStats(adminKey?: string): Promise<AdminStats> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/stats?key=${encodeURIComponent(cleanKey)}`), {
       headers: { "x-admin-key": cleanKey },
     });
@@ -681,8 +745,8 @@ export class IshyuraClient {
     return await res.json();
   }
 
-  static async getAdminMerchants(adminKey: string): Promise<MerchantRecord[]> {
-    const cleanKey = adminKey.trim();
+  static async getAdminMerchants(adminKey?: string): Promise<MerchantRecord[]> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/merchants?key=${encodeURIComponent(cleanKey)}`), {
       headers: { "x-admin-key": cleanKey },
     });
@@ -693,8 +757,8 @@ export class IshyuraClient {
     return await res.json();
   }
 
-  static async getAdminQrCodes(adminKey: string): Promise<QRCodeRecord[]> {
-    const cleanKey = adminKey.trim();
+  static async getAdminQrCodes(adminKey?: string): Promise<QRCodeRecord[]> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/qr-codes?key=${encodeURIComponent(cleanKey)}`), {
       headers: { "x-admin-key": cleanKey },
     });
@@ -705,8 +769,8 @@ export class IshyuraClient {
     return await res.json();
   }
 
-  static async getAdminInquiries(adminKey: string): Promise<InquiryRecord[]> {
-    const cleanKey = adminKey.trim();
+  static async getAdminInquiries(adminKey?: string): Promise<InquiryRecord[]> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/inquiries?key=${encodeURIComponent(cleanKey)}`), {
       headers: { "x-admin-key": cleanKey },
     });
@@ -722,11 +786,12 @@ export class IshyuraClient {
     id: string,
     status: "new" | "resolved",
   ): Promise<void> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint("admin/inquiries"), {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        "x-admin-key": adminKey,
+        "x-admin-key": cleanKey,
       },
       body: JSON.stringify({ id, status }),
     });
@@ -735,8 +800,8 @@ export class IshyuraClient {
     }
   }
 
-  static async getAdminOrders(adminKey: string): Promise<OrderRecord[]> {
-    const cleanKey = adminKey.trim();
+  static async getAdminOrders(adminKey?: string): Promise<OrderRecord[]> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/orders?key=${encodeURIComponent(cleanKey)}`), {
       headers: { "x-admin-key": cleanKey },
     });
@@ -748,11 +813,12 @@ export class IshyuraClient {
   }
 
   static async updateOrderStatus(adminKey: string, id: string, status: OrderStatus): Promise<void> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint("admin/orders"), {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        "x-admin-key": adminKey,
+        "x-admin-key": cleanKey,
       },
       body: JSON.stringify({ id, status }),
     });
@@ -761,8 +827,8 @@ export class IshyuraClient {
     }
   }
 
-  static async getAdminDownloads(adminKey: string): Promise<DownloadEventRecord[]> {
-    const cleanKey = adminKey.trim();
+  static async getAdminDownloads(adminKey?: string): Promise<DownloadEventRecord[]> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/downloads?key=${encodeURIComponent(cleanKey)}`), {
       headers: { "x-admin-key": cleanKey },
     });
@@ -777,10 +843,11 @@ export class IshyuraClient {
     adminKey: string,
     type: "merchants" | "qrs" | "inquiries" | "orders" | "downloads",
   ): string {
-    return `${getApiEndpoint("admin/export")}?type=${type}&key=${encodeURIComponent(adminKey)}`;
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
+    return `${getApiEndpoint("admin/export")}?type=${type}&key=${encodeURIComponent(cleanKey)}`;
   }
 
-  static async getAdminSettings(adminKey: string): Promise<{
+  static async getAdminSettings(adminKey?: string): Promise<{
     twilio: {
       hasAccountSid: boolean;
       accountSidMasked: string;
@@ -789,7 +856,7 @@ export class IshyuraClient {
       verifyServiceSid: string;
     };
   }> {
-    const cleanKey = adminKey.trim();
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/settings?key=${encodeURIComponent(cleanKey)}`), {
       headers: { "x-admin-key": cleanKey },
     });
@@ -809,7 +876,7 @@ export class IshyuraClient {
       twilio_verify_service_sid?: string;
     },
   ): Promise<void> {
-    const cleanKey = adminKey.trim();
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint("admin/settings"), {
       method: "POST",
       headers: {
@@ -837,7 +904,7 @@ export class IshyuraClient {
     test_code?: string;
     rawResponse?: unknown;
   }> {
-    const cleanKey = adminKey.trim();
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint("admin/test-sms"), {
       method: "POST",
       headers: {
@@ -853,7 +920,7 @@ export class IshyuraClient {
     adminKey: string,
     qrId: string,
   ): Promise<{ success: boolean; message?: string }> {
-    const cleanKey = adminKey.trim();
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/qr-codes?id=${encodeURIComponent(qrId)}`), {
       method: "DELETE",
       headers: { "x-admin-key": cleanKey },
@@ -865,8 +932,8 @@ export class IshyuraClient {
     return await res.json();
   }
 
-  static async getAdminAdmins(adminKey: string): Promise<AdminUserRecord[]> {
-    const cleanKey = adminKey.trim();
+  static async getAdminAdmins(adminKey?: string): Promise<AdminUserRecord[]> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint(`admin/admins?key=${encodeURIComponent(cleanKey)}`), {
       headers: { "x-admin-key": cleanKey },
     });
@@ -882,7 +949,7 @@ export class IshyuraClient {
     email: string,
     name?: string,
   ): Promise<{ success: boolean; message: string; admin?: AdminUserRecord }> {
-    const cleanKey = adminKey.trim();
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
     const res = await fetch(getApiEndpoint("admin/admins"), {
       method: "POST",
       headers: {

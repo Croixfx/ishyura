@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import React, { useState, useEffect } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { AdminWorkspace } from "@/components/AdminWorkspace";
-import { IshyuraClient, type UserProfile } from "@/lib/ishyura-client";
+import { IshyuraClient, type UserProfile, isAdminUser } from "@/lib/ishyura-client";
 import { Button } from "@/components/ui/button";
 import { ShieldAlert, LogIn, Loader2 } from "lucide-react";
 import { signInWithGoogleReal } from "@/lib/firebase-auth";
@@ -87,7 +87,7 @@ function AdminPage() {
   }
 
   // If not admin:
-  if (!currentUser || currentUser.role !== "admin") {
+  if (!isAdminUser(currentUser)) {
     return (
       <AppLayout currentUser={currentUser} onUserChange={setCurrentUser}>
         <div className="min-h-[80vh] flex items-center justify-center p-4">
