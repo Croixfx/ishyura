@@ -22,7 +22,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IshyuraClient, type UserProfile } from "@/lib/ishyura-client";
-import { signInWithGoogleReal, logoutGoogle } from "@/lib/firebase-auth";
 
 interface AppSidebarProps {
   currentUser?: UserProfile | null;
@@ -80,6 +79,7 @@ export function AppSidebar({
   const handleGoogleSignIn = async () => {
     setAuthLoading(true);
     try {
+      const { signInWithGoogleReal } = await import("@/lib/firebase-auth");
       const googleRes = await signInWithGoogleReal();
       if (googleRes?.email) {
         const user = await IshyuraClient.signInWithGoogle({
@@ -102,6 +102,7 @@ export function AppSidebar({
 
   const handleLogout = async () => {
     try {
+      const { logoutGoogle } = await import("@/lib/firebase-auth");
       await logoutGoogle();
     } catch {
       // ignore

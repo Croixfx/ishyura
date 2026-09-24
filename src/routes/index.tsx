@@ -2,7 +2,6 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { QRCodeSVG } from "qrcode.react";
-import { toPng } from "html-to-image";
 import {
   Download,
   Loader2,
@@ -472,6 +471,7 @@ function Index() {
     }
     setDownloading(true);
     try {
+      const { toPng } = await import("html-to-image");
       const dataUrl = await toPng(cardRef.current, { pixelRatio: 3 });
       const link = document.createElement("a");
       const typeSlug = confirmedData.paymentType === "momo_code" ? "code" : "phone";

@@ -70,13 +70,36 @@ export default {
       if (workerEnv?.ASSETS && typeof workerEnv.ASSETS.fetch === "function") {
         const assetResponse = await workerEnv.ASSETS.fetch(request);
         if (assetResponse.status !== 404) {
+          // Content-hashed assets can be cached immutably for 1 year to minimize bandwidth
+          if (url.pathname.startsWith("/assets/")) {
+            const cachedHeaders = new Headers(assetResponse.headers);
+            cachedHeaders.set("Cache-Control", "public, max-age=31536000, immutable");
+            return new Response(assetResponse.body, {
+              status: assetResponse.status,
+              statusText: assetResponse.statusText,
+              headers: cachedHeaders,
+            });
+          }
           return assetResponse;
         }
       }
 
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
-      return await normalizeCatastrophicSsrResponse(response);
+      const normalized = await normalizeCatastrophicSsrResponse(response);
+
+      // Add HTML freshness header so UI updates reflect immediately without stale cache
+      if (normalized.headers.get("content-type")?.includes("text/html")) {
+        const freshHeaders = new Headers(normalized.headers);
+        freshHeaders.set("Cache-Control", "public, max-age=0, must-revalidate");
+        return new Response(normalized.body, {
+          status: normalized.status,
+          statusText: normalized.statusText,
+          headers: freshHeaders,
+        });
+      }
+
+      return normalized;
     } catch (error) {
       console.error(error);
       const detail =
