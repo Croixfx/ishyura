@@ -69,8 +69,18 @@ CREATE TABLE IF NOT EXISTS download_events (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS system_admins (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  phone_number TEXT,
+  name TEXT,
+  role TEXT DEFAULT 'admin',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_qr_codes_owner ON qr_codes(owner_id);
 CREATE INDEX IF NOT EXISTS idx_qr_codes_phone ON qr_codes(phone_number);
+CREATE INDEX IF NOT EXISTS idx_qr_codes_dial ON qr_codes(dial_code);
 CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);

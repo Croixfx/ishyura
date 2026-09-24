@@ -17,6 +17,8 @@ import {
   Clock,
   HelpCircle,
   ChevronRight,
+  Users,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IshyuraClient, type UserProfile } from "@/lib/ishyura-client";
@@ -113,26 +115,18 @@ export function AppSidebar({
     <aside className="w-64 shrink-0 flex flex-col h-screen border-r border-border/60 bg-card/60 backdrop-blur-xl select-none">
       {/* 1. Sticky Brand Header */}
       <div className="p-4 border-b border-border/40 shrink-0">
-        <Link
-          to="/"
-          onClick={() => onNavigate?.()}
-          className="flex items-center gap-3 group"
-        >
+        <Link to="/" onClick={() => onNavigate?.()} className="flex items-center gap-3 group">
           <div className="size-9 rounded-xl bg-gradient-to-br from-emerald-500 to-sky-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 group-hover:scale-105 transition-transform shrink-0 font-bold text-sm">
             <QrCode className="size-5" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="font-black text-base tracking-tight text-foreground">
-                Ishyura
-              </span>
+              <span className="font-black text-base tracking-tight text-foreground">Ishyura</span>
               <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                 RW
               </span>
             </div>
-            <p className="text-[11px] text-muted-foreground truncate">
-              Payment QR & Stand Studio
-            </p>
+            <p className="text-[11px] text-muted-foreground truncate">Payment QR & Stand Studio</p>
           </div>
         </Link>
       </div>
@@ -157,7 +151,9 @@ export function AppSidebar({
             <div className="flex items-center gap-2.5 min-w-0">
               <QrCode
                 className={`size-4 shrink-0 ${
-                  location.pathname === "/" ? "text-primary-foreground" : "text-muted-foreground group-hover:text-foreground"
+                  location.pathname === "/"
+                    ? "text-primary-foreground"
+                    : "text-muted-foreground group-hover:text-foreground"
                 }`}
               />
               <span className="truncate">Instant Tent Card</span>
@@ -209,25 +205,64 @@ export function AppSidebar({
           </Link>
         </div>
 
-        {/* Administration Section - Only visible when inside /admin route */}
-        {mounted && location.pathname.startsWith("/admin") && (
+        {/* Privileged Administration Section - Strictly database-backed, only visible when user has admin role */}
+        {mounted && currentUser?.role === "admin" && (
           <div className="space-y-1">
-            <p className="px-3 text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase mb-1.5">
-              Management
-            </p>
+            <div className="flex items-center justify-between px-3 mb-1.5">
+              <p className="text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase">
+                Admin Control
+              </p>
+              <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                Privileged
+              </span>
+            </div>
 
             <Link
               to="/admin"
+              search={{ tab: "orders" }}
               onClick={() => onNavigate?.()}
-              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all bg-primary text-primary-foreground shadow-xs shadow-primary/20"
+              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all hover:bg-muted text-foreground"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <ShieldCheck className="size-4 shrink-0 text-primary-foreground" />
-                <span className="truncate">Admin Portal</span>
+                <ShieldCheck className="size-4 shrink-0 text-primary" />
+                <span className="truncate">Admin Dashboard</span>
               </div>
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 bg-primary-foreground/20 text-primary-foreground">
-                Active
-              </span>
+            </Link>
+
+            <Link
+              to="/admin"
+              search={{ tab: "qrs" }}
+              onClick={() => onNavigate?.()}
+              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all hover:bg-muted text-muted-foreground hover:text-foreground"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <QrCode className="size-4 shrink-0 text-amber-500" />
+                <span className="truncate">Generated QRs</span>
+              </div>
+            </Link>
+
+            <Link
+              to="/admin"
+              search={{ tab: "merchants" }}
+              onClick={() => onNavigate?.()}
+              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all hover:bg-muted text-muted-foreground hover:text-foreground"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Users className="size-4 shrink-0 text-blue-500" />
+                <span className="truncate">Merchants Directory</span>
+              </div>
+            </Link>
+
+            <Link
+              to="/admin"
+              search={{ tab: "admins" }}
+              onClick={() => onNavigate?.()}
+              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all hover:bg-muted text-muted-foreground hover:text-foreground"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Lock className="size-4 shrink-0 text-rose-500" />
+                <span className="truncate">System Admins</span>
+              </div>
             </Link>
           </div>
         )}

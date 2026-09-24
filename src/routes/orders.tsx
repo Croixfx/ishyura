@@ -317,7 +317,9 @@ export function OrdersPage() {
             <div className="lg:col-span-7 space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-bold text-foreground">Select Product Type</h2>
-                <span className="text-xs text-muted-foreground">Prices in Rwandan Francs (RWF)</span>
+                <span className="text-xs text-muted-foreground">
+                  Prices in Rwandan Francs (RWF)
+                </span>
               </div>
 
               <div className="grid grid-cols-1 gap-3.5">
@@ -357,7 +359,9 @@ export function OrdersPage() {
                           </div>
                           <div className="space-y-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-sm font-bold text-foreground">{prod.title}</span>
+                              <span className="text-sm font-bold text-foreground">
+                                {prod.title}
+                              </span>
                               <span
                                 className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                                   prod.popular
@@ -612,7 +616,9 @@ export function OrdersPage() {
                       </div>
 
                       <div className="space-y-1.5">
-                        <Label className="text-xs font-bold text-foreground">Merchant / Till Code</Label>
+                        <Label className="text-xs font-bold text-foreground">
+                          Merchant / Till Code
+                        </Label>
                         <Input
                           type="text"
                           placeholder="e.g. 123456 or phone"
@@ -642,10 +648,16 @@ export function OrdersPage() {
                           <SelectItem value="Kigali - Kicukiro (Gikondo / Sonatubes / Kanombe)">
                             Kigali - Kicukiro (Gikondo / Sonatubes / Kanombe)
                           </SelectItem>
-                          <SelectItem value="Rubavu / Gisenyi">Rubavu / Gisenyi (Express Bus)</SelectItem>
-                          <SelectItem value="Musanze / Ruhengeri">Musanze / Ruhengeri (Express Bus)</SelectItem>
+                          <SelectItem value="Rubavu / Gisenyi">
+                            Rubavu / Gisenyi (Express Bus)
+                          </SelectItem>
+                          <SelectItem value="Musanze / Ruhengeri">
+                            Musanze / Ruhengeri (Express Bus)
+                          </SelectItem>
                           <SelectItem value="Huye / Butare">Huye / Butare (Express Bus)</SelectItem>
-                          <SelectItem value="Other District in Rwanda">Other District in Rwanda</SelectItem>
+                          <SelectItem value="Other District in Rwanda">
+                            Other District in Rwanda
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -674,9 +686,7 @@ export function OrdersPage() {
                       ) : (
                         <ShoppingBag className="size-4" />
                       )}
-                      <span>
-                        Confirm & Order ({totalPrice.toLocaleString()} RWF)
-                      </span>
+                      <span>Confirm & Order ({totalPrice.toLocaleString()} RWF)</span>
                     </Button>
 
                     <p className="text-[10px] text-muted-foreground text-center">

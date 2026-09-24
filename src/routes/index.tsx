@@ -229,6 +229,15 @@ function Index() {
   // Verification & Confirmation state: prevents generating or exporting incomplete/miskeyed codes
   const [confirmedData, setConfirmedData] = useState<ConfirmedCardData | null>(null);
 
+  // Single Generation Policy & Duplicate Prevention State
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    businessName: string;
+    network: string;
+    dialCode: string;
+    message: string;
+  } | null>(null);
+  const [checkingDuplicate, setCheckingDuplicate] = useState(false);
+
   // Inquiries Dialog
   const [inquiryDialogOpen, setInquiryDialogOpen] = useState(false);
 
@@ -352,6 +361,7 @@ function Index() {
 
   const handleNetworkChange = (v: Network) => {
     setNetwork(v);
+    setDuplicateWarning(null);
     if (confirmedData) setConfirmedData(null);
     if (v === "Equity Bank (eKash)" && paymentType === "momo_code") {
       setPaymentType("phone");
@@ -359,10 +369,11 @@ function Index() {
   };
 
   // When user clicks Confirm & Generate
-  const handleConfirmAndGenerate = (e?: React.FormEvent) => {
+  const handleConfirmAndGenerate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!canConfirm) return;
+    if (!canConfirm || checkingDuplicate) return;
 
+    setDuplicateWarning(null);
     const ussdString = `${currentProvider.prefixes[paymentType]}${sanitizedInput}#`;
     const qrTelUri = `tel:${encodeURIComponent(ussdString)}`;
 
@@ -375,6 +386,27 @@ function Index() {
       qrTelUri,
       feeNote: network === "Equity Bank (eKash)" ? "Only 20 RWF fee via eKash" : undefined,
     };
+
+    // Single Generation Check: verify if already printed/generated
+    setCheckingDuplicate(true);
+    try {
+      const checkRes = await IshyuraClient.checkQrExists(ussdString, network);
+      if (checkRes.exists && checkRes.existing && currentUser?.role !== "admin") {
+        setCheckingDuplicate(false);
+        setDuplicateWarning({
+          businessName: checkRes.existing.business_name || businessName.trim(),
+          network: checkRes.existing.network || network,
+          dialCode: checkRes.existing.dial_code || ussdString,
+          message:
+            "This merchant payment QR has already been generated and recorded in Ishyura. To prevent duplicate printing, protect merchant identity, and conserve resources, each QR code can only be generated once. If your card was lost, damaged, or stolen, please reach out to an Administrator to re-issue it.",
+        });
+        return;
+      }
+    } catch {
+      // ignore check error and proceed
+    } finally {
+      setCheckingDuplicate(false);
+    }
 
     setConfirmedData(cardData);
 
@@ -404,7 +436,21 @@ function Index() {
         return IshyuraClient.listQrCodes();
       })
       .then(setQrHistory)
-      .catch(() => {})
+      .catch((err: unknown) => {
+        const errorObj =
+          err && typeof err === "object"
+            ? (err as { duplicate?: boolean; existing_qr?: QRCodeRecord; message?: string })
+            : null;
+        if (errorObj?.duplicate) {
+          setConfirmedData(null);
+          setDuplicateWarning({
+            businessName: errorObj.existing_qr?.business_name || cardData.businessName,
+            network: errorObj.existing_qr?.network || cardData.network,
+            dialCode: errorObj.existing_qr?.dial_code || cardData.ussdString,
+            message: errorObj.message || "This QR code already exists.",
+          });
+        }
+      })
       .finally(() => {
         setSavingQr(false);
       });
@@ -412,6 +458,7 @@ function Index() {
 
   const handleEdit = () => {
     setConfirmedData(null);
+    setDuplicateWarning(null);
   };
 
   const handleDownload = async () => {
@@ -736,7 +783,8 @@ function Index() {
             Payment QR Tent Card Generator
           </h1>
           <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-            Instant printable Mobile Money payment tent cards for MTN MoMo, Airtel Money &amp; Equity eKash.
+            Instant printable Mobile Money payment tent cards for MTN MoMo, Airtel Money &amp;
+            Equity eKash.
           </p>
         </div>
 
@@ -749,8 +797,8 @@ function Index() {
                 Merchant Sign In
               </DialogTitle>
               <DialogDescription>
-                Sign in with your phone or Google account to unlock and permanently own your
-                payment QR stands.
+                Sign in with your phone or Google account to unlock and permanently own your payment
+                QR stands.
               </DialogDescription>
             </DialogHeader>
 
@@ -819,235 +867,229 @@ function Index() {
                 </span>
               </div>
 
-                    {/* Phone OTP Sign In Form */}
-                    {authTab !== "password" ? (
-                      <div className="space-y-3">
-                        <div>
-                          <Label className="text-xs font-semibold">Mobile Phone Number</Label>
-                          <div className="mt-1 flex gap-2">
-                            <Input
-                              type="tel"
-                              placeholder="e.g. 0788 123 456 or +250..."
-                              value={authPhoneInput}
-                              disabled={otpSent || authLoading}
-                              onChange={(e) => setAuthPhoneInput(e.target.value)}
-                              className="h-9 text-xs font-mono"
-                            />
-                            {!otpSent && (
-                              <Button
-                                type="button"
-                                size="sm"
-                                disabled={!authPhoneInput.trim() || authLoading}
-                                onClick={() => handleSendOtp(authPhoneInput)}
-                                className="h-9 shrink-0 text-xs font-semibold"
-                              >
-                                {authLoading ? (
-                                  <Loader2 className="size-3.5 animate-spin mr-1" />
-                                ) : null}
-                                Get Code
-                              </Button>
-                            )}
+              {/* Phone OTP Sign In Form */}
+              {authTab !== "password" ? (
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-xs font-semibold">Mobile Phone Number</Label>
+                    <div className="mt-1 flex gap-2">
+                      <Input
+                        type="tel"
+                        placeholder="e.g. 0788 123 456 or +250..."
+                        value={authPhoneInput}
+                        disabled={otpSent || authLoading}
+                        onChange={(e) => setAuthPhoneInput(e.target.value)}
+                        className="h-9 text-xs font-mono"
+                      />
+                      {!otpSent && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={!authPhoneInput.trim() || authLoading}
+                          onClick={() => handleSendOtp(authPhoneInput)}
+                          className="h-9 shrink-0 text-xs font-semibold"
+                        >
+                          {authLoading ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+                          Get Code
+                        </Button>
+                      )}
+                    </div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Instant SMS delivery via Twilio to MTN &amp; Airtel Rwanda.
+                    </p>
+                  </div>
+
+                  {otpSent && (
+                    <div className="space-y-3.5 rounded-xl border border-border/60 bg-muted/30 p-4">
+                      {deliveryInfo?.status === "sent" ? (
+                        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center space-y-1">
+                          <div className="inline-flex items-center justify-center size-8 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 mb-1">
+                            <Smartphone className="size-4" />
                           </div>
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            Instant SMS delivery via Twilio to MTN &amp; Airtel Rwanda.
+                          <h4 className="text-xs font-bold text-foreground">
+                            SMS Dispatched to Your Phone
+                          </h4>
+                          <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            Sent to{" "}
+                            <strong className="font-mono text-foreground">
+                              {deliveryInfo?.phone_normalized || authPhoneInput}
+                            </strong>
                           </p>
                         </div>
-
-                        {otpSent && (
-                          <div className="space-y-3.5 rounded-xl border border-border/60 bg-muted/30 p-4">
-                            {deliveryInfo?.status === "sent" ? (
-                              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center space-y-1">
-                                <div className="inline-flex items-center justify-center size-8 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 mb-1">
-                                  <Smartphone className="size-4" />
-                                </div>
-                                <h4 className="text-xs font-bold text-foreground">
-                                  SMS Dispatched to Your Phone
-                                </h4>
-                                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                  Sent to{" "}
-                                  <strong className="font-mono text-foreground">
-                                    {deliveryInfo?.phone_normalized || authPhoneInput}
-                                  </strong>
-                                </p>
-                              </div>
-                            ) : (
-                              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 space-y-2 text-left">
-                                <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-bold text-xs">
-                                  <AlertCircle className="size-4 shrink-0" />
-                                  <span>SMS Gateway Notice</span>
-                                </div>
-                                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                  {deliveryInfo?.detail ||
-                                    deliveryInfo?.error ||
-                                    "Ready for verification. Enter code below or use instant access code."}
-                                </p>
-                                <div className="pt-1.5 flex items-center justify-between gap-2 border-t border-amber-500/20">
-                                  <div className="text-[11px] text-foreground font-medium">
-                                    Instant access code:{" "}
-                                    <code className="bg-background/80 px-1.5 py-0.5 rounded font-mono font-bold text-primary">
-                                      123456
-                                    </code>
-                                  </div>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="secondary"
-                                    onClick={() => setOtpCode("123456")}
-                                    className="h-7 text-[11px] font-semibold px-2.5"
-                                  >
-                                    Auto-fill 123456
-                                  </Button>
-                                </div>
-                              </div>
-                            )}
-
-                            <div className="space-y-1.5">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs font-semibold">
-                                  Enter 6-Digit Verification Code
-                                </Label>
-                                <button
-                                  type="button"
-                                  onClick={() => setOtpCode("123456")}
-                                  className="text-[11px] text-primary hover:underline font-medium"
-                                >
-                                  Use test code (123456)
-                                </button>
-                              </div>
-                              <div className="flex gap-2">
-                                <Input
-                                  type="text"
-                                  inputMode="numeric"
-                                  autoFocus
-                                  value={otpCode}
-                                  maxLength={6}
-                                  placeholder="123456"
-                                  onChange={(e) =>
-                                    setOtpCode(e.target.value.replace(/[^0-9]/g, ""))
-                                  }
-                                  className="h-10 font-mono text-base tracking-widest text-center"
-                                />
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  disabled={otpCode.length < 6 || authLoading}
-                                  onClick={() => handleVerifyOtp(authPhoneInput)}
-                                  className="h-10 shrink-0 text-xs font-semibold px-4"
-                                >
-                                  {authLoading ? (
-                                    <Loader2 className="size-3.5 animate-spin mr-1" />
-                                  ) : null}
-                                  Confirm &amp; Sign In
-                                </Button>
-                              </div>
-                            </div>
-
-                            <div className="flex justify-between items-center pt-1 text-[11px]">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOtpSent(false);
-                                  setOtpCode("");
-                                }}
-                                className="text-muted-foreground hover:text-foreground underline"
-                              >
-                                Change number
-                              </button>
-                              <button
-                                type="button"
-                                disabled={authLoading}
-                                onClick={() => handleSendOtp(authPhoneInput)}
-                                className="text-primary hover:underline font-medium"
-                              >
-                                Resend Code
-                              </button>
-                            </div>
+                      ) : (
+                        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 space-y-2 text-left">
+                          <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-bold text-xs">
+                            <AlertCircle className="size-4 shrink-0" />
+                            <span>SMS Gateway Notice</span>
                           </div>
-                        )}
-
-                        <div className="text-center pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAuthTab("password");
-                              setAuthError(null);
-                            }}
-                            className="text-[11px] text-muted-foreground hover:text-primary transition-colors inline-flex items-center gap-1"
-                          >
-                            <KeyRound className="size-3" />
-                            <span>Sign in with Password instead</span>
-                          </button>
+                          <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            {deliveryInfo?.detail ||
+                              deliveryInfo?.error ||
+                              "Ready for verification. Enter code below or use instant access code."}
+                          </p>
+                          <div className="pt-1.5 flex items-center justify-between gap-2 border-t border-amber-500/20">
+                            <div className="text-[11px] text-foreground font-medium">
+                              Instant access code:{" "}
+                              <code className="bg-background/80 px-1.5 py-0.5 rounded font-mono font-bold text-primary">
+                                123456
+                              </code>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => setOtpCode("123456")}
+                              className="h-7 text-[11px] font-semibold px-2.5"
+                            >
+                              Auto-fill 123456
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      /* Password Sign In Form */
-                      <form
-                        onSubmit={handlePasswordSignIn}
-                        className="space-y-3 rounded-xl border border-border/60 bg-muted/20 p-4"
-                      >
+                      )}
+
+                      <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
-                          <p className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                            <KeyRound className="size-3.5 text-primary" />
-                            <span>Password Sign In</span>
-                          </p>
+                          <Label className="text-xs font-semibold">
+                            Enter 6-Digit Verification Code
+                          </Label>
                           <button
                             type="button"
-                            onClick={() => {
-                              setAuthTab("otp");
-                              setAuthError(null);
-                            }}
-                            className="text-[11px] text-primary hover:underline"
+                            onClick={() => setOtpCode("123456")}
+                            className="text-[11px] text-primary hover:underline font-medium"
                           >
-                            Use Phone OTP
+                            Use test code (123456)
                           </button>
                         </div>
-
-                        <div className="space-y-1">
-                          <Label className="text-[11px] font-semibold">Phone or Email</Label>
+                        <div className="flex gap-2">
                           <Input
                             type="text"
-                            placeholder="e.g. 0788123456 or merchant@email.com"
-                            value={passwordIdInput}
-                            onChange={(e) => setPasswordIdInput(e.target.value)}
-                            required
-                            className="h-9 text-xs"
+                            inputMode="numeric"
+                            autoFocus
+                            value={otpCode}
+                            maxLength={6}
+                            placeholder="123456"
+                            onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ""))}
+                            className="h-10 font-mono text-base tracking-widest text-center"
                           />
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={otpCode.length < 6 || authLoading}
+                            onClick={() => handleVerifyOtp(authPhoneInput)}
+                            className="h-10 shrink-0 text-xs font-semibold px-4"
+                          >
+                            {authLoading ? (
+                              <Loader2 className="size-3.5 animate-spin mr-1" />
+                            ) : null}
+                            Confirm &amp; Sign In
+                          </Button>
                         </div>
+                      </div>
 
-                        <div className="space-y-1">
-                          <Label className="text-[11px] font-semibold">Password</Label>
-                          <Input
-                            type="password"
-                            placeholder="Enter your password"
-                            value={passwordValInput}
-                            onChange={(e) => setPasswordValInput(e.target.value)}
-                            required
-                            className="h-9 text-xs"
-                          />
-                        </div>
-
-                        <Button
-                          type="submit"
-                          size="sm"
-                          disabled={
-                            authLoading || !passwordIdInput.trim() || !passwordValInput.trim()
-                          }
-                          className="w-full text-xs font-bold mt-1"
+                      <div className="flex justify-between items-center pt-1 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOtpSent(false);
+                            setOtpCode("");
+                          }}
+                          className="text-muted-foreground hover:text-foreground underline"
                         >
-                          {authLoading ? (
-                            <>
-                              <Loader2 className="size-3.5 animate-spin mr-1.5" />
-                              Signing in...
-                            </>
-                          ) : (
-                            "Sign In with Password"
-                          )}
-                        </Button>
-                      </form>
-                    )}
+                          Change number
+                        </button>
+                        <button
+                          type="button"
+                          disabled={authLoading}
+                          onClick={() => handleSendOtp(authPhoneInput)}
+                          className="text-primary hover:underline font-medium"
+                        >
+                          Resend Code
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="text-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthTab("password");
+                        setAuthError(null);
+                      }}
+                      className="text-[11px] text-muted-foreground hover:text-primary transition-colors inline-flex items-center gap-1"
+                    >
+                      <KeyRound className="size-3" />
+                      <span>Sign in with Password instead</span>
+                    </button>
                   </div>
-                </DialogContent>
-              </Dialog>
+                </div>
+              ) : (
+                /* Password Sign In Form */
+                <form
+                  onSubmit={handlePasswordSignIn}
+                  className="space-y-3 rounded-xl border border-border/60 bg-muted/20 p-4"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <KeyRound className="size-3.5 text-primary" />
+                      <span>Password Sign In</span>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthTab("otp");
+                        setAuthError(null);
+                      }}
+                      className="text-[11px] text-primary hover:underline"
+                    >
+                      Use Phone OTP
+                    </button>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold">Phone or Email</Label>
+                    <Input
+                      type="text"
+                      placeholder="e.g. 0788123456 or merchant@email.com"
+                      value={passwordIdInput}
+                      onChange={(e) => setPasswordIdInput(e.target.value)}
+                      required
+                      className="h-9 text-xs"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold">Password</Label>
+                    <Input
+                      type="password"
+                      placeholder="Enter your password"
+                      value={passwordValInput}
+                      onChange={(e) => setPasswordValInput(e.target.value)}
+                      required
+                      className="h-9 text-xs"
+                    />
+                  </div>
+
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={authLoading || !passwordIdInput.trim() || !passwordValInput.trim()}
+                    className="w-full text-xs font-bold mt-1"
+                  >
+                    {authLoading ? (
+                      <>
+                        <Loader2 className="size-3.5 animate-spin mr-1.5" />
+                        Signing in...
+                      </>
+                    ) : (
+                      "Sign In with Password"
+                    )}
+                  </Button>
+                </form>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Main Content Grid */}
         <main className="mt-6 grid flex-1 grid-cols-1 items-start gap-8 lg:grid-cols-12 lg:gap-10">
@@ -1202,7 +1244,46 @@ function Index() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {sanitizedInput.length > 0 && validationError && (
+                    {duplicateWarning && (
+                      <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-xs text-amber-900 dark:text-amber-200 space-y-2.5">
+                        <div className="flex items-center gap-2 font-bold text-sm text-amber-700 dark:text-amber-300">
+                          <AlertCircle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                          <span>Single Generation Policy — Card Already Recorded</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-muted-foreground dark:text-amber-100/90">
+                          A payment QR card for <strong>{duplicateWarning.businessName}</strong> (
+                          {duplicateWarning.network} -{" "}
+                          <code className="font-mono">{duplicateWarning.dialCode}</code>) has
+                          already been generated and recorded. To protect merchant identity, avoid
+                          duplicate physical prints, and keep Ishyura robust, each QR code can only
+                          be generated once.
+                        </p>
+                        <div className="pt-1 flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setInquiryDialogOpen(true);
+                            }}
+                            className="h-8 text-xs font-semibold gap-1.5 border-amber-500/30 text-amber-800 dark:text-amber-200 hover:bg-amber-500/20"
+                          >
+                            <MessageSquare className="size-3.5" />
+                            <span>Request Lost Card Re-Issue</span>
+                          </Button>
+                          {currentUser?.role === "admin" && (
+                            <Badge
+                              variant="outline"
+                              className="border-primary/40 text-primary bg-primary/10 text-[10px]"
+                            >
+                              Administrator Privilege: You can re-print or unlock in Admin Portal
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {sanitizedInput.length > 0 && validationError && !duplicateWarning && (
                       <p className="text-xs font-medium text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
                         <AlertTriangle className="size-3.5 shrink-0" />
                         {validationError}
@@ -1211,12 +1292,21 @@ function Index() {
 
                     <Button
                       type="submit"
-                      disabled={!canConfirm}
+                      disabled={!canConfirm || checkingDuplicate}
                       className="w-full h-12 text-sm sm:text-base font-bold shadow-md shadow-primary/25"
                     >
-                      <Sparkles className="size-4" />
-                      Confirm &amp; Generate QR Card
-                      <ArrowRight className="size-4" />
+                      {checkingDuplicate ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin mr-1.5" />
+                          Checking registry...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="size-4" />
+                          Confirm &amp; Generate QR Card
+                          <ArrowRight className="size-4" />
+                        </>
+                      )}
                     </Button>
 
                     <p className="text-[11px] text-center text-muted-foreground">
@@ -1569,9 +1659,13 @@ function Index() {
               <div className="p-3 rounded-xl border border-border/70 bg-card/60 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-bold text-foreground">Premium Acrylic Counter Stand</p>
-                  <p className="text-[11px] text-muted-foreground">Laser-cut L-stand with your QR &amp; logo</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Laser-cut L-stand with your QR &amp; logo
+                  </p>
                 </div>
-                <span className="text-xs font-extrabold text-foreground tabular-nums">7,500 RWF</span>
+                <span className="text-xs font-extrabold text-foreground tabular-nums">
+                  7,500 RWF
+                </span>
               </div>
 
               <div className="p-3 rounded-xl border border-border/70 bg-card/60 flex items-center justify-between">
@@ -1579,7 +1673,9 @@ function Index() {
                   <p className="text-xs font-bold text-foreground">Pack of 5 Vinyl Stickers</p>
                   <p className="text-[11px] text-muted-foreground">Waterproof &amp; UV resistant</p>
                 </div>
-                <span className="text-xs font-extrabold text-foreground tabular-nums">4,500 RWF</span>
+                <span className="text-xs font-extrabold text-foreground tabular-nums">
+                  4,500 RWF
+                </span>
               </div>
             </div>
 

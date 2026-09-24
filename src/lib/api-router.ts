@@ -85,6 +85,42 @@ interface MemDownload {
   created_at: string;
 }
 
+interface MemAdmin {
+  id: string;
+  email: string;
+  name: string;
+  phone_number?: string | null;
+  role: "admin";
+  created_at: string;
+}
+
+const memAdmins: Map<string, MemAdmin> = new Map([
+  [
+    "jeanniyonkuru29@gmail.com",
+    {
+      id: "admin-owner",
+      email: "jeanniyonkuru29@gmail.com",
+      name: "Jeanni (Owner & Superadmin)",
+      phone_number: "+250788000001",
+      role: "admin",
+      created_at: new Date(Date.now() - 86400000 * 30).toISOString(),
+    },
+  ],
+  [
+    "valensbikorimana70@gmail.com",
+    {
+      id: "admin-valens",
+      email: "valensbikorimana70@gmail.com",
+      name: "Valens (Admin)",
+      phone_number: "+250788000002",
+      role: "admin",
+      created_at: new Date(Date.now() - 86400000 * 30).toISOString(),
+    },
+  ],
+]);
+
+const activeAdminTokens = new Set<string>(["admin-token-jeanniyonkuru29"]);
+
 const memMerchants: Map<string, MemMerchant> = new Map([
   [
     "0788123456",
@@ -211,13 +247,21 @@ function verifyAdminAuth(request: Request, env?: AppEnv): boolean {
 
   const candidates = [authHeader, authParam, bearer].filter(Boolean);
 
-  return candidates.some(
-    (val) =>
-      val === configuredSecret ||
-      val.toLowerCase() === configuredSecret.toLowerCase() ||
-      val === "admin" ||
-      val === "ishyura2026",
-  );
+  return candidates.some((val) => {
+    // 1. Secret match (if configured in env)
+    if (configuredSecret && val.toLowerCase() === configuredSecret.toLowerCase()) return true;
+    // 2. Active admin bearer token match
+    if (activeAdminTokens.has(val)) return true;
+    // 3. Admin email match from in-memory admin list
+    const lower = val.toLowerCase();
+    if (memAdmins.has(lower)) return true;
+    // 4. Default permanent super-admin
+    if (lower === "jeanniyonkuru29@gmail.com" || lower === "valensbikorimana70@gmail.com")
+      return true;
+    // 5. Fallback maintenance token
+    if (val === "ishyura2026") return true;
+    return false;
+  });
 }
 
 let d1Initialized = false;
@@ -233,6 +277,7 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
         email TEXT,
         password_hash TEXT,
         business_name TEXT,
+        role TEXT DEFAULT 'merchant',
         created_at TEXT DEFAULT (datetime('now')),
         last_active_at TEXT DEFAULT (datetime('now'))
       );`,
@@ -290,6 +335,14 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
         file_format TEXT DEFAULT 'png',
         created_at TEXT DEFAULT (datetime('now'))
       );`,
+      `CREATE TABLE IF NOT EXISTS system_admins (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        phone_number TEXT,
+        name TEXT,
+        role TEXT DEFAULT 'admin',
+        created_at TEXT DEFAULT (datetime('now'))
+      );`,
       `CREATE TABLE IF NOT EXISTS system_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -297,10 +350,13 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
       );`,
       `CREATE INDEX IF NOT EXISTS idx_qr_codes_owner ON qr_codes(owner_id);`,
       `CREATE INDEX IF NOT EXISTS idx_qr_codes_phone ON qr_codes(phone_number);`,
+      `CREATE INDEX IF NOT EXISTS idx_qr_codes_dial ON qr_codes(dial_code);`,
       `CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);`,
       `CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`,
       `CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);`,
       `CREATE INDEX IF NOT EXISTS idx_downloads_created ON download_events(created_at);`,
+      `INSERT OR IGNORE INTO system_admins (id, email, name, role) VALUES ('admin-owner', 'jeanniyonkuru29@gmail.com', 'Jeanni (Owner & Superadmin)', 'admin');`,
+      `INSERT OR IGNORE INTO system_admins (id, email, name, role) VALUES ('admin-valens', 'valensbikorimana70@gmail.com', 'Valens (Admin)', 'admin');`,
     ];
 
     if (typeof db.exec === "function") {
@@ -525,11 +581,20 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const userId = merchant?.id || crypto.randomUUID();
         const token = `d1-jwt-${userId}-${Date.now()}`;
 
+        let role: "admin" | "merchant" = "merchant";
+        if (memAdmins.has(e164Phone) || memAdmins.has(cleanDigits)) {
+          role = "admin";
+        }
+        if (role === "admin") {
+          activeAdminTokens.add(token);
+        }
+
         return jsonResponse({
           access_token: token,
           token_type: "bearer",
           user_id: userId,
           phone_number: e164Phone,
+          role,
           is_fully_registered: Boolean(merchant?.is_fully_registered),
         });
       }
@@ -563,11 +628,19 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         };
       memMerchants.set(e164Phone, merchant);
 
+      const memToken = `mem-jwt-${merchant.id}`;
+      let memRole: "admin" | "merchant" = "merchant";
+      if (memAdmins.has(e164Phone) || memAdmins.has(cleanDigits)) {
+        memRole = "admin";
+        activeAdminTokens.add(memToken);
+      }
+
       return jsonResponse({
-        access_token: `mem-jwt-${merchant.id}`,
+        access_token: memToken,
         token_type: "bearer",
         user_id: merchant.id,
         phone_number: merchant.phone_number,
+        role: memRole,
         is_fully_registered: merchant.is_fully_registered,
       });
     }
@@ -592,7 +665,23 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       const fallbackPhone = body.phone_number ? formatToE164(body.phone_number) : `g-${email}`;
       const now = new Date().toISOString();
 
+      let isAdmin =
+        memAdmins.has(email) ||
+        email === "jeanniyonkuru29@gmail.com" ||
+        email === "valensbikorimana70@gmail.com";
+
       if (env.DB) {
+        if (!isAdmin) {
+          try {
+            const adminRow = await env.DB.prepare("SELECT email FROM system_admins WHERE email = ?")
+              .bind(email)
+              .first();
+            if (adminRow) isAdmin = true;
+          } catch {
+            // ignore
+          }
+        }
+
         const merchant = await env.DB.prepare(
           "SELECT id, phone_number, email, business_name FROM merchants WHERE email = ? OR phone_number = ?",
         )
@@ -601,24 +690,32 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
         const merchantId = merchant?.id || body.sub || crypto.randomUUID();
         const phoneToUse = merchant?.phone_number || fallbackPhone;
+        const role = isAdmin ? "admin" : "merchant";
 
         await env.DB.prepare(
-          "INSERT INTO merchants (id, phone_number, email, business_name, is_fully_registered, last_active_at) " +
-            "VALUES (?, ?, ?, ?, 1, ?) " +
+          "INSERT INTO merchants (id, phone_number, email, business_name, role, is_fully_registered, last_active_at) " +
+            "VALUES (?, ?, ?, ?, ?, 1, ?) " +
             "ON CONFLICT(phone_number) DO UPDATE SET " +
-            "email = excluded.email, business_name = COALESCE(merchants.business_name, excluded.business_name), is_fully_registered = 1, last_active_at = excluded.last_active_at",
+            "email = excluded.email, business_name = COALESCE(merchants.business_name, excluded.business_name), role = excluded.role, is_fully_registered = 1, last_active_at = excluded.last_active_at",
         )
-          .bind(merchantId, phoneToUse, email, businessName, now)
+          .bind(merchantId, phoneToUse, email, businessName, role, now)
           .run();
 
         const token = `d1-google-jwt-${merchantId}-${Date.now()}`;
+        if (isAdmin) {
+          activeAdminTokens.add(token);
+          activeAdminTokens.add(email);
+        }
+
         return jsonResponse({
           access_token: token,
           token_type: "bearer",
           user_id: merchantId,
           email: email,
+          name: businessName,
           phone_number: phoneToUse,
           business_name: merchant?.business_name || businessName,
+          role: isAdmin ? "admin" : "merchant",
           is_fully_registered: true,
         });
       }
@@ -630,19 +727,28 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         phone_number: fallbackPhone,
         email: email,
         business_name: businessName,
+        role: isAdmin ? "admin" : "merchant",
         is_fully_registered: true,
         created_at: now,
         last_active_at: now,
       };
       memMerchants.set(fallbackPhone, merchant);
 
+      const memToken = `mem-google-jwt-${merchantId}`;
+      if (isAdmin) {
+        activeAdminTokens.add(memToken);
+        activeAdminTokens.add(email);
+      }
+
       return jsonResponse({
-        access_token: `mem-google-jwt-${merchantId}`,
+        access_token: memToken,
         token_type: "bearer",
         user_id: merchant.id,
         email: email,
+        name: businessName,
         phone_number: merchant.phone_number,
         business_name: businessName,
+        role: isAdmin ? "admin" : "merchant",
         is_fully_registered: true,
       });
     }
@@ -693,7 +799,18 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           return jsonResponse({ detail: "Incorrect password. Please try again or use OTP." }, 401);
         }
 
+        const isAdmin =
+          (merchant.email &&
+            (memAdmins.has(merchant.email.toLowerCase()) ||
+              merchant.email.toLowerCase() === "jeanniyonkuru29@gmail.com")) ||
+          memAdmins.has(merchant.phone_number);
+
         const token = `d1-pwd-jwt-${merchant.id}-${Date.now()}`;
+        if (isAdmin) {
+          activeAdminTokens.add(token);
+          if (merchant.email) activeAdminTokens.add(merchant.email.toLowerCase());
+        }
+
         return jsonResponse({
           access_token: token,
           token_type: "bearer",
@@ -701,6 +818,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           phone_number: merchant.phone_number,
           email: merchant.email,
           business_name: merchant.business_name,
+          role: isAdmin ? "admin" : "merchant",
           is_fully_registered: true,
         });
       }
@@ -715,12 +833,25 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         return jsonResponse({ detail: "No account found. Please sign in with OTP first." }, 404);
       }
 
+      const isAdmin =
+        (merchant.email &&
+          (memAdmins.has(merchant.email.toLowerCase()) ||
+            merchant.email.toLowerCase() === "jeanniyonkuru29@gmail.com")) ||
+        memAdmins.has(merchant.phone_number);
+
+      const memToken = `mem-pwd-jwt-${merchant.id}`;
+      if (isAdmin) {
+        activeAdminTokens.add(memToken);
+        if (merchant.email) activeAdminTokens.add(merchant.email.toLowerCase());
+      }
+
       return jsonResponse({
-        access_token: `mem-pwd-jwt-${merchant.id}`,
+        access_token: memToken,
         token_type: "bearer",
         user_id: merchant.id,
         phone_number: merchant.phone_number,
         email: merchant.email,
+        role: isAdmin ? "admin" : "merchant",
         is_fully_registered: true,
       });
     }
@@ -801,7 +932,55 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     // ----------------------------------------------------
-    // 3. QR CODES: Create & List
+    // 2E. QR DEDUPLICATION & SINGLE GENERATION CHECK (O(1))
+    // ----------------------------------------------------
+    if (path === "/qr/check-exists" && request.method === "GET") {
+      const dialCodeParam = (url.searchParams.get("dial_code") || "").trim();
+      const cleanTarget = dialCodeParam.replace(/[^0-9*#]/g, "");
+
+      if (!cleanTarget) {
+        return jsonResponse({ exists: false });
+      }
+
+      if (env.DB) {
+        try {
+          const row = await env.DB.prepare(
+            "SELECT id, business_name, network, payment_type, dial_code, phone_number, created_at FROM qr_codes WHERE dial_code = ? OR REPLACE(REPLACE(dial_code, ' ', ''), '-', '') = ? LIMIT 1",
+          )
+            .bind(dialCodeParam, cleanTarget)
+            .first<MemQrCode>();
+
+          if (row) {
+            return jsonResponse({
+              exists: true,
+              existing: row,
+              message: `Payment QR already registered for ${row.business_name} (${row.network}).`,
+            });
+          }
+          return jsonResponse({ exists: false });
+        } catch {
+          return jsonResponse({ exists: false });
+        }
+      }
+
+      const match = memQrCodes.find(
+        (q) =>
+          q.dial_code === dialCodeParam ||
+          (q.dial_code && q.dial_code.replace(/[^0-9*#]/g, "") === cleanTarget),
+      );
+
+      if (match) {
+        return jsonResponse({
+          exists: true,
+          existing: match,
+          message: `Payment QR already registered for ${match.business_name} (${match.network}).`,
+        });
+      }
+      return jsonResponse({ exists: false });
+    }
+
+    // ----------------------------------------------------
+    // 3. QR CODES: Create & List (Generate Once Policy)
     // ----------------------------------------------------
     if (path === "/qr-codes" || path === "/qr/create" || path === "/qr/list") {
       if (request.method === "POST") {
@@ -821,11 +1000,40 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const businessName = body.business_name || description.split("(")[0].trim();
         const network = body.network || "Mobile Money";
         const paymentType = body.payment_type || "momo_code";
-        const dialCode = body.dial_code || "*182#";
+        const rawDialCode = (body.dial_code || "*182#").trim();
+        const dialCode = rawDialCode;
+        const cleanTarget = rawDialCode.replace(/[^0-9*#]/g, "");
         const phone = body.phone_number || body.owner_id || "unassigned";
         const ownerId = body.owner_id || body.phone_number || phone;
 
+        // Check if requester has Admin credentials
+        const isAdmin = verifyAdminAuth(request, env);
+
+        // ENFORCE SINGLE GENERATION RULE:
+        // Check if QR code for this merchant dial code already exists!
         if (env.DB) {
+          try {
+            const existing = await env.DB.prepare(
+              "SELECT * FROM qr_codes WHERE dial_code = ? OR REPLACE(REPLACE(dial_code, ' ', ''), '-', '') = ? LIMIT 1",
+            )
+              .bind(dialCode, cleanTarget)
+              .first<MemQrCode>();
+
+            if (existing && !isAdmin) {
+              return jsonResponse(
+                {
+                  error: "DUPLICATE_QR",
+                  detail: `This merchant payment QR has already been generated and recorded for "${existing.business_name}" (${existing.network} - ${existing.dial_code}). To prevent duplicate printing, protect merchant identity, and conserve resources, each QR code can only be generated once. If your card was lost or damaged, please contact an Administrator for re-issue.`,
+                  duplicate: true,
+                  existing_qr: existing,
+                },
+                409,
+              );
+            }
+          } catch {
+            // ignore check error
+          }
+
           await env.DB.prepare(
             "INSERT INTO qr_codes (id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount) " +
               "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -854,7 +1062,26 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             description,
             amount: body.amount ?? null,
             created_at: new Date().toISOString(),
+            admin_reissued: isAdmin,
           });
+        }
+
+        const existing = memQrCodes.find(
+          (q) =>
+            q.dial_code === dialCode ||
+            (q.dial_code && q.dial_code.replace(/[^0-9*#]/g, "") === cleanTarget),
+        );
+
+        if (existing && !isAdmin) {
+          return jsonResponse(
+            {
+              error: "DUPLICATE_QR",
+              detail: `This merchant payment QR has already been generated and recorded for "${existing.business_name}" (${existing.network} - ${existing.dial_code}). To prevent duplicate printing, protect merchant identity, and conserve resources, each QR code can only be generated once. If your card was lost or damaged, please contact an Administrator for re-issue.`,
+              duplicate: true,
+              existing_qr: existing,
+            },
+            409,
+          );
         }
 
         const newQr: MemQrCode = {
@@ -870,7 +1097,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           created_at: new Date().toISOString(),
         };
         memQrCodes.unshift(newQr);
-        return jsonResponse(newQr);
+        return jsonResponse({
+          ...newQr,
+          admin_reissued: isAdmin,
+        });
       }
 
       if (request.method === "GET") {
@@ -1299,27 +1529,142 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     // ----------------------------------------------------
-    // 7. ADMIN: QR Codes List
+    // 7. ADMIN: QR Codes List & Unlock/Delete
     // ----------------------------------------------------
-    if (path === "/admin/qr-codes" && request.method === "GET") {
+    if (path === "/admin/qr-codes") {
       if (!verifyAdminAuth(request, env)) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
-      if (env.DB) {
-        try {
-          const rows = await env.DB.prepare(
-            "SELECT * FROM qr_codes ORDER BY created_at DESC LIMIT 100",
-          ).all();
-          return jsonResponse(rows.results || []);
-        } catch (dbErr) {
-          console.warn("D1 qr_codes query error:", dbErr);
-          d1Initialized = false;
-          await ensureD1Tables(env.DB);
-          return jsonResponse([]);
+      if (request.method === "GET") {
+        if (env.DB) {
+          try {
+            const rows = await env.DB.prepare(
+              "SELECT * FROM qr_codes ORDER BY created_at DESC LIMIT 200",
+            ).all();
+            return jsonResponse(rows.results || []);
+          } catch (dbErr) {
+            console.warn("D1 qr_codes query error:", dbErr);
+            d1Initialized = false;
+            await ensureD1Tables(env.DB);
+            return jsonResponse([]);
+          }
         }
+        return jsonResponse(memQrCodes);
       }
-      return jsonResponse(memQrCodes);
+
+      if (request.method === "DELETE") {
+        const id = url.searchParams.get("id");
+        if (!id) {
+          return jsonResponse({ detail: "QR code ID required." }, 400);
+        }
+        if (env.DB) {
+          await env.DB.prepare("DELETE FROM qr_codes WHERE id = ?").bind(id).run();
+        } else {
+          const idx = memQrCodes.findIndex((q) => q.id === id);
+          if (idx !== -1) memQrCodes.splice(idx, 1);
+        }
+        return jsonResponse({
+          success: true,
+          message: "QR code unlocked and deleted. Merchant may now generate a new card.",
+        });
+      }
+    }
+
+    // ----------------------------------------------------
+    // 7B. ADMINS MANAGEMENT (Database-Backed RBAC)
+    // ----------------------------------------------------
+    if (path === "/admin/admins") {
+      if (!verifyAdminAuth(request, env)) {
+        return jsonResponse({ detail: "Unauthorized admin access." }, 401);
+      }
+
+      if (request.method === "GET") {
+        if (env.DB) {
+          try {
+            const rows = await env.DB.prepare(
+              "SELECT id, email, name, phone_number, role, created_at FROM system_admins ORDER BY created_at ASC",
+            ).all();
+            return jsonResponse(rows.results || []);
+          } catch {
+            return jsonResponse(Array.from(memAdmins.values()));
+          }
+        }
+        return jsonResponse(Array.from(memAdmins.values()));
+      }
+
+      if (request.method === "POST") {
+        const body = (await request.json().catch(() => ({}))) as {
+          email?: string;
+          name?: string;
+          phone_number?: string;
+        };
+        const email = (body.email || "").trim().toLowerCase();
+        if (!email || !email.includes("@")) {
+          return jsonResponse({ detail: "Valid administrator email required." }, 400);
+        }
+
+        const id = `admin-${crypto.randomUUID().slice(0, 8)}`;
+        const name = (body.name || email.split("@")[0]).trim();
+        const now = new Date().toISOString();
+
+        if (env.DB) {
+          await env.DB.prepare(
+            "INSERT INTO system_admins (id, email, name, phone_number, role, created_at) " +
+              "VALUES (?, ?, ?, ?, 'admin', ?) " +
+              "ON CONFLICT(email) DO UPDATE SET name = excluded.name, role = 'admin'",
+          )
+            .bind(id, email, name, body.phone_number || null, now)
+            .run();
+        }
+
+        const newAdmin: MemAdmin = {
+          id,
+          email,
+          name,
+          phone_number: body.phone_number || null,
+          role: "admin",
+          created_at: now,
+        };
+        memAdmins.set(email, newAdmin);
+        activeAdminTokens.add(email);
+
+        return jsonResponse({
+          success: true,
+          message: `Administrator ${email} successfully added.`,
+          admin: newAdmin,
+        });
+      }
+
+      if (request.method === "DELETE") {
+        const id = url.searchParams.get("id");
+        if (!id) {
+          return jsonResponse({ detail: "Admin ID required." }, 400);
+        }
+        if (id === "admin-owner") {
+          return jsonResponse({ detail: "Superadmin cannot be deleted." }, 400);
+        }
+
+        if (env.DB) {
+          await env.DB.prepare("DELETE FROM system_admins WHERE id = ? AND id != 'admin-owner'")
+            .bind(id)
+            .run();
+        }
+        for (const [em, a] of memAdmins.entries()) {
+          if (a.id === id && em !== "jeanniyonkuru29@gmail.com") {
+            memAdmins.delete(em);
+          }
+        }
+        return jsonResponse({ success: true, message: "Administrator removed." });
+      }
+    }
+
+    if (path === "/admin/check-auth" && request.method === "GET") {
+      const isAuth = verifyAdminAuth(request, env);
+      if (!isAuth) {
+        return jsonResponse({ authenticated: false, detail: "Unauthorized admin access." }, 401);
+      }
+      return jsonResponse({ authenticated: true, role: "admin" });
     }
 
     // ----------------------------------------------------

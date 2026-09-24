@@ -3,6 +3,8 @@ export interface UserProfile {
   phone_number: string;
   is_fully_registered: boolean;
   email?: string | null;
+  name?: string | null;
+  role?: "admin" | "merchant";
 }
 
 export interface AuthTokenResponse {
@@ -11,6 +13,18 @@ export interface AuthTokenResponse {
   user_id: string;
   phone_number: string;
   is_fully_registered: boolean;
+  email?: string | null;
+  name?: string | null;
+  role?: "admin" | "merchant";
+}
+
+export interface AdminUserRecord {
+  id: string;
+  email: string;
+  name?: string | null;
+  phone_number?: string | null;
+  role: "admin";
+  created_at: string;
 }
 
 export interface QRCodeRecord {
@@ -431,9 +445,19 @@ export class IshyuraClient {
           localStorage.setItem(QR_STORE_KEY, JSON.stringify(existingList));
         }
         return created;
+      } else {
+        const errData = await res.json().catch(() => ({ detail: "Failed to generate QR" }));
+        const err = Object.assign(new Error(errData.detail || "This QR code already exists."), {
+          duplicate: Boolean(errData.duplicate),
+          existing_qr: errData.existing_qr as QRCodeRecord | undefined,
+        });
+        throw err;
       }
-    } catch {
-      // Local fallback
+    } catch (err: unknown) {
+      if (err && typeof err === "object" && "duplicate" in err && err.duplicate) {
+        throw err;
+      }
+      // Local fallback for offline/demo mode if not a duplicate constraint
     }
 
     const newRecord: QRCodeRecord = {
@@ -495,6 +519,35 @@ export class IshyuraClient {
       );
     }
     return local;
+  }
+
+  static async checkQrExists(
+    dialCode: string,
+    network?: string,
+  ): Promise<{ exists: boolean; existing?: QRCodeRecord | null; message?: string }> {
+    if (!dialCode || !dialCode.trim()) {
+      return { exists: false };
+    }
+    try {
+      const params = new URLSearchParams({ dial_code: dialCode.trim() });
+      if (network) params.append("network", network.trim());
+      const res = await fetch(getApiEndpoint(`qr/check-exists?${params.toString()}`));
+      if (res.ok) {
+        return await res.json();
+      }
+      return { exists: false };
+    } catch {
+      // Fast local check fallback
+      const local = this.getLocalQrList();
+      const cleanTarget = dialCode.replace(/[^0-9*#]/g, "");
+      const match = local.find(
+        (q) => q.dial_code && q.dial_code.replace(/[^0-9*#]/g, "") === cleanTarget,
+      );
+      if (match) {
+        return { exists: true, existing: match };
+      }
+      return { exists: false };
+    }
   }
 
   // ------------------------------------------------------------------
@@ -793,6 +846,71 @@ export class IshyuraClient {
       },
       body: JSON.stringify({ phone_number: phoneNumber }),
     });
+    return await res.json();
+  }
+
+  static async deleteAdminQrCode(
+    adminKey: string,
+    qrId: string,
+  ): Promise<{ success: boolean; message?: string }> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/qr-codes?id=${encodeURIComponent(qrId)}`), {
+      method: "DELETE",
+      headers: { "x-admin-key": cleanKey },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Failed to delete/unlock QR." }));
+      throw new Error(err.detail || "Failed to delete/unlock QR.");
+    }
+    return await res.json();
+  }
+
+  static async getAdminAdmins(adminKey: string): Promise<AdminUserRecord[]> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/admins?key=${encodeURIComponent(cleanKey)}`), {
+      headers: { "x-admin-key": cleanKey },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  static async addAdmin(
+    adminKey: string,
+    email: string,
+    name?: string,
+  ): Promise<{ success: boolean; message: string; admin?: AdminUserRecord }> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint("admin/admins"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": cleanKey,
+      },
+      body: JSON.stringify({ email: email.trim(), name: name?.trim() }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Failed to add admin user." }));
+      throw new Error(err.detail || "Failed to add admin user.");
+    }
+    return await res.json();
+  }
+
+  static async removeAdmin(
+    adminKey: string,
+    adminId: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const cleanKey = adminKey.trim();
+    const res = await fetch(getApiEndpoint(`admin/admins?id=${encodeURIComponent(adminId)}`), {
+      method: "DELETE",
+      headers: { "x-admin-key": cleanKey },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Failed to remove admin user." }));
+      throw new Error(err.detail || "Failed to remove admin user.");
+    }
     return await res.json();
   }
 
