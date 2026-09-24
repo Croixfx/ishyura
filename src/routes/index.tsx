@@ -284,7 +284,7 @@ function Index() {
     if (user) {
       setCurrentUser(user);
       if (isAdminUser(user)) {
-        if (!searchParams.tab) {
+        if (!searchParams.tab || searchParams.tab === "generator") {
           setActiveTab("inquiries");
         }
         const key = user.access_token || user.email || "ishyura2026";
@@ -298,10 +298,11 @@ function Index() {
             }
           })
           .catch(() => {});
+      } else {
+        IshyuraClient.listQrCodes()
+          .then(setQrHistory)
+          .catch(() => {});
       }
-      IshyuraClient.listQrCodes()
-        .then(setQrHistory)
-        .catch(() => {});
     }
   }, [searchParams.tab]);
 
