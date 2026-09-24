@@ -29,6 +29,10 @@ interface AppSidebarProps {
   onOpenAuthDialog?: () => void;
   onOpenInquiry?: () => void;
   onNavigate?: () => void;
+  activeTab?: string;
+  onSelectTab?: (tab: string) => void;
+  inquiryCount?: number;
+  orderCount?: number;
 }
 
 export function AppSidebar({
@@ -37,12 +41,15 @@ export function AppSidebar({
   onOpenAuthDialog,
   onOpenInquiry,
   onNavigate,
+  activeTab = "generator",
+  onSelectTab,
+  inquiryCount = 0,
+  orderCount = 0,
 }: AppSidebarProps) {
   const location = useLocation();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(initialUser || null);
   const [mounted, setMounted] = useState(false);
   const [isDark, setIsDark] = useState(true);
-  const [inquiryOpen, setInquiryOpen] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
 
   useEffect(() => {
@@ -112,11 +119,26 @@ export function AppSidebar({
     if (onUserChange) onUserChange(null);
   };
 
+  const isAdmin = mounted && currentUser?.role === "admin";
+
+  const handleTabClick = (tabKey: string) => {
+    if (onSelectTab) {
+      onSelectTab(tabKey);
+    }
+    onNavigate?.();
+  };
+
   return (
     <aside className="w-64 shrink-0 flex flex-col h-screen border-r border-border/60 bg-card/60 backdrop-blur-xl select-none">
       {/* 1. Sticky Brand Header */}
       <div className="p-4 border-b border-border/40 shrink-0">
-        <Link to="/" onClick={() => onNavigate?.()} className="flex items-center gap-3 group">
+        <Link
+          to="/"
+          onClick={() => {
+            handleTabClick(isAdmin ? "inquiries" : "generator");
+          }}
+          className="flex items-center gap-3 group"
+        >
           <div className="size-9 rounded-xl bg-gradient-to-br from-emerald-500 to-sky-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 group-hover:scale-105 transition-transform shrink-0 font-bold text-sm">
             <QrCode className="size-5" />
           </div>
@@ -127,90 +149,20 @@ export function AppSidebar({
                 RW
               </span>
             </div>
-            <p className="text-[11px] text-muted-foreground truncate">Payment QR & Stand Studio</p>
+            <p className="text-[11px] text-muted-foreground truncate">
+              {isAdmin ? "Admin Operations Portal" : "Payment QR & Stand Studio"}
+            </p>
           </div>
         </Link>
       </div>
 
       {/* 2. Independently Scrollable Left Tab Navigation List */}
       <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 space-y-5">
-        {/* Soft Tools Section */}
-        <div className="space-y-1">
-          <p className="px-3 text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase mb-1.5">
-            QR Generator
-          </p>
-
-          <Link
-            to="/"
-            onClick={() => onNavigate?.()}
-            className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
-              location.pathname === "/"
-                ? "bg-primary text-primary-foreground shadow-xs shadow-primary/20 font-bold"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
-            }`}
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <QrCode
-                className={`size-4 shrink-0 ${
-                  location.pathname === "/"
-                    ? "text-primary-foreground"
-                    : "text-muted-foreground group-hover:text-foreground"
-                }`}
-              />
-              <span className="truncate">Instant Tent Card</span>
-            </div>
-            <span
-              className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                location.pathname === "/"
-                  ? "bg-primary-foreground/20 text-primary-foreground"
-                  : "bg-muted text-muted-foreground"
-              }`}
-            >
-              Free Tool
-            </span>
-          </Link>
-        </div>
-
-        {/* Physical Orders & Store Section */}
-        <div className="space-y-1">
-          <p className="px-3 text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase mb-1.5">
-            Merchandise & Stands
-          </p>
-
-          <Link
-            to="/orders"
-            onClick={() => onNavigate?.()}
-            className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
-              location.pathname === "/orders"
-                ? "bg-primary text-primary-foreground shadow-xs shadow-primary/20 font-bold"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
-            }`}
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <ShoppingBag
-                className={`size-4 shrink-0 ${
-                  location.pathname === "/orders" ? "text-primary-foreground" : "text-emerald-500"
-                }`}
-              />
-              <span className="truncate">Stands & Stickers</span>
-            </div>
-            <span
-              className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                location.pathname === "/orders"
-                  ? "bg-primary-foreground/20 text-primary-foreground"
-                  : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-              }`}
-            >
-              Order Store
-            </span>
-          </Link>
-        </div>
-
-        {/* Privileged Administration Section - Strictly database-backed, only visible when user has admin role */}
-        {mounted && currentUser?.role === "admin" && (
+        {/* ADMIN EXCLUSIVE NAVIGATION */}
+        {isAdmin ? (
           <div className="space-y-1">
-            <div className="flex items-center justify-between px-3 mb-1.5">
-              <p className="text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase">
+            <div className="flex items-center justify-between px-3 mb-2">
+              <p className="text-[10px] font-black tracking-wider text-primary uppercase">
                 Admin Control
               </p>
               <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-primary/10 text-primary">
@@ -218,81 +170,272 @@ export function AppSidebar({
               </span>
             </div>
 
-            <Link
-              to="/admin"
-              search={{ tab: "orders" }}
-              onClick={() => onNavigate?.()}
-              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all hover:bg-muted text-foreground"
+            {/* 1. Client Messages / Inquiries (Critical) */}
+            <button
+              type="button"
+              onClick={() => handleTabClick("inquiries")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                activeTab === "inquiries"
+                  ? "bg-sky-500 text-white shadow-xs font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <ShieldCheck className="size-4 shrink-0 text-primary" />
-                <span className="truncate">Admin Dashboard</span>
+                <MessageSquare className="size-4 shrink-0 text-sky-400 group-hover:scale-105" />
+                <span className="truncate">Client Messages</span>
               </div>
-            </Link>
+              {inquiryCount > 0 ? (
+                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950">
+                  {inquiryCount}
+                </span>
+              ) : (
+                <span className="text-[9px] opacity-70">Inbox</span>
+              )}
+            </button>
 
-            <Link
-              to="/admin"
-              search={{ tab: "qrs" }}
-              onClick={() => onNavigate?.()}
-              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all hover:bg-muted text-muted-foreground hover:text-foreground"
+            {/* 2. Merchandise Orders */}
+            <button
+              type="button"
+              onClick={() => handleTabClick("orders")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                activeTab === "orders"
+                  ? "bg-emerald-600 text-white shadow-xs font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <QrCode className="size-4 shrink-0 text-amber-500" />
-                <span className="truncate">Generated QRs</span>
+                <Package className="size-4 shrink-0 text-emerald-400 group-hover:scale-105" />
+                <span className="truncate">Stand & Sticker Orders</span>
               </div>
-            </Link>
+              {orderCount > 0 ? (
+                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950">
+                  {orderCount}
+                </span>
+              ) : (
+                <span className="text-[9px] opacity-70">Orders</span>
+              )}
+            </button>
 
-            <Link
-              to="/admin"
-              search={{ tab: "merchants" }}
-              onClick={() => onNavigate?.()}
-              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all hover:bg-muted text-muted-foreground hover:text-foreground"
+            {/* 3. Single Generation QR Registry */}
+            <button
+              type="button"
+              onClick={() => handleTabClick("qrs")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                activeTab === "qrs"
+                  ? "bg-primary text-primary-foreground shadow-xs font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <Users className="size-4 shrink-0 text-blue-500" />
+                <QrCode className="size-4 shrink-0 text-amber-400 group-hover:scale-105" />
+                <span className="truncate">Merchant QR Registry</span>
+              </div>
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                Active
+              </span>
+            </button>
+
+            {/* 4. Merchants Directory */}
+            <button
+              type="button"
+              onClick={() => handleTabClick("merchants")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                activeTab === "merchants"
+                  ? "bg-purple-600 text-white shadow-xs font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Users className="size-4 shrink-0 text-purple-400 group-hover:scale-105" />
                 <span className="truncate">Merchants Directory</span>
               </div>
-            </Link>
+            </button>
 
-            <Link
-              to="/admin"
-              search={{ tab: "admins" }}
-              onClick={() => onNavigate?.()}
-              className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all hover:bg-muted text-muted-foreground hover:text-foreground"
+            {/* 5. Platform Admins */}
+            <button
+              type="button"
+              onClick={() => handleTabClick("admins")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                activeTab === "admins"
+                  ? "bg-rose-600 text-white shadow-xs font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <Lock className="size-4 shrink-0 text-rose-500" />
+                <ShieldCheck className="size-4 shrink-0 text-rose-400 group-hover:scale-105" />
                 <span className="truncate">System Admins</span>
               </div>
-            </Link>
+            </button>
+
+            {/* 6. System & Audit Logs */}
+            <button
+              type="button"
+              onClick={() => handleTabClick("logs")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                activeTab === "logs"
+                  ? "bg-muted text-foreground shadow-xs font-bold border border-border"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Clock className="size-4 shrink-0 text-muted-foreground group-hover:scale-105" />
+                <span className="truncate">Audit & Export Logs</span>
+              </div>
+            </button>
+
+            {/* 7. Switch to QR Generator Preview */}
+            <div className="pt-2 border-t border-border/40 mt-3">
+              <button
+                type="button"
+                onClick={() => handleTabClick("generator")}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                  activeTab === "generator"
+                    ? "bg-primary text-primary-foreground shadow-xs font-bold"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Sparkles className="size-4 shrink-0 text-amber-500" />
+                  <span className="truncate">QR Generator Preview</span>
+                </div>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                  Tool
+                </span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* MERCHANT NAVIGATION */
+          <div className="space-y-4">
+            {/* Merchant Tools Section */}
+            <div className="space-y-1">
+              <p className="px-3 text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase mb-1.5">
+                Merchant Studio
+              </p>
+
+              {/* 1. Payment QR Generator */}
+              <button
+                type="button"
+                onClick={() => handleTabClick("generator")}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                  activeTab === "generator"
+                    ? "bg-primary text-primary-foreground shadow-xs font-bold"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <QrCode
+                    className={`size-4 shrink-0 ${
+                      activeTab === "generator"
+                        ? "text-primary-foreground"
+                        : "text-muted-foreground group-hover:text-foreground"
+                    }`}
+                  />
+                  <span className="truncate">Payment Tent Card</span>
+                </div>
+                <span
+                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                    activeTab === "generator"
+                      ? "bg-primary-foreground/20 text-primary-foreground"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  Generator
+                </span>
+              </button>
+
+              {/* 2. My Cards & Records (Without rendering actual QR) */}
+              <button
+                type="button"
+                onClick={() => handleTabClick("records")}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                  activeTab === "records"
+                    ? "bg-primary text-primary-foreground shadow-xs font-bold"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <CreditCard
+                    className={`size-4 shrink-0 ${
+                      activeTab === "records"
+                        ? "text-primary-foreground"
+                        : "text-sky-500 group-hover:text-foreground"
+                    }`}
+                  />
+                  <span className="truncate">My Cards & Records</span>
+                </div>
+                <span
+                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                    activeTab === "records"
+                      ? "bg-primary-foreground/20 text-primary-foreground"
+                      : "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+                  }`}
+                >
+                  Saved
+                </span>
+              </button>
+            </div>
+
+            {/* Physical Stands & Merchandise Section */}
+            <div className="space-y-1">
+              <p className="px-3 text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase mb-1.5">
+                Counter Hardware
+              </p>
+
+              <button
+                type="button"
+                onClick={() => handleTabClick("store")}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                  activeTab === "store"
+                    ? "bg-primary text-primary-foreground shadow-xs font-bold"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <ShoppingBag
+                    className={`size-4 shrink-0 ${
+                      activeTab === "store" ? "text-primary-foreground" : "text-emerald-500"
+                    }`}
+                  />
+                  <span className="truncate">Stands & Stickers</span>
+                </div>
+                <span
+                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                    activeTab === "store"
+                      ? "bg-primary-foreground/20 text-primary-foreground"
+                      : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  }`}
+                >
+                  Order
+                </span>
+              </button>
+            </div>
+
+            {/* Support Section for Merchants */}
+            <div className="space-y-1">
+              <p className="px-3 text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase mb-1.5">
+                Support
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (onOpenInquiry) {
+                    onOpenInquiry();
+                  }
+                  onNavigate?.();
+                }}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors text-left cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5">
+                  <MessageSquare className="size-4 text-sky-500" />
+                  <span>Contact Ishyura Support</span>
+                </div>
+                <ChevronRight className="size-3 text-muted-foreground" />
+              </button>
+            </div>
           </div>
         )}
-
-        {/* Help & Support Section */}
-        <div className="space-y-1">
-          <p className="px-3 text-[10px] font-black tracking-wider text-muted-foreground/70 uppercase mb-1.5">
-            Support
-          </p>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (onOpenInquiry) {
-                onOpenInquiry();
-              } else {
-                setInquiryOpen(true);
-              }
-              onNavigate?.();
-            }}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors text-left cursor-pointer"
-          >
-            <div className="flex items-center gap-2.5">
-              <MessageSquare className="size-4 text-sky-500" />
-              <span>Contact & Support</span>
-            </div>
-            <ChevronRight className="size-3 text-muted-foreground" />
-          </button>
-        </div>
       </div>
 
       {/* 3. Sticky User Profile & Theme Settings at Bottom */}
@@ -301,14 +444,22 @@ export function AppSidebar({
           <div className="p-2.5 rounded-xl border border-border/60 bg-background/80 space-y-2 shadow-2xs">
             <div className="flex items-center justify-between gap-2 min-w-0">
               <div className="flex items-center gap-2 min-w-0">
-                <div className="size-7 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0 font-black text-xs">
-                  {currentUser.email ? currentUser.email[0].toUpperCase() : "M"}
+                <div
+                  className={`size-7 rounded-full flex items-center justify-center shrink-0 font-black text-xs ${
+                    isAdmin
+                      ? "bg-rose-500/15 border border-rose-500/30 text-rose-500"
+                      : "bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                  }`}
+                >
+                  {isAdmin ? "A" : currentUser.email ? currentUser.email[0].toUpperCase() : "M"}
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs font-bold text-foreground truncate">
-                    {currentUser.email || currentUser.phone_number}
+                    {currentUser.name || currentUser.email || currentUser.phone_number}
                   </p>
-                  <p className="text-[10px] text-muted-foreground truncate">Merchant Account</p>
+                  <p className="text-[10px] text-muted-foreground truncate">
+                    {isAdmin ? "Superadmin (Owner)" : "Merchant Account"}
+                  </p>
                 </div>
               </div>
             </div>

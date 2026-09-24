@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS system_admins (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Seed Initial Superadmin & Co-Admin
+INSERT OR IGNORE INTO system_admins (id, email, phone_number, name, role)
+VALUES 
+  ('admin-owner', 'jeanniyonkuru29@gmail.com', '+250788000001', 'Jeanni (Owner & Superadmin)', 'admin'),
+  ('admin-valens', 'valensbikorimana70@gmail.com', '+250788000002', 'Valens (Admin)', 'admin');
+
 CREATE INDEX IF NOT EXISTS idx_qr_codes_owner ON qr_codes(owner_id);
 CREATE INDEX IF NOT EXISTS idx_qr_codes_phone ON qr_codes(phone_number);
 CREATE INDEX IF NOT EXISTS idx_qr_codes_dial ON qr_codes(dial_code);

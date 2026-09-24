@@ -1023,7 +1023,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               return jsonResponse(
                 {
                   error: "DUPLICATE_QR",
-                  detail: `This merchant payment QR has already been generated and recorded for "${existing.business_name}" (${existing.network} - ${existing.dial_code}). To prevent duplicate printing, protect merchant identity, and conserve resources, each QR code can only be generated once. If your card was lost or damaged, please contact an Administrator for re-issue.`,
+                  detail: `A QR card for this payment code was already generated and printed for "${existing.business_name}" (${existing.network} - ${existing.dial_code}). You can easily request a reprint or replacement card here.`,
                   duplicate: true,
                   existing_qr: existing,
                 },
@@ -1076,7 +1076,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           return jsonResponse(
             {
               error: "DUPLICATE_QR",
-              detail: `This merchant payment QR has already been generated and recorded for "${existing.business_name}" (${existing.network} - ${existing.dial_code}). To prevent duplicate printing, protect merchant identity, and conserve resources, each QR code can only be generated once. If your card was lost or damaged, please contact an Administrator for re-issue.`,
+              detail: `A QR card for this payment code was already generated and printed for "${existing.business_name}" (${existing.network} - ${existing.dial_code}). You can easily request a reprint or replacement card here.`,
               duplicate: true,
               existing_qr: existing,
             },
