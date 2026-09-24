@@ -36,29 +36,59 @@ TWILIO_VERIFY_SERVICE_SID=
 
 Whenever you push code changes to GitHub, the database migrations will automatically execute on your production D1 database (`ishyura-db`) before deployment!
 
+### How to Fix Cloudflare API Error `[code: 7403]` ("account is not valid or is not authorized")
+
+If you see:
+```
+✘ [ERROR] A request to the Cloudflare API (/accounts/***/d1/database/.../query) failed.
+  The given account is not valid or is not authorized to access this service [code: 7403]
+```
+This is caused by one of three things:
+
+#### Step 1: Create your own D1 Database in Cloudflare
+The database ID `e4e60ef4-0a65-4f90-8f9e-b67f444741f9` in `wrangler.toml` was the initial identifier. You need an active D1 database in **your own** Cloudflare account:
+1. Go to the [Cloudflare Dashboard](https://dash.cloudflare.com).
+2. On the left navigation, click **Storage & Databases** > **D1 SQL Database**.
+3. Click **Create database**, name it **`ishyura-db`**, and choose your closest region.
+4. Once created, Cloudflare displays your **Database ID** (UUID format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
+5. Either:
+   - Paste that `database_id` into your `wrangler.toml`:
+     ```toml
+     [[d1_databases]]
+     binding = "DB"
+     database_name = "ishyura-db"
+     database_id = "YOUR_ACTUAL_DATABASE_ID_HERE"
+     ```
+   - OR add a GitHub Secret named **`CLOUDFLARE_DATABASE_ID`** with your database ID, and GitHub Actions will automatically inject it!
+
+#### Step 2: Grant D1 Permission to your Cloudflare API Token
+By default, the standard "Edit Cloudflare Workers" API token template **does not include D1 permissions**!
+1. Go to [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens).
+2. Click **Create Token** > choose **Create Custom Token** (or click **Edit** on your existing token).
+3. Under **Permissions**, ensure you include:
+   - **Account** — **Workers Scripts** — **Edit**
+   - **Account** — **D1** — **Edit**  *(CRITICAL: D1 permission is required for migrations)*
+   - **Account** — **Account Settings** — **Read**
+4. Under **Account Resources**, select **Include > All accounts** (or your specific account).
+5. Click **Continue to summary** and **Create Token**.
+6. Copy the new token.
+
+#### Step 3: Add the Secrets to your GitHub Repository
+In your GitHub Repository (`Settings` > `Secrets and variables` > `Actions`):
+- **`CLOUDFLARE_API_TOKEN`**: The token created in Step 2 with D1 permissions.
+- **`CLOUDFLARE_ACCOUNT_ID`**: Your Cloudflare Account ID (found on the right sidebar of the Cloudflare Dashboard overview page, or in your dashboard URL).
+- **`CLOUDFLARE_DATABASE_ID`** *(Optional if updated in wrangler.toml)*: Your D1 database UUID.
+
 ### How the Automatic Migration Works:
 1. **Migration File**: Located at `migrations/0001_initial_schema.sql`. It defines all tables (`merchants`, `qr_codes`, `otps`, `inquiries`, `orders`, `download_events`) and indexes.
-2. **Configuration in `wrangler.toml`**:
-   ```toml
-   [[d1_databases]]
-   binding = "DB"
-   database_name = "ishyura-db"
-   database_id = "e4e60ef4-0a65-4f90-8f9e-b67f444741f9"
-   migrations_dir = "migrations"
-   ```
-3. **GitHub Actions Automation**: `.github/workflows/deploy.yml` automatically triggers on `git push` to `main` or `master`. It runs:
+2. **GitHub Actions Automation**: `.github/workflows/deploy.yml` automatically triggers on `git push` to `main` or `master`. It runs:
    ```bash
-   npx wrangler d1 migrations apply ishyura-db --remote
+   echo "y" | npx wrangler d1 migrations apply ishyura-db --remote
    ```
    and then deploys the worker.
 
-### Required GitHub Secrets:
-In your GitHub Repository (`Settings` > `Secrets and variables` > `Actions`), add these two repository secrets:
-- `CLOUDFLARE_API_TOKEN`: Your Cloudflare API Token (with Workers/D1 Edit permissions from Cloudflare Dashboard > My Profile > API Tokens).
-- `CLOUDFLARE_ACCOUNT_ID`: Your Cloudflare Account ID (visible on Cloudflare Dashboard sidebar).
-
 ### Running Migrations from your Terminal (One-Command):
-You can also run migrations at any time using the npm script:
+You can also run migrations from your machine:
 ```bash
 npm run d1:migrate
 ```
