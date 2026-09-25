@@ -52,8 +52,17 @@ export interface QRCodeRecord {
   payment_type?: string;
   dial_code?: string;
   amount?: number | null;
+  item_name?: string | null;
+  is_dynamic?: boolean | number;
   description: string;
   created_at: string;
+}
+
+export function getDynamicPayUrl(qrId: string): string {
+  if (typeof window !== "undefined") {
+    return `${window.location.origin}/p/${qrId}`;
+  }
+  return `/p/${qrId}`;
 }
 
 export interface InquiryPayload {
@@ -464,6 +473,8 @@ export class IshyuraClient {
       network?: string;
       payment_type?: string;
       dial_code?: string;
+      is_dynamic?: boolean;
+      item_name?: string;
     },
   ): Promise<QRCodeRecord> {
     const token = this.getToken();
@@ -480,6 +491,8 @@ export class IshyuraClient {
       network: metadata?.network,
       payment_type: metadata?.payment_type,
       dial_code: metadata?.dial_code,
+      is_dynamic: metadata?.is_dynamic ? 1 : 0,
+      item_name: metadata?.item_name || null,
     };
 
     try {
@@ -524,6 +537,8 @@ export class IshyuraClient {
       dial_code: metadata?.dial_code,
       description,
       amount: amount ?? null,
+      is_dynamic: metadata?.is_dynamic ? 1 : 0,
+      item_name: metadata?.item_name || null,
       created_at: new Date().toISOString(),
     };
 
@@ -538,6 +553,62 @@ export class IshyuraClient {
     existingList.unshift(newRecord);
     localStorage.setItem(QR_STORE_KEY, JSON.stringify(existingList));
     return newRecord;
+  }
+
+  static async updateQrCode(
+    id: string,
+    updates: {
+      business_name?: string;
+      network?: string;
+      payment_type?: string;
+      dial_code?: string;
+      phone_number?: string;
+      amount?: number | null;
+      item_name?: string | null;
+      is_dynamic?: boolean;
+    },
+  ): Promise<QRCodeRecord> {
+    const token = this.getToken();
+    try {
+      const res = await fetch(getApiEndpoint("qr-codes"), {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ id, ...updates }),
+      });
+      if (res.ok) {
+        const updated: QRCodeRecord = await res.json();
+        const existingList = this.getLocalQrList();
+        const idx = existingList.findIndex((item) => item.id === id);
+        if (idx !== -1) {
+          existingList[idx] = { ...existingList[idx], ...updated };
+          localStorage.setItem(QR_STORE_KEY, JSON.stringify(existingList));
+        }
+        return updated;
+      }
+    } catch {
+      // Offline fallback
+    }
+
+    const existingList = this.getLocalQrList();
+    const idx = existingList.findIndex((item) => item.id === id);
+    if (idx !== -1) {
+      existingList[idx] = {
+        ...existingList[idx],
+        ...updates,
+        is_dynamic:
+          updates.is_dynamic !== undefined
+            ? updates.is_dynamic
+              ? 1
+              : 0
+            : existingList[idx].is_dynamic,
+      };
+      localStorage.setItem(QR_STORE_KEY, JSON.stringify(existingList));
+      return existingList[idx];
+    }
+    throw new Error("QR code not found to update.");
   }
 
   static async listQrCodes(): Promise<QRCodeRecord[]> {

@@ -51,16 +51,22 @@ function isH3SwallowedErrorBody(body: string): boolean {
 }
 
 import { handleApiRequest } from "./lib/api-router";
+import { handleEdgePayPage } from "./lib/edge-pay-renderer";
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
       const url = new URL(request.url);
+      const mergedEnv = {
+        ...(typeof process !== "undefined" ? process.env : {}),
+        ...(typeof env === "object" && env !== null ? env : {}),
+      };
+
+      if (url.pathname.startsWith("/p/") || url.pathname.startsWith("/pay/")) {
+        return await handleEdgePayPage(request, mergedEnv);
+      }
+
       if (url.pathname.startsWith("/api/")) {
-        const mergedEnv = {
-          ...(typeof process !== "undefined" ? process.env : {}),
-          ...(typeof env === "object" && env !== null ? env : {}),
-        };
         return await handleApiRequest(request, mergedEnv);
       }
 

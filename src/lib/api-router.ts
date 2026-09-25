@@ -6,6 +6,7 @@ import {
   formatToE164,
   type SmsEnvConfig,
 } from "./sms-service";
+import { handleEdgePayPage } from "./edge-pay-renderer";
 
 export interface D1Database {
   prepare(query: string): {
@@ -43,6 +44,8 @@ interface MemQrCode {
   dial_code: string;
   description: string;
   amount: number | null;
+  item_name?: string | null;
+  is_dynamic?: boolean | number;
   created_at: string;
 }
 
@@ -221,7 +224,7 @@ const memDownloads: MemDownload[] = [
 
 const memOtps: Map<string, string> = new Map();
 
-function corsHeaders(): HeadersInit {
+export function corsHeaders(): HeadersInit {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
@@ -381,6 +384,22 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
         console.warn("Table creation statement warning:", e);
       }
     }
+    // Safe column migrations for Dynamic QRs & Fixed Product Price
+    if (typeof db.prepare === "function") {
+      try {
+        await db.prepare("ALTER TABLE qr_codes ADD COLUMN is_dynamic INTEGER DEFAULT 0").run();
+      } catch (err) {
+        // Column may already exist
+        void err;
+      }
+      try {
+        await db.prepare("ALTER TABLE qr_codes ADD COLUMN item_name TEXT").run();
+      } catch (err) {
+        // Column may already exist
+        void err;
+      }
+    }
+
     d1Initialized = true;
   } catch (err) {
     console.warn("D1 table init notice:", err);
@@ -449,6 +468,16 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
   if (request.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders(), status: 204 });
+  }
+
+  // Edge Dynamic Payment Sheet for customer scans
+  if (
+    path.startsWith("/p/") ||
+    path.startsWith("/pay/") ||
+    url.pathname.startsWith("/p/") ||
+    url.pathname.startsWith("/pay/")
+  ) {
+    return handleEdgePayPage(request, env);
   }
 
   try {
@@ -980,7 +1009,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     // ----------------------------------------------------
-    // 3. QR CODES: Create & List (Generate Once Policy)
+    // 3. QR CODES: Create, Edit & List (Dynamic & Fixed Price Support)
     // ----------------------------------------------------
     if (path === "/qr-codes" || path === "/qr/create" || path === "/qr/list") {
       if (request.method === "POST") {
@@ -988,6 +1017,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           owner_id?: string;
           description?: string;
           amount?: number | null;
+          item_name?: string | null;
+          is_dynamic?: boolean | number;
           business_name?: string;
           network?: string;
           payment_type?: string;
@@ -1005,6 +1036,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const cleanTarget = rawDialCode.replace(/[^0-9*#]/g, "");
         const phone = body.phone_number || body.owner_id || "unassigned";
         const ownerId = body.owner_id || body.phone_number || phone;
+        const isDynamic = body.is_dynamic ? 1 : 0;
+        const itemName = body.item_name || null;
+        const numAmount =
+          typeof body.amount === "number" && !isNaN(body.amount) ? body.amount : null;
 
         // Check if requester has Admin credentials
         const isAdmin = verifyAdminAuth(request, env);
@@ -1034,22 +1069,45 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             // ignore check error
           }
 
-          await env.DB.prepare(
-            "INSERT INTO qr_codes (id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount) " +
-              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          )
-            .bind(
-              id,
-              ownerId,
-              phone,
-              businessName,
-              network,
-              paymentType,
-              dialCode,
-              description,
-              body.amount ?? null,
+          try {
+            await env.DB.prepare(
+              "INSERT INTO qr_codes (id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, is_dynamic, item_name) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
-            .run();
+              .bind(
+                id,
+                ownerId,
+                phone,
+                businessName,
+                network,
+                paymentType,
+                dialCode,
+                description,
+                numAmount,
+                isDynamic,
+                itemName,
+              )
+              .run();
+          } catch (insertErr) {
+            // Fallback insert if new columns not yet applied in D1
+            console.warn("D1 extended insert fallback:", insertErr);
+            await env.DB.prepare(
+              "INSERT INTO qr_codes (id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+              .bind(
+                id,
+                ownerId,
+                phone,
+                businessName,
+                network,
+                paymentType,
+                dialCode,
+                description,
+                numAmount,
+              )
+              .run();
+          }
 
           return jsonResponse({
             id,
@@ -1060,7 +1118,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             payment_type: paymentType,
             dial_code: dialCode,
             description,
-            amount: body.amount ?? null,
+            amount: numAmount,
+            is_dynamic: isDynamic,
+            item_name: itemName,
             created_at: new Date().toISOString(),
             admin_reissued: isAdmin,
           });
@@ -1093,7 +1153,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           payment_type: paymentType,
           dial_code: dialCode,
           description,
-          amount: body.amount ?? null,
+          amount: numAmount,
+          is_dynamic: isDynamic,
+          item_name: itemName,
           created_at: new Date().toISOString(),
         };
         memQrCodes.unshift(newQr);
@@ -1103,23 +1165,142 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         });
       }
 
+      // PATCH: Edit destination phone number or price without reprinting!
+      if (request.method === "PATCH") {
+        const body = (await request.json().catch(() => ({}))) as {
+          id?: string;
+          business_name?: string;
+          network?: string;
+          payment_type?: string;
+          dial_code?: string;
+          phone_number?: string;
+          amount?: number | null;
+          item_name?: string | null;
+          is_dynamic?: boolean | number;
+        };
+
+        if (!body.id) {
+          return jsonResponse({ detail: "QR code ID required." }, 400);
+        }
+
+        const rawDial = (body.dial_code || "").trim();
+        const businessName = (body.business_name || "").trim();
+
+        if (env.DB) {
+          const current = await env.DB.prepare("SELECT * FROM qr_codes WHERE id = ?")
+            .bind(body.id)
+            .first<MemQrCode>();
+
+          if (!current) {
+            return jsonResponse({ detail: "QR Code not found." }, 404);
+          }
+
+          const updatedName = businessName || current.business_name;
+          const updatedNet = body.network || current.network;
+          const updatedType = body.payment_type || current.payment_type;
+          const updatedDial = rawDial || current.dial_code;
+          const updatedPhone = body.phone_number || current.phone_number;
+          const updatedAmount = body.amount !== undefined ? body.amount : current.amount;
+          const updatedItem = body.item_name !== undefined ? body.item_name : current.item_name;
+          const updatedDynamic =
+            body.is_dynamic !== undefined ? (body.is_dynamic ? 1 : 0) : current.is_dynamic;
+          const updatedDesc = `${updatedName} (${updatedNet} - ${updatedDial})`;
+
+          try {
+            await env.DB.prepare(
+              "UPDATE qr_codes SET business_name = ?, network = ?, payment_type = ?, dial_code = ?, phone_number = ?, amount = ?, item_name = ?, is_dynamic = ?, description = ? WHERE id = ?",
+            )
+              .bind(
+                updatedName,
+                updatedNet,
+                updatedType,
+                updatedDial,
+                updatedPhone,
+                updatedAmount,
+                updatedItem,
+                updatedDynamic,
+                updatedDesc,
+                body.id,
+              )
+              .run();
+          } catch (updateErr) {
+            console.warn("D1 extended update notice, running fallback update:", updateErr);
+            await env.DB.prepare(
+              "UPDATE qr_codes SET business_name = ?, network = ?, payment_type = ?, dial_code = ?, phone_number = ?, amount = ?, description = ? WHERE id = ?",
+            )
+              .bind(
+                updatedName,
+                updatedNet,
+                updatedType,
+                updatedDial,
+                updatedPhone,
+                updatedAmount,
+                updatedDesc,
+                body.id,
+              )
+              .run();
+          }
+
+          return jsonResponse({
+            id: body.id,
+            business_name: updatedName,
+            network: updatedNet,
+            payment_type: updatedType,
+            dial_code: updatedDial,
+            phone_number: updatedPhone,
+            amount: updatedAmount,
+            item_name: updatedItem,
+            is_dynamic: updatedDynamic,
+            description: updatedDesc,
+            message: "QR destination updated successfully without reprinting!",
+          });
+        }
+
+        const item = memQrCodes.find((q) => q.id === body.id);
+        if (!item) {
+          return jsonResponse({ detail: "QR code not found." }, 404);
+        }
+        if (businessName) item.business_name = businessName;
+        if (body.network) item.network = body.network;
+        if (body.payment_type) item.payment_type = body.payment_type;
+        if (rawDial) item.dial_code = rawDial;
+        if (body.phone_number) item.phone_number = body.phone_number;
+        if (body.amount !== undefined) item.amount = body.amount;
+        if (body.item_name !== undefined) item.item_name = body.item_name;
+        if (body.is_dynamic !== undefined) item.is_dynamic = body.is_dynamic ? 1 : 0;
+        item.description = `${item.business_name} (${item.network} - ${item.dial_code})`;
+
+        return jsonResponse({
+          ...item,
+          message: "QR destination updated successfully without reprinting!",
+        });
+      }
+
       if (request.method === "GET") {
         const ownerParam = url.searchParams.get("owner_id");
         const phoneParam = url.searchParams.get("phone_number");
 
         if (env.DB) {
-          if (ownerParam || phoneParam) {
+          try {
+            if (ownerParam || phoneParam) {
+              const rows = await env.DB.prepare(
+                "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, is_dynamic, item_name, created_at FROM qr_codes WHERE owner_id = ? OR phone_number = ? ORDER BY created_at DESC LIMIT 100",
+              )
+                .bind(ownerParam || phoneParam, phoneParam || ownerParam)
+                .all();
+              return jsonResponse(rows.results || []);
+            }
             const rows = await env.DB.prepare(
-              "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, created_at FROM qr_codes WHERE owner_id = ? OR phone_number = ? ORDER BY created_at DESC LIMIT 100",
-            )
-              .bind(ownerParam || phoneParam, phoneParam || ownerParam)
-              .all();
+              "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, is_dynamic, item_name, created_at FROM qr_codes ORDER BY created_at DESC LIMIT 50",
+            ).all();
+            return jsonResponse(rows.results || []);
+          } catch {
+            // Fallback for older schema without is_dynamic
+            const rows = await env.DB.prepare(
+              "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, created_at FROM qr_codes ORDER BY created_at DESC LIMIT 50",
+            ).all();
             return jsonResponse(rows.results || []);
           }
-          const rows = await env.DB.prepare(
-            "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, created_at FROM qr_codes ORDER BY created_at DESC LIMIT 50",
-          ).all();
-          return jsonResponse(rows.results || []);
         }
 
         if (ownerParam || phoneParam) {

@@ -36,6 +36,8 @@ import {
   KeyRound,
   Mail,
   User,
+  Edit3,
+  ExternalLink,
 } from "lucide-react";
 
 import { InquiryDialog } from "@/components/InquiryDialog";
@@ -46,6 +48,7 @@ import { signInWithGoogleReal, logoutGoogle } from "@/lib/firebase-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -62,7 +65,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { IshyuraClient, UserProfile, QRCodeRecord, isAdminUser } from "@/lib/ishyura-client";
+import {
+  IshyuraClient,
+  UserProfile,
+  QRCodeRecord,
+  isAdminUser,
+  getDynamicPayUrl,
+} from "@/lib/ishyura-client";
 
 interface IndexSearch {
   tab?: string;
@@ -181,6 +190,7 @@ function useTheme() {
 }
 
 interface ConfirmedCardData {
+  id?: string;
   businessName: string;
   network: Network;
   paymentType: PaymentType;
@@ -188,6 +198,10 @@ interface ConfirmedCardData {
   ussdString: string;
   qrTelUri: string;
   feeNote?: string;
+  isDynamic?: boolean;
+  amount?: number | null;
+  itemName?: string | null;
+  dynamicUrl?: string;
 }
 
 function Index() {
@@ -205,6 +219,27 @@ function Index() {
   const [downloading, setDownloading] = useState(false);
   const [savingQr, setSavingQr] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // PRO Features: Dynamic Smart QR & Fixed Amount (Free Testing Preview)
+  const [isDynamic, setIsDynamic] = useState(false);
+  const [hasFixedAmount, setHasFixedAmount] = useState(false);
+  const [fixedAmount, setFixedAmount] = useState<string>("");
+  const [itemName, setItemName] = useState<string>("");
+
+  // Edit Destination Dialog (for updating dynamic QRs without reprinting)
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingQr, setEditingQr] = useState<QRCodeRecord | null>(null);
+  const [editBusinessName, setEditBusinessName] = useState("");
+  const [editAccountValue, setEditAccountValue] = useState("");
+  const [editNetwork, setEditNetwork] = useState<Network>("MTN MoMo");
+  const [editPaymentType, setEditPaymentType] = useState<PaymentType>("momo_code");
+  const [editAmount, setEditAmount] = useState<string>("");
+  const [editItemName, setEditItemName] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
+
+  // Instant Customer Scan Preview Dialog
+  const [scanPreviewUrl, setScanPreviewUrl] = useState<string | null>(null);
 
   // User state & Soft Registration flow
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -419,10 +454,30 @@ function Index() {
     if (!canConfirm || checkingDuplicate) return;
 
     setDuplicateWarning(null);
-    const ussdString = `${currentProvider.prefixes[paymentType]}${sanitizedInput}#`;
-    const qrTelUri = `tel:${encodeURIComponent(ussdString)}`;
+    const tempId = crypto.randomUUID();
+    const ussdPrefix = currentProvider.prefixes[paymentType];
+    const numAmount = hasFixedAmount && fixedAmount.trim() ? parseFloat(fixedAmount) : null;
+    const cleanItem = hasFixedAmount && itemName.trim() ? itemName.trim() : null;
 
-    const cardData = {
+    let ussdString = `${ussdPrefix}${sanitizedInput}#`;
+    if (numAmount) {
+      if (network === "Equity Bank (eKash)") {
+        ussdString = `*555*2*${sanitizedInput}*${Math.round(numAmount)}#`;
+      } else {
+        ussdString = `${ussdPrefix}${sanitizedInput}*${Math.round(numAmount)}#`;
+      }
+    }
+
+    let qrTelUri = `tel:${encodeURIComponent(ussdString)}`;
+    let dynamicUrl: string | undefined = undefined;
+
+    if (isDynamic) {
+      dynamicUrl = getDynamicPayUrl(tempId);
+      qrTelUri = dynamicUrl;
+    }
+
+    const cardData: ConfirmedCardData = {
+      id: tempId,
       businessName: businessName.trim(),
       network,
       paymentType,
@@ -430,6 +485,10 @@ function Index() {
       ussdString,
       qrTelUri,
       feeNote: network === "Equity Bank (eKash)" ? "Only 20 RWF fee via eKash" : undefined,
+      isDynamic,
+      amount: numAmount,
+      itemName: cleanItem,
+      dynamicUrl,
     };
 
     // 1. Unauthenticated visitors must sign in first.
@@ -470,16 +529,30 @@ function Index() {
     setSavingQr(true);
     IshyuraClient.createQrCode(
       `${cardData.businessName} (${cardData.network} - ${cardData.sanitizedInput})`,
-      null,
+      numAmount,
       {
         business_name: cardData.businessName,
         network: cardData.network,
         payment_type: cardData.paymentType,
         dial_code: cardData.ussdString,
+        is_dynamic: isDynamic,
+        item_name: cleanItem || undefined,
       },
     )
-      .then(() => {
+      .then((saved) => {
         setSavedSuccess(true);
+        if (isDynamic && saved.id) {
+          setConfirmedData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  id: saved.id,
+                  dynamicUrl: getDynamicPayUrl(saved.id),
+                  qrTelUri: getDynamicPayUrl(saved.id),
+                }
+              : null,
+          );
+        }
         return IshyuraClient.listQrCodes();
       })
       .then(setQrHistory)
@@ -506,6 +579,87 @@ function Index() {
   const handleEdit = () => {
     setConfirmedData(null);
     setDuplicateWarning(null);
+  };
+
+  const handleOpenEditDestination = (qr: QRCodeRecord) => {
+    setEditingQr(qr);
+    setEditBusinessName(qr.business_name || "");
+    const cleanDigits = (qr.dial_code || "").replace(/[^0-9]/g, "");
+    setEditAccountValue(cleanDigits || qr.phone_number || "");
+    setEditNetwork((qr.network as Network) || "MTN MoMo");
+    setEditPaymentType((qr.payment_type as PaymentType) || "momo_code");
+    setEditAmount(qr.amount ? String(qr.amount) : "");
+    setEditItemName(qr.item_name || "");
+    setEditSuccessMsg(null);
+    setEditDialogOpen(true);
+  };
+
+  const handleSaveEditDestination = async () => {
+    if (!editingQr) return;
+    setEditSaving(true);
+    setEditSuccessMsg(null);
+    try {
+      const cleanDigits = editAccountValue.replace(/[^0-9]/g, "");
+      const provider = PROVIDERS[editNetwork] || PROVIDERS["MTN MoMo"];
+      const prefix = provider.prefixes[editPaymentType];
+      const numAmount = editAmount.trim() ? parseFloat(editAmount) : null;
+
+      let newUssd = `${prefix}${cleanDigits}#`;
+      if (numAmount) {
+        if (editNetwork === "Equity Bank (eKash)") {
+          newUssd = `*555*2*${cleanDigits}*${Math.round(numAmount)}#`;
+        } else {
+          newUssd = `${prefix}${cleanDigits}*${Math.round(numAmount)}#`;
+        }
+      }
+
+      const updated = await IshyuraClient.updateQrCode(editingQr.id, {
+        business_name: editBusinessName.trim() || editingQr.business_name,
+        network: editNetwork,
+        payment_type: editPaymentType,
+        dial_code: newUssd,
+        phone_number: cleanDigits,
+        amount: numAmount,
+        item_name: editItemName.trim() || null,
+        is_dynamic: true,
+      });
+
+      // Update local state list
+      setQrHistory((prev) => prev.map((q) => (q.id === editingQr.id ? { ...q, ...updated } : q)));
+
+      // If active confirmed card matches this QR, update it live
+      if (
+        confirmedData &&
+        (confirmedData.id === editingQr.id || confirmedData.ussdString === editingQr.dial_code)
+      ) {
+        setConfirmedData((prev) =>
+          prev
+            ? {
+                ...prev,
+                businessName: updated.business_name || prev.businessName,
+                network: editNetwork,
+                paymentType: editPaymentType,
+                sanitizedInput: cleanDigits,
+                ussdString: newUssd,
+                amount: numAmount,
+                itemName: editItemName.trim() || null,
+              }
+            : null,
+        );
+      }
+
+      setEditSuccessMsg(
+        "Destination updated! Existing printed cards and stickers now route to new details.",
+      );
+      setTimeout(() => {
+        setEditDialogOpen(false);
+        setEditSuccessMsg(null);
+      }, 1300);
+    } catch (err) {
+      console.warn("Failed to update QR destination:", err);
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   const handleDownload = async () => {
@@ -1227,6 +1381,202 @@ function Index() {
         preselectedProduct={selectedProductForOrder}
       />
 
+      {/* Edit Destination Modal for Dynamic QRs (No Reprinting) */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-extrabold text-foreground">
+              <Edit3 className="size-5 text-primary" />
+              <span>Edit Destination (No Reprinting)</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Update the phone number, merchant code, or price. Your physical stickers and stands
+              will continue working immediately!
+            </DialogDescription>
+          </DialogHeader>
+
+          {editSuccessMsg && (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+              <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+              <span>{editSuccessMsg}</span>
+            </div>
+          )}
+
+          <div className="space-y-3.5 py-1">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-foreground">Business Name</Label>
+              <Input
+                value={editBusinessName}
+                onChange={(e) => setEditBusinessName(e.target.value)}
+                placeholder="Business Name"
+                className="h-10 text-xs"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">Network</Label>
+                <Select value={editNetwork} onValueChange={(v) => setEditNetwork(v as Network)}>
+                  <SelectTrigger className="h-10 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MTN MoMo">MTN MoMo</SelectItem>
+                    <SelectItem value="Airtel Money">Airtel Money</SelectItem>
+                    <SelectItem value="Equity Bank (eKash)">Equity Bank (eKash)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">Type</Label>
+                <Select
+                  value={editPaymentType}
+                  onValueChange={(v) => setEditPaymentType(v as PaymentType)}
+                >
+                  <SelectTrigger className="h-10 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="momo_code">Merchant Code</SelectItem>
+                    <SelectItem value="phone">Phone Number</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-foreground">
+                {editPaymentType === "momo_code" ? "New MoMo / Till Code" : "New Phone Number"}
+              </Label>
+              <Input
+                value={editAccountValue}
+                onChange={(e) => setEditAccountValue(e.target.value)}
+                placeholder="e.g. 123456 or 0788123456"
+                className="h-10 font-mono font-bold"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">
+                  Fixed Amount (RWF) (Optional)
+                </Label>
+                <Input
+                  type="number"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  placeholder="e.g. 5000"
+                  className="h-10 font-mono font-bold"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">Item Name (Optional)</Label>
+                <Input
+                  value={editItemName}
+                  onChange={(e) => setEditItemName(e.target.value)}
+                  placeholder="e.g. Lunch Buffet"
+                  className="h-10 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-amber-500/10 border border-amber-500/25 p-3 text-[11px] text-amber-800 dark:text-amber-200 leading-relaxed">
+              💡 <strong>Instant propagation:</strong> Because this is an Ishyura Dynamic QR, anyone
+              who scans your already-printed tabletop stands or stickers will automatically route to
+              these new details!
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditDialogOpen(false)}
+              className="text-xs font-semibold rounded-xl"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSaveEditDestination}
+              disabled={editSaving}
+              className="text-xs font-bold rounded-xl bg-primary shadow-xs"
+            >
+              {editSaving ? (
+                <Loader2 className="size-3.5 animate-spin mr-1" />
+              ) : (
+                <Save className="size-3.5 mr-1" />
+              )}
+              {editSaving ? "Saving..." : "Save Destination"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Instant 1-Tap Customer Scan Preview Dialog */}
+      <Dialog
+        open={Boolean(scanPreviewUrl)}
+        onOpenChange={(open) => !open && setScanPreviewUrl(null)}
+      >
+        <DialogContent className="sm:max-w-md p-0 overflow-hidden border-border/80">
+          <div className="bg-card p-4 border-b border-border/60 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="flex size-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
+                <Zap className="size-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-extrabold text-foreground">
+                  1-Tap Customer Scan Experience
+                </h3>
+                <p className="text-[10px] text-muted-foreground">
+                  Served directly from Cloudflare Edge (Sub-50ms)
+                </p>
+              </div>
+            </div>
+            {scanPreviewUrl && (
+              <a
+                href={scanPreviewUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-lg border border-border/80 px-2.5 py-1 text-xs font-bold text-foreground hover:bg-muted"
+              >
+                <span>Full Page</span>
+                <ExternalLink className="size-3" />
+              </a>
+            )}
+          </div>
+
+          {scanPreviewUrl && (
+            <div className="p-4 bg-muted/30 flex justify-center">
+              <div className="w-full max-w-[360px] h-[480px] rounded-2xl overflow-hidden shadow-xl border border-border/80 bg-background">
+                <iframe
+                  src={scanPreviewUrl}
+                  title="Live Edge Pay Preview"
+                  className="w-full h-full border-none"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="p-3 bg-card border-t border-border/60 flex items-center justify-between text-xs">
+            <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <CheckCircle2 className="size-3.5 text-emerald-500" />
+              <span>Works seamlessly on iPhones &amp; Androids</span>
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setScanPreviewUrl(null)}
+              className="text-xs font-semibold rounded-lg h-8"
+            >
+              Close Preview
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Tab-driven View Switching */}
       {isAdmin &&
       (activeTab === "inquiries" ||
@@ -1300,13 +1650,26 @@ function Index() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <h3 className="font-extrabold text-base text-foreground truncate">
-                        {qr.business_name || qr.description || "Merchant Store"}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-extrabold text-base text-foreground truncate">
+                          {qr.business_name || qr.description || "Merchant Store"}
+                        </h3>
+                        {Boolean(qr.is_dynamic) && (
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 border border-amber-500/35 px-2 py-0.5 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400 shrink-0">
+                            <Sparkles className="size-2.5" />
+                            PRO DYNAMIC
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
                         <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-primary/10 text-primary">
                           {qr.network || "Mobile Money"}
                         </span>
+                        {qr.amount && (
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                            {qr.amount.toLocaleString()} RWF
+                          </span>
+                        )}
                         <span className="text-[11px] text-muted-foreground">
                           {new Date(qr.created_at).toLocaleDateString("en-GB", {
                             day: "numeric",
@@ -1317,29 +1680,55 @@ function Index() {
                       </div>
                     </div>
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
-                      Printed &amp; Active
+                      Active
                     </span>
                   </div>
 
                   <div className="p-3 rounded-xl bg-muted/40 border border-border/40 font-mono text-xs font-bold text-foreground flex items-center justify-between">
-                    <span className="tracking-wide">{qr.dial_code}</span>
-                    <span className="text-[10px] text-muted-foreground font-sans font-normal">
-                      Verified Route
+                    <span className="tracking-wide truncate mr-2">{qr.dial_code}</span>
+                    <span className="text-[10px] text-muted-foreground font-sans font-normal shrink-0">
+                      {qr.is_dynamic ? "Edge Route" : "Verified Route"}
                     </span>
                   </div>
 
-                  <div className="pt-2 border-t border-border/40 flex items-center justify-between gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setInquiryDialogOpen(true);
-                      }}
-                      className="flex-1 text-xs font-semibold gap-1.5 rounded-xl border-border/80 hover:bg-muted"
-                    >
-                      <MessageSquare className="size-3.5" />
-                      <span>Request Card</span>
-                    </Button>
+                  <div className="pt-2 border-t border-border/40 flex flex-wrap items-center justify-between gap-2">
+                    {qr.is_dynamic ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const url = getDynamicPayUrl(qr.id);
+                            setScanPreviewUrl(url);
+                          }}
+                          className="flex-1 text-xs font-bold gap-1 rounded-xl border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary"
+                        >
+                          <Zap className="size-3.5" />
+                          <span>Test Pay</span>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleOpenEditDestination(qr)}
+                          className="flex-1 text-xs font-bold gap-1 rounded-xl border-border/80 hover:bg-muted"
+                        >
+                          <Edit3 className="size-3.5" />
+                          <span>Edit Destination</span>
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setInquiryDialogOpen(true);
+                        }}
+                        className="flex-1 text-xs font-semibold gap-1.5 rounded-xl border-border/80 hover:bg-muted"
+                      >
+                        <MessageSquare className="size-3.5" />
+                        <span>Request Card</span>
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       onClick={() => {
@@ -1615,6 +2004,160 @@ function Index() {
                   />
                 </div>
 
+                {/* PRO Feature: Dynamic Smart QR & Pre-defined Price */}
+                <div className="rounded-2xl border border-border/80 bg-muted/20 p-4 space-y-4 transition-all">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Label
+                          htmlFor="dynamic-toggle"
+                          className="text-sm font-bold text-foreground cursor-pointer"
+                        >
+                          Dynamic Smart QR
+                        </Label>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
+                          <Sparkles className="size-3" />
+                          PRO
+                        </span>
+                        <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                          Free Testing Preview
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Never reprint stickers. Change your recipient phone or merchant code
+                        anytime. Customers scanning get an instant sub-50ms 1-Tap Pay Sheet.
+                      </p>
+                    </div>
+                    <Switch
+                      id="dynamic-toggle"
+                      checked={isDynamic}
+                      onCheckedChange={(val) => {
+                        setIsDynamic(val);
+                        if (confirmedData) setConfirmedData(null);
+                      }}
+                    />
+                  </div>
+
+                  {isDynamic && (
+                    <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 text-xs space-y-1 text-primary animate-in fade-in-50 duration-200">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <Zap className="size-3.5" />
+                        <span>Instant Edge Pay Active (Sub-50ms)</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-normal">
+                        Customers scanning will see your verified business name and can pay with a
+                        single tap on any smartphone.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="border-t border-border/50 pt-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Label
+                            htmlFor="fixed-price-toggle"
+                            className="text-sm font-bold text-foreground cursor-pointer"
+                          >
+                            Pre-defined Price (Fixed Amount)
+                          </Label>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/40 px-2 py-0.5 text-[10px] font-black uppercase text-purple-600 dark:text-purple-400">
+                            PRO
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Pre-fill the exact price for menu items, haircuts, buffet, tickets, or car
+                          washes.
+                        </p>
+                      </div>
+                      <Switch
+                        id="fixed-price-toggle"
+                        checked={hasFixedAmount}
+                        onCheckedChange={(val) => {
+                          setHasFixedAmount(val);
+                          if (confirmedData) setConfirmedData(null);
+                        }}
+                      />
+                    </div>
+
+                    {hasFixedAmount && (
+                      <div className="mt-3.5 space-y-3 rounded-xl bg-card/80 border border-border/70 p-3.5 animate-in fade-in-50 duration-200">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor="fixed-amount"
+                              className="text-xs font-bold text-foreground"
+                            >
+                              Fixed Amount (RWF)
+                            </Label>
+                            <div className="relative">
+                              <Input
+                                id="fixed-amount"
+                                type="number"
+                                inputMode="numeric"
+                                placeholder="e.g. 5000"
+                                value={fixedAmount}
+                                onChange={(e) => {
+                                  setFixedAmount(e.target.value);
+                                  if (confirmedData) setConfirmedData(null);
+                                }}
+                                className="h-10 font-mono font-bold pr-14"
+                              />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">
+                                RWF
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor="item-name"
+                              className="text-xs font-bold text-foreground"
+                            >
+                              Item or Service Label (Optional)
+                            </Label>
+                            <Input
+                              id="item-name"
+                              type="text"
+                              placeholder="e.g. Lunch Buffet, Car Wash"
+                              value={itemName}
+                              onChange={(e) => {
+                                setItemName(e.target.value);
+                                if (confirmedData) setConfirmedData(null);
+                              }}
+                              className="h-10 text-xs"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Quick Preset Chips */}
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="text-[10px] font-semibold text-muted-foreground mr-1">
+                            Quick:
+                          </span>
+                          {["500", "1000", "2000", "3500", "5000", "10000"].map((amt) => (
+                            <button
+                              key={amt}
+                              type="button"
+                              onClick={() => {
+                                setFixedAmount(amt);
+                                if (confirmedData) setConfirmedData(null);
+                              }}
+                              className={`rounded-lg px-2 py-1 text-[11px] font-bold border transition-colors ${
+                                fixedAmount === amt
+                                  ? "bg-primary text-primary-foreground border-primary"
+                                  : "bg-muted/50 border-border text-foreground hover:bg-muted"
+                              }`}
+                            >
+                              {parseInt(amt).toLocaleString()} RWF
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {/* Confirmation Action & Checklist */}
                 <div className="pt-2">
                   {confirmedData ? (
@@ -1879,6 +2422,13 @@ function Index() {
                         </span>
                       </div>
 
+                      {confirmedData.isDynamic && (
+                        <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[9px] font-black uppercase text-amber-700">
+                          <Sparkles className="size-2.5" />
+                          <span>Smart Dynamic QR • PRO</span>
+                        </div>
+                      )}
+
                       <p className="mt-1.5 max-w-full truncate text-2xl font-black tracking-tight">
                         {confirmedData.businessName}
                       </p>
@@ -1938,6 +2488,17 @@ function Index() {
                         )}
                       </div>
 
+                      {confirmedData.amount && (
+                        <div className="mt-2.5 w-full rounded-xl bg-primary/10 border border-primary/20 px-3.5 py-2 text-center">
+                          <p className="text-[10px] uppercase font-bold text-primary tracking-wider">
+                            {confirmedData.itemName || "Pre-defined Amount"}
+                          </p>
+                          <p className="text-xl font-black text-print-ink">
+                            {confirmedData.amount.toLocaleString()} RWF
+                          </p>
+                        </div>
+                      )}
+
                       <p className="mt-3 text-[11px] font-medium text-print-muted-ink">
                         Scan with camera &amp; tap Call to pay
                       </p>
@@ -1980,6 +2541,67 @@ function Index() {
                         <span>Print Card</span>
                       </Button>
                     </div>
+
+                    {confirmedData.isDynamic && (
+                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                            <Sparkles className="size-3.5 text-amber-500" />
+                            Dynamic Smart QR Controls
+                          </span>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-600 dark:text-amber-400">
+                            PRO Preview
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              const url =
+                                confirmedData.dynamicUrl ||
+                                getDynamicPayUrl(confirmedData.id || "preview");
+                              setScanPreviewUrl(url);
+                            }}
+                            className="w-full h-9 text-xs font-bold gap-1.5 border-primary/40 bg-primary/10 hover:bg-primary/20 text-primary"
+                          >
+                            <Zap className="size-3.5" />
+                            <span>Test Pay Sheet</span>
+                          </Button>
+
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              handleOpenEditDestination({
+                                id: confirmedData.id || "preview",
+                                owner_id: currentUser?.id || "",
+                                business_name: confirmedData.businessName,
+                                network: confirmedData.network,
+                                payment_type: confirmedData.paymentType,
+                                dial_code: confirmedData.ussdString,
+                                phone_number: confirmedData.sanitizedInput,
+                                amount: confirmedData.amount,
+                                item_name: confirmedData.itemName,
+                                is_dynamic: true,
+                                description: `${confirmedData.businessName} (${confirmedData.network})`,
+                                created_at: new Date().toISOString(),
+                              });
+                            }}
+                            className="w-full h-9 text-xs font-bold gap-1.5 border-border hover:bg-muted"
+                          >
+                            <Edit3 className="size-3.5 text-foreground" />
+                            <span>Edit Number</span>
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground leading-normal">
+                          ⚡ <strong>Never reprint:</strong> Update your phone number anytime.
+                          Scanners immediately route to the new details without reprinting the card!
+                        </p>
+                      </div>
+                    )}
 
                     {/* Print and Save Note */}
                     <div className="p-3 rounded-xl bg-muted/50 border border-border/70 text-xs text-muted-foreground space-y-1">
