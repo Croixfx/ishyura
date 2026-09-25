@@ -611,6 +611,50 @@ export class IshyuraClient {
     throw new Error("QR code not found to update.");
   }
 
+  static async deleteQrCode(id: string): Promise<{ success: boolean; message?: string }> {
+    const token = this.getToken();
+    try {
+      const res = await fetch(getApiEndpoint(`qr-codes?id=${encodeURIComponent(id)}`), {
+        method: "DELETE",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (res.ok) {
+        const local = this.getLocalQrList();
+        const filtered = local.filter((item) => item.id !== id);
+        localStorage.setItem(QR_STORE_KEY, JSON.stringify(filtered));
+        return await res.json();
+      }
+    } catch {
+      // Try fallback POST route
+    }
+
+    try {
+      const res = await fetch(getApiEndpoint("qr-codes/delete"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ id }),
+      });
+      if (res.ok) {
+        const local = this.getLocalQrList();
+        const filtered = local.filter((item) => item.id !== id);
+        localStorage.setItem(QR_STORE_KEY, JSON.stringify(filtered));
+        return await res.json();
+      }
+    } catch {
+      // Local fallback
+    }
+
+    const local = this.getLocalQrList();
+    const filtered = local.filter((item) => item.id !== id);
+    localStorage.setItem(QR_STORE_KEY, JSON.stringify(filtered));
+    return { success: true, message: "QR code removed." };
+  }
+
   static async listQrCodes(): Promise<QRCodeRecord[]> {
     const token = this.getToken();
     const user = this.getSavedUser();
@@ -987,20 +1031,113 @@ export class IshyuraClient {
     return await res.json();
   }
 
+  static async createAdminQrCode(
+    adminKey: string,
+    payload: {
+      phone_number: string;
+      business_name: string;
+      network: string;
+      payment_type: string;
+      dial_code: string;
+      amount?: number | null;
+      item_name?: string | null;
+      is_dynamic?: boolean | number;
+    },
+  ): Promise<QRCodeRecord> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
+    const res = await fetch(getApiEndpoint("admin/qr-codes"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": cleanKey,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Failed to create QR code." }));
+      throw new Error(err.detail || "Failed to create QR code.");
+    }
+    return await res.json();
+  }
+
+  static async updateAdminQrCode(
+    adminKey: string,
+    id: string,
+    updates: {
+      business_name?: string;
+      network?: string;
+      payment_type?: string;
+      dial_code?: string;
+      phone_number?: string;
+      amount?: number | null;
+      item_name?: string | null;
+      is_dynamic?: boolean | number;
+    },
+  ): Promise<QRCodeRecord> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
+    const res = await fetch(getApiEndpoint("admin/qr-codes"), {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": cleanKey,
+      },
+      body: JSON.stringify({ id, ...updates }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Failed to update QR code." }));
+      throw new Error(err.detail || "Failed to update QR code.");
+    }
+    return await res.json();
+  }
+
   static async deleteAdminQrCode(
     adminKey: string,
     qrId: string,
   ): Promise<{ success: boolean; message?: string }> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/qr-codes?id=${encodeURIComponent(qrId)}`), {
-      method: "DELETE",
-      headers: { "x-admin-key": cleanKey },
-    });
-    if (!res.ok) {
+    try {
+      const res = await fetch(getApiEndpoint(`admin/qr-codes?id=${encodeURIComponent(qrId)}`), {
+        method: "DELETE",
+        headers: { "x-admin-key": cleanKey },
+      });
+      if (res.ok) {
+        const local = this.getLocalQrList();
+        const filtered = local.filter((q) => q.id !== qrId);
+        localStorage.setItem(QR_STORE_KEY, JSON.stringify(filtered));
+        return await res.json();
+      }
+    } catch {
+      // Try POST fallback
+    }
+
+    try {
+      const res = await fetch(getApiEndpoint("admin/qr-codes/delete"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-key": cleanKey,
+        },
+        body: JSON.stringify({ id: qrId }),
+      });
+      if (res.ok) {
+        const local = this.getLocalQrList();
+        const filtered = local.filter((q) => q.id !== qrId);
+        localStorage.setItem(QR_STORE_KEY, JSON.stringify(filtered));
+        return await res.json();
+      }
       const err = await res.json().catch(() => ({ detail: "Failed to delete/unlock QR." }));
       throw new Error(err.detail || "Failed to delete/unlock QR.");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to delete QR.";
+      throw new Error(msg);
     }
-    return await res.json();
+  }
+
+  static async unlockQr(
+    adminKey: string,
+    qrId: string,
+  ): Promise<{ success: boolean; message?: string }> {
+    return this.deleteAdminQrCode(adminKey, qrId);
   }
 
   static async getAdminAdmins(adminKey?: string): Promise<AdminUserRecord[]> {

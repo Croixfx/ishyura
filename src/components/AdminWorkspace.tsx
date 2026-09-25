@@ -11,6 +11,15 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
   ShieldCheck,
   Users,
   QrCode,
@@ -29,6 +38,14 @@ import {
   ExternalLink,
   Clock,
   Filter,
+  Trash2,
+  Edit3,
+  PlusCircle,
+  Sparkles,
+  Download,
+  AlertCircle,
+  Save,
+  Zap,
 } from "lucide-react";
 import {
   IshyuraClient,
@@ -68,12 +85,48 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
   const [searchQuery, setSearchQuery] = useState("");
   const [inquiryFilter, setInquiryFilter] = useState<"all" | "new" | "resolved">("all");
   const [orderFilter, setOrderFilter] = useState<"all" | "pending" | "delivered">("all");
+  const [qrNetworkFilter, setQrNetworkFilter] = useState<"all" | "MTN" | "Airtel" | "Equity">(
+    "all",
+  );
+  const [qrTypeFilter, setQrTypeFilter] = useState<"all" | "dynamic" | "static" | "fixed_price">(
+    "all",
+  );
 
   // QR Print & Unlock Modal
   const [selectedQrForPrint, setSelectedQrForPrint] = useState<QRCodeRecord | null>(null);
   const [unlockingQrId, setUnlockingQrId] = useState<string | null>(null);
   const [unlockMsg, setUnlockMsg] = useState<string | null>(null);
+  const [downloadingCard, setDownloadingCard] = useState(false);
   const printCardRef = useRef<HTMLDivElement>(null);
+
+  // QR CRUD Modals State
+  const [createQrDialogOpen, setCreateQrDialogOpen] = useState(false);
+  const [newQrBusinessName, setNewQrBusinessName] = useState("");
+  const [newQrPhone, setNewQrPhone] = useState("");
+  const [newQrNetwork, setNewQrNetwork] = useState("MTN MoMo");
+  const [newQrPaymentType, setNewQrPaymentType] = useState<"momo_code" | "phone">("momo_code");
+  const [newQrAccountValue, setNewQrAccountValue] = useState("");
+  const [newQrAmount, setNewQrAmount] = useState("");
+  const [newQrItemName, setNewQrItemName] = useState("");
+  const [newQrIsDynamic, setNewQrIsDynamic] = useState(false);
+  const [creatingQr, setCreatingQr] = useState(false);
+
+  // Edit QR State
+  const [editQrDialogOpen, setEditQrDialogOpen] = useState(false);
+  const [editingQr, setEditingQr] = useState<QRCodeRecord | null>(null);
+  const [editQrBusinessName, setEditQrBusinessName] = useState("");
+  const [editQrPhone, setEditQrPhone] = useState("");
+  const [editQrNetwork, setEditQrNetwork] = useState("MTN MoMo");
+  const [editQrPaymentType, setEditQrPaymentType] = useState<"momo_code" | "phone">("momo_code");
+  const [editQrAccountValue, setEditQrAccountValue] = useState("");
+  const [editQrAmount, setEditQrAmount] = useState("");
+  const [editQrItemName, setEditQrItemName] = useState("");
+  const [editQrIsDynamic, setEditQrIsDynamic] = useState(false);
+  const [updatingQr, setUpdatingQr] = useState(false);
+
+  // Delete Confirm State
+  const [deleteConfirmQr, setDeleteConfirmQr] = useState<QRCodeRecord | null>(null);
+  const [deletingQr, setDeletingQr] = useState(false);
 
   // New admin state
   const [newAdminEmail, setNewAdminEmail] = useState("");
@@ -200,14 +253,165 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
     }
   };
 
+  // Helper to build USSD
+  const buildUssdCode = (net: string, type: string, val: string, amt?: number | null) => {
+    const cleanDigits = val.replace(/[^0-9]/g, "");
+    if (net.toLowerCase().includes("equity") || net.toLowerCase().includes("ekash")) {
+      return amt ? `*555*2*${cleanDigits}*${Math.round(amt)}#` : `*555*2*${cleanDigits}#`;
+    }
+    const prefix = type === "momo_code" ? "*182*8*1*" : "*182*1*1*";
+    return amt ? `${prefix}${cleanDigits}*${Math.round(amt)}#` : `${prefix}${cleanDigits}#`;
+  };
+
+  // Handle Admin Creating QR
+  const handleCreateQr = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newQrBusinessName.trim() || !newQrAccountValue.trim()) return;
+    setCreatingQr(true);
+    try {
+      const numAmt = newQrAmount.trim() ? parseFloat(newQrAmount) : null;
+      const cleanDigits = newQrAccountValue.replace(/[^0-9]/g, "");
+      const ussd = buildUssdCode(newQrNetwork, newQrPaymentType, cleanDigits, numAmt);
+
+      const created = await IshyuraClient.createAdminQrCode(adminKey, {
+        business_name: newQrBusinessName.trim(),
+        phone_number: newQrPhone.trim() || cleanDigits,
+        network: newQrNetwork,
+        payment_type: newQrPaymentType,
+        dial_code: ussd,
+        amount: numAmt,
+        item_name: newQrItemName.trim() || null,
+        is_dynamic: newQrIsDynamic ? 1 : 0,
+      });
+
+      setQrCodes((prev) => [created, ...prev]);
+      if (stats) setStats({ ...stats, totalQrCodes: stats.totalQrCodes + 1 });
+      setUnlockMsg(`Created QR card for ${created.business_name} (${created.network}).`);
+      setTimeout(() => setUnlockMsg(null), 4000);
+
+      // Reset & close
+      setNewQrBusinessName("");
+      setNewQrPhone("");
+      setNewQrAccountValue("");
+      setNewQrAmount("");
+      setNewQrItemName("");
+      setNewQrIsDynamic(false);
+      setCreateQrDialogOpen(false);
+    } catch (err) {
+      console.error("Failed to create QR", err);
+    } finally {
+      setCreatingQr(false);
+    }
+  };
+
+  // Handle Starting Edit QR
+  const handleStartEditQr = (qr: QRCodeRecord) => {
+    setEditingQr(qr);
+    setEditQrBusinessName(qr.business_name || "");
+    setEditQrPhone(qr.phone_number || "");
+    setEditQrNetwork(qr.network || "MTN MoMo");
+    setEditQrPaymentType((qr.payment_type as "momo_code" | "phone") || "momo_code");
+    const digits = (qr.dial_code || "").replace(/[^0-9]/g, "");
+    setEditQrAccountValue(digits || qr.phone_number || "");
+    setEditQrAmount(qr.amount ? String(qr.amount) : "");
+    setEditQrItemName(qr.item_name || "");
+    setEditQrIsDynamic(Boolean(qr.is_dynamic));
+    setEditQrDialogOpen(true);
+  };
+
+  // Handle Admin Updating QR
+  const handleUpdateQr = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingQr || !editQrBusinessName.trim() || !editQrAccountValue.trim()) return;
+    setUpdatingQr(true);
+    try {
+      const numAmt = editQrAmount.trim() ? parseFloat(editQrAmount) : null;
+      const cleanDigits = editQrAccountValue.replace(/[^0-9]/g, "");
+      const ussd = buildUssdCode(editQrNetwork, editQrPaymentType, cleanDigits, numAmt);
+
+      const updated = await IshyuraClient.updateAdminQrCode(adminKey, editingQr.id, {
+        business_name: editQrBusinessName.trim(),
+        phone_number: editQrPhone.trim() || cleanDigits,
+        network: editQrNetwork,
+        payment_type: editQrPaymentType,
+        dial_code: ussd,
+        amount: numAmt,
+        item_name: editQrItemName.trim() || null,
+        is_dynamic: editQrIsDynamic ? 1 : 0,
+      });
+
+      setQrCodes((prev) => prev.map((q) => (q.id === editingQr.id ? { ...q, ...updated } : q)));
+      setUnlockMsg(
+        `Updated details for ${updated.business_name}. Existing prints route to new data!`,
+      );
+      setTimeout(() => setUnlockMsg(null), 4000);
+      setEditQrDialogOpen(false);
+      setEditingQr(null);
+    } catch (err) {
+      console.error("Failed to update QR", err);
+    } finally {
+      setUpdatingQr(false);
+    }
+  };
+
+  // Handle Admin Deleting QR (which releases duplicate lock so merchant can print/generate again)
+  const handleDeleteQr = async () => {
+    if (!deleteConfirmQr) return;
+    setDeletingQr(true);
+    try {
+      await IshyuraClient.deleteAdminQrCode(adminKey, deleteConfirmQr.id);
+      setQrCodes((prev) => prev.filter((q) => q.id !== deleteConfirmQr.id));
+      if (stats) setStats({ ...stats, totalQrCodes: Math.max(0, stats.totalQrCodes - 1) });
+      setUnlockMsg(
+        `QR Card deleted for ${deleteConfirmQr.business_name}. The merchant is now unlocked and can generate or print a new card.`,
+      );
+      setTimeout(() => setUnlockMsg(null), 5000);
+      setDeleteConfirmQr(null);
+    } catch (err) {
+      console.error("Failed to delete QR", err);
+    } finally {
+      setDeletingQr(false);
+    }
+  };
+
+  // Handle Downloading PNG for Admin Print Modal
+  const handleDownloadPrintCard = async () => {
+    if (!printCardRef.current || !selectedQrForPrint) return;
+    setDownloadingCard(true);
+    try {
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(printCardRef.current, { pixelRatio: 3 });
+      const link = document.createElement("a");
+      const netSlug = selectedQrForPrint.network.replace(/[^a-zA-Z0-9]/g, "_");
+      link.download = `${selectedQrForPrint.business_name.replace(/\s+/g, "_")}_${netSlug}_card.png`;
+      link.href = dataUrl;
+      link.click();
+      IshyuraClient.recordDownload({
+        business_name: selectedQrForPrint.business_name,
+        network: selectedQrForPrint.network,
+        dial_code: selectedQrForPrint.dial_code,
+        phone_number: selectedQrForPrint.phone_number,
+        file_format: "png",
+      }).catch(() => {});
+    } catch (err) {
+      console.error("Failed to download card PNG", err);
+    } finally {
+      setDownloadingCard(false);
+    }
+  };
+
   // Handle unlocking single print
   const handleUnlockQr = async (qrId: string) => {
     setUnlockingQrId(qrId);
     setUnlockMsg(null);
     try {
       await IshyuraClient.unlockQr(adminKey, qrId);
-      setUnlockMsg(`QR Card ${qrId} has been unlocked for re-printing.`);
-      setTimeout(() => setUnlockMsg(null), 4000);
+      setQrCodes((prev) => prev.filter((q) => q.id !== qrId));
+      if (stats) setStats({ ...stats, totalQrCodes: Math.max(0, stats.totalQrCodes - 1) });
+      setUnlockMsg(
+        `QR Card ${qrId} unlocked and cleared. The merchant can now generate and print a new card without restrictions.`,
+      );
+      setTimeout(() => setUnlockMsg(null), 5000);
     } catch (err) {
       console.error("Failed to unlock QR", err);
     } finally {
@@ -266,12 +470,24 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
     return true;
   });
 
-  const filteredQrs = qrCodes.filter(
-    (q) =>
-      (q.business_name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (q.dial_code || "").includes(searchQuery) ||
-      (q.owner_id || "").toLowerCase().includes(searchQuery.toLowerCase()),
-  );
+  const filteredQrs = qrCodes.filter((q) => {
+    const qText =
+      `${q.business_name || ""} ${q.dial_code || ""} ${q.phone_number || ""} ${q.owner_id || ""} ${q.network || ""} ${q.item_name || ""}`.toLowerCase();
+    if (searchQuery.trim() && !qText.includes(searchQuery.toLowerCase().trim())) {
+      return false;
+    }
+    if (qrNetworkFilter !== "all") {
+      if (qrNetworkFilter === "MTN" && !q.network.toLowerCase().includes("mtn")) return false;
+      if (qrNetworkFilter === "Airtel" && !q.network.toLowerCase().includes("airtel")) return false;
+      if (qrNetworkFilter === "Equity" && !q.network.toLowerCase().includes("equity")) return false;
+    }
+    if (qrTypeFilter !== "all") {
+      if (qrTypeFilter === "dynamic" && !q.is_dynamic) return false;
+      if (qrTypeFilter === "static" && q.is_dynamic) return false;
+      if (qrTypeFilter === "fixed_price" && (!q.amount || q.amount <= 0)) return false;
+    }
+    return true;
+  });
 
   const filteredMerchants = merchants.filter(
     (m) =>
@@ -654,11 +870,100 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
           </div>
         )}
 
-        {/* TAB 3: MERCHANT QR REGISTRY */}
+        {/* TAB 3: MERCHANT QR REGISTRY (Full Admin CRUD) */}
         {activeTab === "qrs" && (
-          <div className="space-y-3">
+          <div className="space-y-4">
+            {/* Quick Stats & Summary for QR Registry */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-3 rounded-xl bg-card/60 border border-border/70 space-y-0.5">
+                <span className="text-[10px] uppercase font-bold text-muted-foreground">
+                  Total QRs
+                </span>
+                <p className="text-lg font-black text-foreground">{qrCodes.length}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 space-y-0.5">
+                <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                  <Sparkles className="size-2.5" />
+                  Dynamic PRO
+                </span>
+                <p className="text-lg font-black text-amber-700 dark:text-amber-300">
+                  {qrCodes.filter((q) => Boolean(q.is_dynamic)).length}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 space-y-0.5">
+                <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-300">
+                  Fixed Price
+                </span>
+                <p className="text-lg font-black text-emerald-700 dark:text-emerald-300">
+                  {qrCodes.filter((q) => Boolean(q.amount && q.amount > 0)).length}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-primary/10 border border-primary/25 space-y-0.5">
+                <span className="text-[10px] uppercase font-bold text-primary">Matching</span>
+                <p className="text-lg font-black text-primary">{filteredQrs.length}</p>
+              </div>
+            </div>
+
+            {/* Action & Filter Bar for QR Registry */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-card/40 border border-border/70 p-3.5 rounded-2xl">
+              <div>
+                <h2 className="text-sm font-black text-foreground">Merchant Payment QR Registry</h2>
+                <p className="text-xs text-muted-foreground">
+                  Full administrative authority to create, edit, reprint, or delete QR codes and
+                  manage single-generation locks.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Network Filter */}
+                <Select
+                  value={qrNetworkFilter}
+                  onValueChange={(val) =>
+                    setQrNetworkFilter(val as "all" | "MTN" | "Airtel" | "Equity")
+                  }
+                >
+                  <SelectTrigger className="h-8 text-xs font-semibold w-32 rounded-xl bg-background">
+                    <SelectValue placeholder="Network" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Networks</SelectItem>
+                    <SelectItem value="MTN">MTN MoMo</SelectItem>
+                    <SelectItem value="Airtel">Airtel Money</SelectItem>
+                    <SelectItem value="Equity">Equity eKash</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {/* Type Filter */}
+                <Select
+                  value={qrTypeFilter}
+                  onValueChange={(val) =>
+                    setQrTypeFilter(val as "all" | "dynamic" | "static" | "fixed_price")
+                  }
+                >
+                  <SelectTrigger className="h-8 text-xs font-semibold w-36 rounded-xl bg-background">
+                    <SelectValue placeholder="QR Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Types</SelectItem>
+                    <SelectItem value="dynamic">Dynamic PRO</SelectItem>
+                    <SelectItem value="static">Static Free</SelectItem>
+                    <SelectItem value="fixed_price">Pre-set Price</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Button
+                  size="sm"
+                  onClick={() => setCreateQrDialogOpen(true)}
+                  className="h-8 text-xs font-bold gap-1.5 rounded-xl bg-primary shadow-xs shrink-0"
+                >
+                  <PlusCircle className="size-3.5" />
+                  <span>Create Merchant QR</span>
+                </Button>
+              </div>
+            </div>
+
             {unlockMsg && (
-              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-semibold flex items-center gap-2">
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-semibold flex items-center gap-2 animate-in fade-in-50">
                 <CheckCircle2 className="size-4 shrink-0" />
                 <span>{unlockMsg}</span>
               </div>
@@ -668,27 +973,39 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
               <div className="p-12 rounded-2xl border border-dashed border-border/80 text-center bg-card/20 space-y-2">
                 <QrCode className="size-8 mx-auto text-muted-foreground/40" />
                 <p className="text-sm font-bold text-foreground">No QR payment cards found</p>
+                <p className="text-xs text-muted-foreground">
+                  Click &quot;Create Merchant QR&quot; above to issue an official payment card on
+                  behalf of any merchant.
+                </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {filteredQrs.map((qr) => (
                   <div
                     key={qr.id}
-                    className="p-4 rounded-2xl border border-border/70 bg-card/40 space-y-3 flex flex-col justify-between shadow-2xs"
+                    className="p-4 rounded-2xl border border-border/70 bg-card/40 space-y-3 flex flex-col justify-between shadow-2xs hover:border-border transition-all"
                   >
                     <div>
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <h3 className="font-bold text-sm text-foreground truncate">
+                          <h3 className="font-extrabold text-sm text-foreground truncate">
                             {qr.business_name || "Payment Card"}
                           </h3>
-                          <div className="flex items-center gap-2 mt-1">
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
                             <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-primary/10 text-primary">
                               {qr.network}
                             </span>
-                            <span className="text-[10px] text-muted-foreground font-mono">
-                              ID: {qr.id.slice(0, 8)}...
-                            </span>
+                            {Boolean(qr.is_dynamic) && (
+                              <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 flex items-center gap-0.5">
+                                <Sparkles className="size-2.5" />
+                                PRO DYNAMIC
+                              </span>
+                            )}
+                            {qr.amount && (
+                              <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                                {qr.amount.toLocaleString()} RWF
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -698,22 +1015,41 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                       </div>
 
                       <div className="mt-3 p-2.5 rounded-xl bg-muted/40 font-mono text-xs text-foreground flex items-center justify-between">
-                        <span className="font-bold">{qr.dial_code}</span>
-                        <span className="text-[10px] text-muted-foreground">
+                        <span className="font-bold truncate mr-2">{qr.dial_code}</span>
+                        <span className="text-[10px] text-muted-foreground shrink-0 font-sans">
                           {new Date(qr.created_at).toLocaleDateString()}
                         </span>
                       </div>
+
+                      {qr.phone_number && (
+                        <p className="text-[11px] text-muted-foreground mt-1.5">
+                          Owner Phone:{" "}
+                          <strong className="text-foreground">{qr.phone_number}</strong>
+                        </p>
+                      )}
                     </div>
 
-                    <div className="flex items-center justify-between pt-2.5 border-t border-border/40 gap-2">
+                    <div className="pt-2.5 border-t border-border/40 flex flex-wrap items-center justify-between gap-1.5">
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() => setSelectedQrForPrint(qr)}
-                        className="h-7 text-xs font-semibold gap-1.5 rounded-lg"
+                        className="h-7 text-xs font-semibold gap-1 rounded-lg px-2"
+                        title="View and print official counter card"
                       >
                         <Printer className="size-3" />
-                        <span>Admin Re-Print</span>
+                        <span>Print</span>
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStartEditQr(qr)}
+                        className="h-7 text-xs font-semibold gap-1 rounded-lg px-2"
+                        title="Edit merchant details, number or price"
+                      >
+                        <Edit3 className="size-3" />
+                        <span>Edit</span>
                       </Button>
 
                       <Button
@@ -721,10 +1057,22 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                         variant="ghost"
                         disabled={unlockingQrId === qr.id}
                         onClick={() => handleUnlockQr(qr.id)}
-                        className="h-7 text-xs font-semibold text-amber-500 hover:text-amber-600 gap-1.5"
+                        className="h-7 text-xs font-semibold text-amber-500 hover:text-amber-600 gap-1 px-2"
+                        title="Release single-generation lock so merchant can print again"
                       >
                         <Unlock className="size-3" />
-                        <span>Unlock Re-Issue</span>
+                        <span>Unlock</span>
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleteConfirmQr(qr)}
+                        className="h-7 text-xs font-semibold text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 gap-1 px-2"
+                        title="Permanently delete QR and release lock"
+                      >
+                        <Trash2 className="size-3" />
+                        <span>Delete</span>
                       </Button>
                     </div>
                   </div>
@@ -896,43 +1244,462 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
         )}
       </div>
 
-      {/* Admin QR Emergency Re-Print Modal */}
+      {/* 1. Admin Create Merchant QR Modal */}
+      <Dialog open={createQrDialogOpen} onOpenChange={setCreateQrDialogOpen}>
+        <DialogContent className="sm:max-w-md bg-card border-border/80">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-extrabold text-foreground">
+              <PlusCircle className="size-5 text-primary" />
+              <span>Create Merchant QR Code</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Directly issue an official payment QR code for a shop or merchant.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleCreateQr} className="space-y-3.5 py-1">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-foreground">Shop / Business Name</Label>
+              <Input
+                required
+                value={newQrBusinessName}
+                onChange={(e) => setNewQrBusinessName(e.target.value)}
+                placeholder="e.g. Chez Aline Boutique"
+                className="h-9 text-xs"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">Payment Network</Label>
+                <Select value={newQrNetwork} onValueChange={setNewQrNetwork}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MTN MoMo">MTN MoMo</SelectItem>
+                    <SelectItem value="Airtel Money">Airtel Money</SelectItem>
+                    <SelectItem value="Equity Bank (eKash)">Equity Bank (eKash)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">Payment Type</Label>
+                <Select
+                  value={newQrPaymentType}
+                  onValueChange={(v) => setNewQrPaymentType(v as "momo_code" | "phone")}
+                >
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="momo_code">Merchant Code</SelectItem>
+                    <SelectItem value="phone">Phone Number</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">
+                  {newQrPaymentType === "momo_code" ? "MoMo Pay / Till Code" : "Account Phone"}
+                </Label>
+                <Input
+                  required
+                  value={newQrAccountValue}
+                  onChange={(e) => setNewQrAccountValue(e.target.value)}
+                  placeholder="e.g. 123456 or 0788123456"
+                  className="h-9 font-mono font-bold text-xs"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">Owner Phone (Optional)</Label>
+                <Input
+                  value={newQrPhone}
+                  onChange={(e) => setNewQrPhone(e.target.value)}
+                  placeholder="e.g. 0788111222"
+                  className="h-9 font-mono text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">
+                  Fixed Price (RWF) (Optional)
+                </Label>
+                <Input
+                  type="number"
+                  value={newQrAmount}
+                  onChange={(e) => setNewQrAmount(e.target.value)}
+                  placeholder="e.g. 5000"
+                  className="h-9 font-mono font-bold text-xs"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">Item Name (Optional)</Label>
+                <Input
+                  value={newQrItemName}
+                  onChange={(e) => setNewQrItemName(e.target.value)}
+                  placeholder="e.g. Lunch Buffet"
+                  className="h-9 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-xl bg-muted/40 p-2.5 border border-border/60">
+              <div className="space-y-0.5">
+                <Label className="text-xs font-bold text-foreground cursor-pointer">
+                  Dynamic Smart QR
+                </Label>
+                <p className="text-[10px] text-muted-foreground">
+                  Allows changing number later without reprinting
+                </p>
+              </div>
+              <Switch checked={newQrIsDynamic} onCheckedChange={setNewQrIsDynamic} />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setCreateQrDialogOpen(false)}
+                className="text-xs font-semibold rounded-xl"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={creatingQr}
+                size="sm"
+                className="text-xs font-bold rounded-xl gap-1.5 bg-primary"
+              >
+                {creatingQr ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Save className="size-3.5" />
+                )}
+                <span>{creatingQr ? "Creating..." : "Create Merchant QR"}</span>
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* 2. Admin Edit Merchant QR Modal */}
+      <Dialog open={editQrDialogOpen} onOpenChange={setEditQrDialogOpen}>
+        <DialogContent className="sm:max-w-md bg-card border-border/80">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-extrabold text-foreground">
+              <Edit3 className="size-5 text-primary" />
+              <span>Edit Merchant QR Code</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Modify business name, destination phone number, or pre-filled amount.
+            </DialogDescription>
+          </DialogHeader>
+
+          {editingQr && (
+            <form onSubmit={handleUpdateQr} className="space-y-3.5 py-1">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-foreground">Shop / Business Name</Label>
+                <Input
+                  required
+                  value={editQrBusinessName}
+                  onChange={(e) => setEditQrBusinessName(e.target.value)}
+                  placeholder="Business Name"
+                  className="h-9 text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold text-foreground">Payment Network</Label>
+                  <Select value={editQrNetwork} onValueChange={setEditQrNetwork}>
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="MTN MoMo">MTN MoMo</SelectItem>
+                      <SelectItem value="Airtel Money">Airtel Money</SelectItem>
+                      <SelectItem value="Equity Bank (eKash)">Equity Bank (eKash)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold text-foreground">Payment Type</Label>
+                  <Select
+                    value={editQrPaymentType}
+                    onValueChange={(v) => setEditQrPaymentType(v as "momo_code" | "phone")}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="momo_code">Merchant Code</SelectItem>
+                      <SelectItem value="phone">Phone Number</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold text-foreground">
+                    {editQrPaymentType === "momo_code" ? "MoMo / Till Code" : "Account Phone"}
+                  </Label>
+                  <Input
+                    required
+                    value={editQrAccountValue}
+                    onChange={(e) => setEditQrAccountValue(e.target.value)}
+                    placeholder="e.g. 123456 or 0788123456"
+                    className="h-9 font-mono font-bold text-xs"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold text-foreground">Owner Phone</Label>
+                  <Input
+                    value={editQrPhone}
+                    onChange={(e) => setEditQrPhone(e.target.value)}
+                    placeholder="e.g. 0788111222"
+                    className="h-9 font-mono text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold text-foreground">Fixed Price (RWF)</Label>
+                  <Input
+                    type="number"
+                    value={editQrAmount}
+                    onChange={(e) => setEditQrAmount(e.target.value)}
+                    placeholder="e.g. 5000"
+                    className="h-9 font-mono font-bold text-xs"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold text-foreground">Item Name</Label>
+                  <Input
+                    value={editQrItemName}
+                    onChange={(e) => setEditQrItemName(e.target.value)}
+                    placeholder="e.g. Lunch Buffet"
+                    className="h-9 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl bg-muted/40 p-2.5 border border-border/60">
+                <div className="space-y-0.5">
+                  <Label className="text-xs font-bold text-foreground cursor-pointer">
+                    Dynamic Smart QR
+                  </Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    Routes via Cloudflare Edge without reprinting
+                  </p>
+                </div>
+                <Switch checked={editQrIsDynamic} onCheckedChange={setEditQrIsDynamic} />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditQrDialogOpen(false)}
+                  className="text-xs font-semibold rounded-xl"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={updatingQr}
+                  size="sm"
+                  className="text-xs font-bold rounded-xl gap-1.5 bg-primary"
+                >
+                  {updatingQr ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Save className="size-3.5" />
+                  )}
+                  <span>{updatingQr ? "Saving..." : "Save Changes"}</span>
+                </Button>
+              </div>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 3. Delete QR Confirmation Modal */}
+      <Dialog open={!!deleteConfirmQr} onOpenChange={(open) => !open && setDeleteConfirmQr(null)}>
+        <DialogContent className="sm:max-w-md bg-card border-border/80">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-extrabold text-destructive">
+              <Trash2 className="size-5" />
+              <span>Delete QR &amp; Unlock Merchant</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Are you sure you want to delete the payment QR card for{" "}
+              <strong className="text-foreground">{deleteConfirmQr?.business_name}</strong>?
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-xs space-y-2 text-destructive dark:text-rose-200">
+            <p className="font-bold flex items-center gap-1.5">
+              <AlertCircle className="size-4 shrink-0" />
+              <span>Single-Generation Lock Will Be Released</span>
+            </p>
+            <p className="text-[11px] leading-relaxed text-muted-foreground dark:text-rose-100/90">
+              Deleting this QR code will permanently erase it from the registry. The
+              single-generation duplicate blocker will be cleared immediately, allowing the merchant
+              to generate or print a brand new card.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteConfirmQr(null)}
+              className="text-xs font-semibold rounded-xl"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={deletingQr}
+              onClick={handleDeleteQr}
+              className="text-xs font-bold rounded-xl gap-1.5 shadow-xs"
+            >
+              {deletingQr ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5" />
+              )}
+              <span>{deletingQr ? "Deleting..." : "Yes, Delete & Unlock"}</span>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 4. Admin High-Resolution Card View & Re-Print Modal */}
       <Dialog open={!!selectedQrForPrint} onOpenChange={() => setSelectedQrForPrint(null)}>
         <DialogContent className="max-w-md bg-card border-border/80">
           <DialogHeader>
-            <DialogTitle className="text-base font-bold">Admin Emergency Card Re-Print</DialogTitle>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Printer className="size-5 text-primary" />
+              <span>Official Merchant Counter Card</span>
+            </DialogTitle>
             <DialogDescription className="text-xs">
-              Re-printing tent card for {selectedQrForPrint?.business_name}.
+              Preview and export counter tent card for {selectedQrForPrint?.business_name}.
             </DialogDescription>
           </DialogHeader>
 
           {selectedQrForPrint && (
-            <div className="flex flex-col items-center py-4 space-y-4">
+            <div className="flex flex-col items-center py-2 space-y-4">
+              {/* High-Fidelity Printable Card */}
               <div
                 ref={printCardRef}
-                className="w-64 p-5 rounded-2xl border-2 border-foreground/20 bg-white text-slate-900 flex flex-col items-center text-center shadow-lg"
+                className="w-72 overflow-hidden rounded-2xl bg-white text-slate-900 border-2 border-slate-200 shadow-2xl flex flex-col items-center text-center pb-5"
               >
-                <div className="bg-amber-400 text-slate-950 font-black text-xs px-3 py-1 rounded-full uppercase mb-2">
-                  {selectedQrForPrint.network}
+                <div
+                  className={`h-3 w-full ${
+                    selectedQrForPrint.network.includes("Equity")
+                      ? "bg-rose-800"
+                      : selectedQrForPrint.network.includes("Airtel")
+                        ? "bg-red-600"
+                        : "bg-amber-400"
+                  }`}
+                />
+                <div className="px-5 pt-4 pb-2 w-full flex flex-col items-center">
+                  <div className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 text-[10px] font-bold text-emerald-700 uppercase">
+                    <CheckCircle2 className="size-2.5" />
+                    <span>Verified Merchant</span>
+                  </div>
+
+                  <h3 className="mt-1.5 text-xl font-black text-slate-900 truncate max-w-full">
+                    {selectedQrForPrint.business_name}
+                  </h3>
+
+                  <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-slate-600">
+                    <span>{selectedQrForPrint.network}</span>
+                  </div>
+
+                  {/* QR Code */}
+                  <div className="mt-3 p-3 bg-white rounded-2xl border border-slate-200 shadow-md">
+                    <QRCodeSVG
+                      value={
+                        selectedQrForPrint.is_dynamic
+                          ? `${window.location.origin}/p/${selectedQrForPrint.id}`
+                          : `tel:${selectedQrForPrint.dial_code}`
+                      }
+                      size={180}
+                      level="H"
+                    />
+                  </div>
+
+                  {/* Dial Code Display */}
+                  <div className="mt-3 w-full rounded-xl bg-slate-100 border border-slate-200 px-3 py-1.5">
+                    <p className="text-[10px] font-bold uppercase text-slate-500">
+                      {selectedQrForPrint.payment_type === "momo_code"
+                        ? "Merchant Pay Code"
+                        : "Recipient Phone"}
+                    </p>
+                    <p className="font-mono text-sm font-black text-slate-950">
+                      {selectedQrForPrint.dial_code}
+                    </p>
+                  </div>
+
+                  {selectedQrForPrint.amount && (
+                    <div className="mt-2 w-full rounded-xl bg-amber-50 border border-amber-200 px-3 py-1">
+                      <p className="text-[10px] font-bold text-amber-800 uppercase">
+                        {selectedQrForPrint.item_name || "Fixed Amount"}
+                      </p>
+                      <p className="text-base font-black text-slate-900">
+                        {selectedQrForPrint.amount.toLocaleString()} RWF
+                      </p>
+                    </div>
+                  )}
+
+                  <p className="mt-2.5 text-[10px] text-slate-500">
+                    Scan with camera &amp; tap Call to pay • Ishyura.rw
+                  </p>
                 </div>
-                <h4 className="font-extrabold text-base text-slate-900">
-                  {selectedQrForPrint.business_name}
-                </h4>
-                <div className="p-2 bg-white rounded-xl shadow-inner border my-2">
-                  <QRCodeSVG value={`tel:${selectedQrForPrint.dial_code}`} size={160} />
-                </div>
-                <p className="font-mono text-xs font-bold text-slate-950">
-                  {selectedQrForPrint.dial_code}
-                </p>
               </div>
 
-              <Button
-                onClick={() => window.print()}
-                className="w-full text-xs font-bold gap-2 rounded-xl"
-              >
-                <Printer className="size-4" />
-                <span>Print Counter Card</span>
-              </Button>
+              {/* Actions */}
+              <div className="w-full grid grid-cols-2 gap-2 pt-1">
+                <Button
+                  onClick={handleDownloadPrintCard}
+                  disabled={downloadingCard}
+                  variant="outline"
+                  className="w-full text-xs font-bold gap-1.5 rounded-xl border-border"
+                >
+                  {downloadingCard ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Download className="size-3.5" />
+                  )}
+                  <span>{downloadingCard ? "Saving..." : "Download PNG"}</span>
+                </Button>
+
+                <Button
+                  onClick={() => window.print()}
+                  className="w-full text-xs font-bold gap-1.5 rounded-xl bg-primary"
+                >
+                  <Printer className="size-3.5" />
+                  <span>Print Card</span>
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>

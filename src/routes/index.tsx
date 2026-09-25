@@ -38,6 +38,7 @@ import {
   User,
   Edit3,
   ExternalLink,
+  Trash2,
 } from "lucide-react";
 
 import { InquiryDialog } from "@/components/InquiryDialog";
@@ -286,8 +287,28 @@ function Index() {
     network: string;
     dialCode: string;
     message: string;
+    ownerPhone?: string;
   } | null>(null);
   const [checkingDuplicate, setCheckingDuplicate] = useState(false);
+
+  // Owner Reprint & Lost QR recovery state
+  const [ownerReprintNotice, setOwnerReprintNotice] = useState<{
+    businessName: string;
+    dialCode: string;
+    message: string;
+  } | null>(null);
+
+  // Customer Print & Download Modal State (for reprint if lost)
+  const [selectedQrForCustomerPrint, setSelectedQrForCustomerPrint] = useState<QRCodeRecord | null>(
+    null,
+  );
+  const customerPrintCardRef = useRef<HTMLDivElement>(null);
+  const [downloadingCustomerCard, setDownloadingCustomerCard] = useState(false);
+
+  // Customer Delete QR State (releases lock so one can create/print a new one)
+  const [deleteConfirmCustomerQr, setDeleteConfirmCustomerQr] = useState<QRCodeRecord | null>(null);
+  const [deletingCustomerQr, setDeletingCustomerQr] = useState(false);
+  const [customerToastMsg, setCustomerToastMsg] = useState<string | null>(null);
 
   // Inquiries Dialog
   const [inquiryDialogOpen, setInquiryDialogOpen] = useState(false);
@@ -509,11 +530,63 @@ function Index() {
       const checkRes = await IshyuraClient.checkQrExists(ussdString, network);
       if (checkRes.exists && checkRes.existing && !isAdmin) {
         setCheckingDuplicate(false);
+        const existing = checkRes.existing;
+        const cleanUserPhone = (currentUser?.phone_number || "").replace(/[^0-9]/g, "");
+        const cleanOwnerPhone = (existing.phone_number || "").replace(/[^0-9]/g, "");
+        const isOwner = Boolean(
+          currentUser &&
+          ((existing.owner_id &&
+            (existing.owner_id === currentUser.id ||
+              existing.owner_id === currentUser.phone_number ||
+              (cleanUserPhone && existing.owner_id === cleanUserPhone) ||
+              (currentUser.email && existing.owner_id === currentUser.email))) ||
+            (cleanOwnerPhone && cleanUserPhone && cleanOwnerPhone === cleanUserPhone) ||
+            (existing.phone_number &&
+              (existing.phone_number === currentUser.phone_number ||
+                existing.phone_number === currentUser.id))),
+        );
+
+        if (isOwner) {
+          // Legitimate owner re-printing or reloading their lost QR card
+          const cleanDigits = (existing.dial_code || "").replace(/[^0-9]/g, "") || sanitizedInput;
+          const isDyn = Boolean(existing.is_dynamic);
+          const dynUrl = isDyn ? getDynamicPayUrl(existing.id) : undefined;
+          const reloadedCard: ConfirmedCardData = {
+            id: existing.id,
+            businessName: existing.business_name || businessName.trim(),
+            network: (existing.network as Network) || network,
+            paymentType: (existing.payment_type as PaymentType) || paymentType,
+            sanitizedInput: cleanDigits,
+            ussdString: existing.dial_code || ussdString,
+            qrTelUri:
+              isDyn && dynUrl
+                ? dynUrl
+                : `tel:${encodeURIComponent(existing.dial_code || ussdString)}`,
+            feeNote:
+              (existing.network || network) === "Equity Bank (eKash)"
+                ? "Only 20 RWF fee via eKash"
+                : undefined,
+            isDynamic: isDyn,
+            amount: existing.amount ?? null,
+            itemName: existing.item_name ?? null,
+            dynamicUrl: dynUrl,
+          };
+          setConfirmedData(reloadedCard);
+          setOwnerReprintNotice({
+            businessName: reloadedCard.businessName,
+            dialCode: reloadedCard.ussdString,
+            message: `Retrieved your registered payment card for "${reloadedCard.businessName}". You can reprint, download, or edit your card now!`,
+          });
+          setDuplicateWarning(null);
+          return;
+        }
+
         setDuplicateWarning({
-          businessName: checkRes.existing.business_name || businessName.trim(),
-          network: checkRes.existing.network || network,
-          dialCode: checkRes.existing.dial_code || ussdString,
-          message: `A QR card for this payment code was already printed for ${checkRes.existing.business_name || businessName.trim()} (${checkRes.existing.network || network} - ${checkRes.existing.dial_code || ussdString}). If you need a replacement or physical stand, you can request it right here.`,
+          businessName: existing.business_name || businessName.trim(),
+          network: existing.network || network,
+          dialCode: existing.dial_code || ussdString,
+          ownerPhone: existing.phone_number || undefined,
+          message: `A payment QR card for this code was registered to ${existing.business_name || businessName.trim()} (${existing.network || network} - ${existing.dial_code || ussdString}). If this is your business, sign in with your phone or email to reprint your card.`,
         });
         return;
       }
@@ -579,6 +652,58 @@ function Index() {
   const handleEdit = () => {
     setConfirmedData(null);
     setDuplicateWarning(null);
+    setOwnerReprintNotice(null);
+  };
+
+  const handleDownloadCustomerCard = async () => {
+    if (!customerPrintCardRef.current || !selectedQrForCustomerPrint) return;
+    setDownloadingCustomerCard(true);
+    try {
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(customerPrintCardRef.current, { pixelRatio: 3 });
+      const link = document.createElement("a");
+      const netSlug = selectedQrForCustomerPrint.network.replace(/[^a-zA-Z0-9]/g, "_");
+      link.download = `${(selectedQrForCustomerPrint.business_name || "Payment_Card").replace(/\s+/g, "_")}_${netSlug}_card.png`;
+      link.href = dataUrl;
+      link.click();
+      IshyuraClient.recordDownload({
+        business_name: selectedQrForCustomerPrint.business_name,
+        network: selectedQrForCustomerPrint.network,
+        dial_code: selectedQrForCustomerPrint.dial_code,
+        phone_number: selectedQrForCustomerPrint.phone_number,
+        file_format: "png",
+      }).catch(() => {});
+    } catch (err) {
+      console.error("Failed to download customer card PNG", err);
+    } finally {
+      setDownloadingCustomerCard(false);
+    }
+  };
+
+  const handleDeleteCustomerQr = async () => {
+    if (!deleteConfirmCustomerQr) return;
+    setDeletingCustomerQr(true);
+    try {
+      await IshyuraClient.deleteQrCode(deleteConfirmCustomerQr.id);
+      setQrHistory((prev) => prev.filter((q) => q.id !== deleteConfirmCustomerQr.id));
+      if (
+        confirmedData &&
+        (confirmedData.id === deleteConfirmCustomerQr.id ||
+          confirmedData.ussdString === deleteConfirmCustomerQr.dial_code)
+      ) {
+        setConfirmedData(null);
+      }
+      setDuplicateWarning(null);
+      setCustomerToastMsg(
+        `Payment card for "${deleteConfirmCustomerQr.business_name}" deleted. Single-generation lock released — you can generate or print a fresh card anytime!`,
+      );
+      setTimeout(() => setCustomerToastMsg(null), 5000);
+      setDeleteConfirmCustomerQr(null);
+    } catch (err) {
+      console.error("Failed to delete customer QR", err);
+    } finally {
+      setDeletingCustomerQr(false);
+    }
   };
 
   const handleOpenEditDestination = (qr: QRCodeRecord) => {
@@ -1577,6 +1702,179 @@ function Index() {
         </DialogContent>
       </Dialog>
 
+      {/* Customer High-Resolution Print & Download Modal (for lost QR reprint) */}
+      <Dialog
+        open={Boolean(selectedQrForCustomerPrint)}
+        onOpenChange={(open) => !open && setSelectedQrForCustomerPrint(null)}
+      >
+        <DialogContent className="max-w-md bg-card border-border/80 p-5">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Printer className="size-5 text-primary" />
+              <span>Official Counter Tent Card</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Preview, download high-res PNG or print your official counter card.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedQrForCustomerPrint && (
+            <div className="flex flex-col items-center py-2 space-y-4">
+              {/* High-Fidelity Printable Card */}
+              <div
+                ref={customerPrintCardRef}
+                className="w-72 overflow-hidden rounded-2xl bg-white text-slate-900 border-2 border-slate-200 shadow-2xl flex flex-col items-center text-center pb-5"
+              >
+                <div
+                  className={`h-3 w-full ${
+                    selectedQrForCustomerPrint.network.includes("Equity")
+                      ? "bg-rose-800"
+                      : selectedQrForCustomerPrint.network.includes("Airtel")
+                        ? "bg-red-600"
+                        : "bg-amber-400"
+                  }`}
+                />
+                <div className="px-5 pt-4 pb-2 w-full flex flex-col items-center">
+                  <div className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 text-[10px] font-bold text-emerald-700 uppercase">
+                    <CheckCircle2 className="size-2.5" />
+                    <span>Verified Merchant</span>
+                  </div>
+
+                  <h3 className="mt-1.5 text-xl font-black text-slate-900 truncate max-w-full">
+                    {selectedQrForCustomerPrint.business_name}
+                  </h3>
+
+                  <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-slate-600">
+                    <span>{selectedQrForCustomerPrint.network}</span>
+                  </div>
+
+                  {/* QR Code */}
+                  <div className="mt-3 p-3 bg-white rounded-2xl border border-slate-200 shadow-md">
+                    <QRCodeSVG
+                      value={
+                        selectedQrForCustomerPrint.is_dynamic
+                          ? `${window.location.origin}/p/${selectedQrForCustomerPrint.id}`
+                          : `tel:${selectedQrForCustomerPrint.dial_code}`
+                      }
+                      size={180}
+                      level="H"
+                    />
+                  </div>
+
+                  {/* Dial Code Display */}
+                  <div className="mt-3 w-full rounded-xl bg-slate-100 border border-slate-200 px-3 py-1.5">
+                    <p className="text-[10px] font-bold uppercase text-slate-500">
+                      {selectedQrForCustomerPrint.payment_type === "momo_code"
+                        ? "Merchant Pay Code"
+                        : "Recipient Phone"}
+                    </p>
+                    <p className="font-mono text-sm font-black text-slate-950">
+                      {selectedQrForCustomerPrint.dial_code}
+                    </p>
+                  </div>
+
+                  {selectedQrForCustomerPrint.amount && (
+                    <div className="mt-2 w-full rounded-xl bg-amber-50 border border-amber-200 px-3 py-1">
+                      <p className="text-[10px] font-bold text-amber-800 uppercase">
+                        {selectedQrForCustomerPrint.item_name || "Fixed Amount"}
+                      </p>
+                      <p className="text-base font-black text-slate-900">
+                        {selectedQrForCustomerPrint.amount.toLocaleString()} RWF
+                      </p>
+                    </div>
+                  )}
+
+                  <p className="mt-2.5 text-[10px] text-slate-500">
+                    Scan with camera &amp; tap Call to pay • Ishyura.rw
+                  </p>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="w-full grid grid-cols-2 gap-2 pt-1">
+                <Button
+                  onClick={handleDownloadCustomerCard}
+                  disabled={downloadingCustomerCard}
+                  variant="outline"
+                  className="w-full text-xs font-bold gap-1.5 rounded-xl border-border"
+                >
+                  {downloadingCustomerCard ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Download className="size-3.5" />
+                  )}
+                  <span>{downloadingCustomerCard ? "Saving..." : "Download PNG"}</span>
+                </Button>
+
+                <Button
+                  onClick={() => window.print()}
+                  className="w-full text-xs font-bold gap-1.5 rounded-xl bg-primary"
+                >
+                  <Printer className="size-3.5" />
+                  <span>Print Card</span>
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Customer Delete Confirmation Dialog */}
+      <Dialog
+        open={Boolean(deleteConfirmCustomerQr)}
+        onOpenChange={(open) => !open && setDeleteConfirmCustomerQr(null)}
+      >
+        <DialogContent className="sm:max-w-md bg-card border-border/80">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-extrabold text-destructive">
+              <Trash2 className="size-5" />
+              <span>Delete QR &amp; Unlock Payment Code</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Delete the payment card for{" "}
+              <strong className="text-foreground">{deleteConfirmCustomerQr?.business_name}</strong>?
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-xs space-y-2 text-destructive dark:text-rose-200">
+            <p className="font-bold flex items-center gap-1.5">
+              <AlertCircle className="size-4 shrink-0" />
+              <span>Single-Generation Lock Will Be Released</span>
+            </p>
+            <p className="text-[11px] leading-relaxed text-muted-foreground dark:text-rose-100/90">
+              Deleting this card removes it from your saved records and unlocks this payment number
+              in the Ishyura system. You will be free to generate a fresh new card from scratch
+              anytime.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteConfirmCustomerQr(null)}
+              className="text-xs font-semibold rounded-xl"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={deletingCustomerQr}
+              onClick={handleDeleteCustomerQr}
+              className="text-xs font-bold rounded-xl gap-1.5 shadow-xs"
+            >
+              {deletingCustomerQr ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5" />
+              )}
+              <span>{deletingCustomerQr ? "Deleting..." : "Yes, Delete & Unlock"}</span>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Tab-driven View Switching */}
       {isAdmin &&
       (activeTab === "inquiries" ||
@@ -1613,15 +1911,23 @@ function Index() {
             </Button>
           </div>
 
+          {/* Toast Message for Customer Actions */}
+          {customerToastMsg && (
+            <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in-50">
+              <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+              <span>{customerToastMsg}</span>
+            </div>
+          )}
+
           {/* Saved Payment Records Notice */}
           <div className="p-4 rounded-2xl border border-sky-500/30 bg-sky-500/10 flex items-start gap-3">
             <Sparkles className="size-5 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
             <div className="space-y-1">
               <h4 className="text-xs font-bold text-foreground">Saved Payment Records</h4>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Your payment codes are active and ready. A QR card was already printed for each code
-                below. If you need a replacement card, tabletop acrylic stand, or waterproof
-                stickers, you can easily request or order them below.
+                Your payment codes are active and ready. If you ever lose your counter card or
+                phone, you can reprint or download your official counter tent cards below at any
+                time, edit details, or release the code.
               </p>
             </div>
           </div>
@@ -1691,7 +1997,18 @@ function Index() {
                     </span>
                   </div>
 
-                  <div className="pt-2 border-t border-border/40 flex flex-wrap items-center justify-between gap-2">
+                  <div className="pt-2.5 border-t border-border/40 flex flex-wrap items-center justify-between gap-1.5">
+                    {/* Direct Print / Download Counter Card (Key feature for lost QR recovery!) */}
+                    <Button
+                      size="sm"
+                      onClick={() => setSelectedQrForCustomerPrint(qr)}
+                      className="h-8 text-xs font-bold gap-1 rounded-xl bg-primary text-primary-foreground shadow-xs shrink-0"
+                      title="Preview, download high-res PNG or print official counter card"
+                    >
+                      <Printer className="size-3.5" />
+                      <span>Print / Download</span>
+                    </Button>
+
                     {qr.is_dynamic ? (
                       <>
                         <Button
@@ -1701,7 +2018,8 @@ function Index() {
                             const url = getDynamicPayUrl(qr.id);
                             setScanPreviewUrl(url);
                           }}
-                          className="flex-1 text-xs font-bold gap-1 rounded-xl border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary"
+                          className="h-8 text-xs font-bold gap-1 rounded-xl border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary"
+                          title="Test 1-tap customer pay sheet"
                         >
                           <Zap className="size-3.5" />
                           <span>Test Pay</span>
@@ -1710,10 +2028,11 @@ function Index() {
                           size="sm"
                           variant="outline"
                           onClick={() => handleOpenEditDestination(qr)}
-                          className="flex-1 text-xs font-bold gap-1 rounded-xl border-border/80 hover:bg-muted"
+                          className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
+                          title="Update recipient number or price without reprinting"
                         >
                           <Edit3 className="size-3.5" />
-                          <span>Edit Destination</span>
+                          <span>Edit</span>
                         </Button>
                       </>
                     ) : (
@@ -1721,24 +2040,45 @@ function Index() {
                         size="sm"
                         variant="outline"
                         onClick={() => {
-                          setInquiryDialogOpen(true);
+                          setBusinessName(qr.business_name || "");
+                          setNetwork((qr.network as Network) || "MTN MoMo");
+                          setPaymentType((qr.payment_type as PaymentType) || "momo_code");
+                          const digits =
+                            (qr.dial_code || "").replace(/[^0-9]/g, "") || qr.phone_number || "";
+                          setAccountValue(digits);
+                          setActiveTab("generator");
                         }}
-                        className="flex-1 text-xs font-semibold gap-1.5 rounded-xl border-border/80 hover:bg-muted"
+                        className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
+                        title="Open in generator to customize"
                       >
-                        <MessageSquare className="size-3.5" />
-                        <span>Request Card</span>
+                        <RotateCcw className="size-3.5" />
+                        <span>Generator</span>
                       </Button>
                     )}
+
                     <Button
                       size="sm"
+                      variant="outline"
                       onClick={() => {
                         setSelectedProductForOrder("acrylic_stand");
                         setOrderDialogOpen(true);
                       }}
-                      className="flex-1 text-xs font-bold gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                      className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
                     >
                       <Package className="size-3.5" />
                       <span>Order Stand</span>
+                    </Button>
+
+                    {/* Delete Card & Unlock Code */}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDeleteConfirmCustomerQr(qr)}
+                      className="h-8 text-xs font-semibold text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-xl px-2"
+                      title="Delete card and release duplicate lock so you can print again"
+                    >
+                      <Trash2 className="size-3.5" />
+                      <span className="sr-only sm:not-sr-only sm:inline">Delete</span>
                     </Button>
                   </div>
                 </div>
@@ -2161,29 +2501,45 @@ function Index() {
                 {/* Confirmation Action & Checklist */}
                 <div className="pt-2">
                   {confirmedData ? (
-                    <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-700 dark:text-emerald-300 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold flex items-center gap-1.5 text-sm">
-                          <CheckCircle2 className="size-4 text-emerald-500" />
-                          Details Confirmed
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={handleEdit}
-                          className="h-7 text-xs text-emerald-700 hover:text-emerald-900 dark:text-emerald-300 dark:hover:text-emerald-100"
-                        >
-                          <RotateCcw className="size-3 mr-1" />
-                          Edit details
-                        </Button>
+                    <div className="space-y-2">
+                      {ownerReprintNotice && (
+                        <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-sky-800 dark:text-sky-200 flex items-start gap-2.5 animate-in fade-in-50">
+                          <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-foreground">
+                              Verified Payment Card Reloaded for Reprinting
+                            </p>
+                            <p className="text-[11px] text-muted-foreground dark:text-sky-100/80">
+                              {ownerReprintNotice.message}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-700 dark:text-emerald-300 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold flex items-center gap-1.5 text-sm">
+                            <CheckCircle2 className="size-4 text-emerald-500" />
+                            Details Confirmed
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleEdit}
+                            className="h-7 text-xs text-emerald-700 hover:text-emerald-900 dark:text-emerald-300 dark:hover:text-emerald-100"
+                          >
+                            <RotateCcw className="size-3 mr-1" />
+                            Edit details
+                          </Button>
+                        </div>
+                        <p className="leading-relaxed">
+                          QR card is locked and ready for export using code{" "}
+                          <strong className="font-mono text-foreground font-semibold">
+                            {confirmedData.ussdString}
+                          </strong>
+                        </p>
                       </div>
-                      <p className="leading-relaxed">
-                        QR card is locked and ready for export using code{" "}
-                        <strong className="font-mono text-foreground font-semibold">
-                          {confirmedData.ussdString}
-                        </strong>
-                      </p>
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -2197,20 +2553,35 @@ function Index() {
                             A payment QR card for <strong>{duplicateWarning.businessName}</strong> (
                             {duplicateWarning.network} -{" "}
                             <code className="font-mono">{duplicateWarning.dialCode}</code>) was
-                            already printed. If you need a replacement card, tabletop acrylic stand,
-                            or stickers, you can easily request it below.
+                            already registered. If this is your business, sign in with your owner
+                            account to reprint or manage it.
                           </p>
                           <div className="pt-1 flex flex-wrap items-center gap-2">
                             <Button
                               type="button"
                               size="sm"
                               onClick={() => {
+                                if (duplicateWarning.ownerPhone) {
+                                  setAuthPhoneInput(duplicateWarning.ownerPhone);
+                                }
+                                setAuthDialogOpen(true);
+                              }}
+                              className="h-8 text-xs font-bold gap-1.5 bg-primary text-primary-foreground shadow-xs"
+                            >
+                              <LogIn className="size-3.5" />
+                              <span>I am Owner — Sign In to Reprint</span>
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
                                 setInquiryDialogOpen(true);
                               }}
-                              className="h-8 text-xs font-bold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                              className="h-8 text-xs font-semibold gap-1.5 border-border/70 hover:bg-muted"
                             >
                               <MessageSquare className="size-3.5" />
-                              <span>Request QR Card / Replacement</span>
+                              <span>Request Help</span>
                             </Button>
                             <Button
                               type="button"
