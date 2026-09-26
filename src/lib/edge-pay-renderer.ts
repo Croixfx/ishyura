@@ -88,45 +88,31 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     }
   }
 
-  // 1. Detect scanner's carrier/SIM automatically (Zero prompt, zero manual choice)
-  const carrierInfo = detectCarrierFromRequest(request);
+  // 1. Determine merchant's registered network directly
+  const net = (record.network || "").toLowerCase();
+  const isAirtel = net.includes("airtel");
+  const isEquity = net.includes("equity") || net.includes("ekash");
+  const isMtn = !isAirtel && !isEquity;
 
-  // 2. Build formatted dial strings for all payment networks
-  const allDialOptions = getAllNetworkDialStrings(
-    record.dial_code,
-    record.amount,
-    record.payment_type,
-  );
+  const brandName = isEquity ? "Equity eKash" : isAirtel ? "Airtel Money" : "MTN MoMo";
+  const brandColor = isEquity ? "#8b1e0f" : isAirtel ? "#dc2626" : "#eab308";
+  const brandIcon = isEquity ? "🏦" : isAirtel ? "🔴" : "🟡";
+  const cleanCode = extractMerchantOrAccountCode(record.dial_code);
+  const paymentType = record.payment_type || "momo_code";
 
-  const cleanCode = allDialOptions.cleanCode;
-  const mtnUssd = allDialOptions.mtnUssd;
-  const airtelUssd = allDialOptions.airtelUssd;
-  const equityUssd = allDialOptions.equityUssd;
-
-  // 3. Determine active network automatically:
-  // If scanner request came from MTN or Airtel or Equity cellular data, use that directly.
-  // Otherwise, default to merchant's registered terminal network (e.g. MTN MoMo).
-  let initialCarrier = carrierInfo.detected;
-  if (initialCarrier === "unknown") {
-    const net = (record.network || "").toLowerCase();
-    if (net.includes("airtel")) initialCarrier = "airtel";
-    else if (net.includes("equity") || net.includes("ekash")) initialCarrier = "equity";
-    else initialCarrier = "mtn";
+  // Base USSD without trailing '#' so we can append *<AMOUNT># dynamically
+  let baseUssd = `*182*8*1*${cleanCode}`;
+  if (isEquity) {
+    baseUssd = `*555*2*${cleanCode}`;
+  } else if (paymentType === "phone") {
+    baseUssd = `*182*1*1*${cleanCode}`;
   }
-
-  const isMtn = initialCarrier === "mtn";
-  const isAirtel = initialCarrier === "airtel";
-  const isEquity = initialCarrier === "equity";
-
-  const initialUssd = isEquity ? equityUssd : isAirtel ? airtelUssd : mtnUssd;
-  const initialTelUri = `tel:${encodeURIComponent(initialUssd)}`;
-  const initialBrandName = isEquity ? "Equity eKash" : isAirtel ? "Airtel Money" : "MTN MoMo";
-  const initialBrandColor = isEquity ? "#8b1e0f" : isAirtel ? "#dc2626" : "#eab308";
-  const detectedLabel =
-    carrierInfo.carrierName !== "Unknown" ? carrierInfo.carrierName : initialBrandName;
 
   const hasFixedPrice =
     typeof record.amount === "number" && !isNaN(record.amount) && record.amount > 0;
+  const initialAmount = hasFixedPrice ? Math.round(record.amount!) : null;
+  const initialUssd = initialAmount ? `${baseUssd}*${initialAmount}#` : `${baseUssd}#`;
+  const initialTelUri = `tel:${encodeURIComponent(initialUssd)}`;
   const formattedAmount = hasFixedPrice ? formatRwf(record.amount!) : "";
 
   const html = `<!DOCTYPE html>
@@ -135,8 +121,8 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Pay ${escapeHtml(record.business_name)} — Ishyura Instant Pay</title>
-  <meta name="description" content="Instant 1-Tap Mobile Money payment for ${escapeHtml(record.business_name)}. Works automatically with your active SIM (MTN, Airtel, or Equity eKash)." />
-  <meta name="theme-color" content="${initialBrandColor}" />
+  <meta name="description" content="Instant 1-Tap Mobile Money payment for ${escapeHtml(record.business_name)} via ${escapeHtml(brandName)}." />
+  <meta name="theme-color" content="${brandColor}" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -145,8 +131,8 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       --card-border: #1e293b;
       --text: #f8fafc;
       --muted: #94a3b8;
-      --accent: ${initialBrandColor};
-      --brand-glow: ${initialBrandColor}40;
+      --accent: ${brandColor};
+      --brand-glow: ${brandColor}40;
     }
     @media (prefers-color-scheme: light) {
       :root {
@@ -155,8 +141,8 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         --card-border: #e2e8f0;
         --text: #0f172a;
         --muted: #64748b;
-        --accent: ${initialBrandColor};
-        --brand-glow: ${initialBrandColor}30;
+        --accent: ${brandColor};
+        --brand-glow: ${brandColor}30;
       }
     }
     body {
@@ -221,63 +207,109 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       word-break: break-word;
     }
 
-    /* Network Provider Selector */
-    .network-select-wrap {
+    /* Merchant Network Badge */
+    .merchant-network-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 18px;
+    }
+    .merchant-network-icon {
+      font-size: 15px;
+      line-height: 1;
+    }
+    .badge-dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--muted);
+      opacity: 0.6;
+    }
+
+    /* Interactive Amount Input Box */
+    .amount-input-box {
       width: 100%;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1.5px solid var(--card-border);
+      border-radius: 20px;
+      padding: 16px;
       margin-bottom: 18px;
       text-align: left;
     }
-    .network-select-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-      padding: 0 4px;
-    }
-    .network-select-title {
+    .amount-input-label {
+      display: block;
       font-size: 11px;
-      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      font-weight: 700;
+      letter-spacing: 0.08em;
       color: var(--muted);
+      margin-bottom: 8px;
     }
-    .network-pills {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-      width: 100%;
-    }
-    .network-pill {
-      background: rgba(255, 255, 255, 0.04);
+    .amount-field-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(0, 0, 0, 0.25);
       border: 1.5px solid var(--card-border);
       border-radius: 14px;
-      padding: 10px 4px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 4px;
-      cursor: pointer;
-      transition: all 0.15s ease;
+      padding: 8px 14px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .amount-field-wrap:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 16px -4px var(--brand-glow);
+    }
+    .currency-prefix {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--muted);
+    }
+    .amount-input {
+      width: 100%;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-size: 26px;
+      font-weight: 900;
       color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .amount-input::placeholder {
+      color: rgba(255, 255, 255, 0.18);
+    }
+    .quick-amounts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .quick-chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 6px 11px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.12s ease;
       -webkit-tap-highlight-color: transparent;
       user-select: none;
     }
-    .network-pill:hover {
-      background: rgba(255, 255, 255, 0.08);
-    }
-    .network-pill.active {
-      border-color: var(--accent);
+    .quick-chip:hover {
       background: rgba(255, 255, 255, 0.1);
-      box-shadow: 0 0 16px -4px var(--brand-glow);
     }
-    .pill-icon {
-      font-size: 20px;
-      line-height: 1;
-    }
-    .pill-name {
-      font-size: 11px;
-      font-weight: 700;
-      white-space: nowrap;
+    .quick-chip:active {
+      transform: scale(0.95);
+      background: var(--accent);
+      color: #0f172a;
     }
 
     .amount-box {
@@ -442,40 +474,49 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
 
       <h1 class="shop-title">${escapeHtml(record.business_name)}</h1>
 
-      <!-- Network Provider Selector -->
-      <div class="network-select-wrap">
-        <div class="network-select-header">
-          <span class="network-select-title">Choose Payment Network</span>
-        </div>
-        <div class="network-pills">
-          <button type="button" class="network-pill ${isMtn ? "active" : ""}" id="pill-mtn" onclick="applyActiveNetwork('mtn')">
-            <span class="pill-icon">🟡</span>
-            <span class="pill-name">MTN MoMo</span>
-          </button>
-          <button type="button" class="network-pill ${isAirtel ? "active" : ""}" id="pill-airtel" onclick="applyActiveNetwork('airtel')">
-            <span class="pill-icon">🔴</span>
-            <span class="pill-name">Airtel Money</span>
-          </button>
-          <button type="button" class="network-pill ${isEquity ? "active" : ""}" id="pill-equity" onclick="applyActiveNetwork('equity')">
-            <span class="pill-icon">🏦</span>
-            <span class="pill-name">Equity eKash</span>
-          </button>
-        </div>
+      <!-- Merchant Terminal Badge (Dedicated Merchant Network) -->
+      <div class="merchant-network-badge">
+        <span class="merchant-network-icon">${brandIcon}</span>
+        <span>${escapeHtml(brandName)}</span>
+        <span class="badge-dot"></span>
+        <span>${record.payment_type === "phone" ? "Phone" : "Code"}: <strong>${escapeHtml(cleanCode)}</strong></span>
       </div>
 
       ${
         hasFixedPrice
           ? `<div class="amount-box">
-              <div class="amount-label">Pay Fixed Amount</div>
+              <div class="amount-label">Fixed Payment Amount</div>
               <div class="amount-val">${escapeHtml(formattedAmount)}</div>
               ${record.item_name ? `<div class="item-desc">${escapeHtml(record.item_name)}</div>` : ""}
             </div>`
-          : ""
+          : `<div class="amount-input-box">
+              <label for="amountInput" class="amount-input-label">Enter Amount to Pay (RWF)</label>
+              <div class="amount-field-wrap">
+                <span class="currency-prefix">RWF</span>
+                <input
+                  type="text"
+                  id="amountInput"
+                  class="amount-input"
+                  placeholder="0"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  oninput="updateAmount(this.value)"
+                  autocomplete="off"
+                />
+              </div>
+              <div class="quick-amounts">
+                <button type="button" class="quick-chip" onclick="setQuickAmount(500)">+500</button>
+                <button type="button" class="quick-chip" onclick="setQuickAmount(1000)">+1,000</button>
+                <button type="button" class="quick-chip" onclick="setQuickAmount(2000)">+2,000</button>
+                <button type="button" class="quick-chip" onclick="setQuickAmount(5000)">+5,000</button>
+                <button type="button" class="quick-chip" onclick="setQuickAmount(10000)">+10,000</button>
+              </div>
+            </div>`
       }
 
       <div class="code-box">
         <div>
-          <div class="code-label">${record.payment_type === "momo_code" ? "Merchant Code (Code y'Umucuruzi)" : "Recipient Phone"}</div>
+          <div class="code-label">${record.payment_type === "phone" ? "Recipient Phone" : "Merchant Code (Code y'Umucuruzi)"}</div>
           <div class="code-val">${escapeHtml(cleanCode)}</div>
           <div class="code-ussd" id="ussdPreview">${escapeHtml(initialUssd)}</div>
         </div>
@@ -487,17 +528,17 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
         </svg>
-        <span id="btnLabel">Dial &amp; Pay via ${escapeHtml(initialBrandName)}${hasFixedPrice ? " " + escapeHtml(formattedAmount) : ""}</span>
+        <span id="btnLabel">${hasFixedPrice ? `Dial &amp; Pay ${escapeHtml(formattedAmount)}` : `Dial &amp; Pay via ${escapeHtml(brandName)}`}</span>
       </a>
 
       <p class="hint-text" id="hintText">
-        Tapping opens your phone dialer with <strong>${escapeHtml(initialUssd)}</strong> ready. If using a Dual-SIM phone, tap Call with your ${escapeHtml(initialBrandName)} SIM.
+        Tapping opens your phone dialer with <strong>${escapeHtml(initialUssd)}</strong> ready. If your phone is Dual-SIM, choose your <strong>${escapeHtml(brandName)}</strong> SIM to dial.
       </p>
     </div>
   </div>
 
   <div class="footer">
-    <span>Instant Multi-Network Pay by</span>
+    <span>Instant 1-Tap Pay by</span>
     <a href="/" target="_blank">Ishyura.rw</a>
     <span>• Zero Extra Fee</span>
   </div>
@@ -505,72 +546,44 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
   <div class="toast" id="toastMsg">USSD Code Copied!</div>
 
   <script>
-    var NETWORKS = {
-      mtn: {
-        name: "MTN MoMo",
-        icon: "🟡",
-        ussd: "${escapeHtml(mtnUssd)}",
-        color: "#eab308",
-        textColor: "#0f172a"
-      },
-      airtel: {
-        name: "Airtel Money",
-        icon: "🔴",
-        ussd: "${escapeHtml(airtelUssd)}",
-        color: "#dc2626",
-        textColor: "#ffffff"
-      },
-      equity: {
-        name: "Equity eKash",
-        icon: "🏦",
-        ussd: "${escapeHtml(equityUssd)}",
-        color: "#8b1e0f",
-        textColor: "#ffffff"
-      }
-    };
+    var baseUssd = "${baseUssd}";
+    var brandName = "${escapeHtml(brandName)}";
+    var currentUssd = "${escapeHtml(initialUssd)}";
 
-    var currentNet = "${initialCarrier}";
-    var fixedAmtText = "${hasFixedPrice ? " " + escapeHtml(formattedAmount) : ""}";
+    function formatRwf(val) {
+      return Number(val).toLocaleString() + " RWF";
+    }
 
-    // Check device local storage if network was previously selected on this phone
-    try {
-      var savedPref = localStorage.getItem("ishyura_scanner_sim");
-      if (savedPref && NETWORKS[savedPref] && "${carrierInfo.detected}" === "unknown") {
-        currentNet = savedPref;
-      }
-    } catch(e) {}
-
-    function applyActiveNetwork(net) {
-      currentNet = net;
-      var data = NETWORKS[net] || NETWORKS.mtn;
-
-      // Update pills
-      var pills = document.querySelectorAll(".network-pill");
-      for (var i = 0; i < pills.length; i++) {
-        pills[i].classList.remove("active");
-      }
-      var activePill = document.getElementById("pill-" + net);
-      if (activePill) activePill.classList.add("active");
-
-      // Update dial button
+    function updateAmount(val) {
+      var raw = String(val || "").replace(/[^0-9]/g, "");
+      var num = raw ? parseInt(raw, 10) : 0;
       var dialBtn = document.getElementById("dialBtn");
-      dialBtn.href = "tel:" + encodeURIComponent(data.ussd);
-      dialBtn.style.background = data.color;
-      dialBtn.style.color = data.textColor;
+      var ussdPreview = document.getElementById("ussdPreview");
+      var btnLabel = document.getElementById("btnLabel");
+      var hintText = document.getElementById("hintText");
 
-      // Update labels & details
-      document.getElementById("btnLabel").innerText = "Dial & Pay via " + data.name + fixedAmtText;
-      document.getElementById("ussdPreview").innerText = data.ussd;
-      document.getElementById("hintText").innerHTML = "Tapping opens your phone dialer with <strong>" + data.ussd + "</strong> ready. If using a Dual-SIM phone, tap Call with your " + data.name + " SIM.";
+      if (num > 0) {
+        currentUssd = baseUssd + "*" + num + "#";
+        btnLabel.innerText = "Dial & Pay " + formatRwf(num);
+      } else {
+        currentUssd = baseUssd + "#";
+        btnLabel.innerText = "Dial & Pay via " + brandName;
+      }
 
-      // Update root accent variable
-      document.documentElement.style.setProperty("--accent", data.color);
-      document.documentElement.style.setProperty("--brand-glow", data.color + "40");
+      dialBtn.href = "tel:" + encodeURIComponent(currentUssd);
+      ussdPreview.innerText = currentUssd;
+      hintText.innerHTML = "Tapping opens your phone dialer with <strong>" + currentUssd + "</strong> ready. If your phone is Dual-SIM, choose your <strong>" + brandName + "</strong> SIM to dial.";
+    }
 
-      // Persist active network for subsequent scans
-      try {
-        localStorage.setItem("ishyura_scanner_sim", currentNet);
-      } catch(e) {}
+    function setQuickAmount(amt) {
+      var input = document.getElementById("amountInput");
+      if (input) {
+        var current = parseInt(String(input.value || "0").replace(/[^0-9]/g, ""), 10) || 0;
+        var next = current + amt;
+        input.value = next;
+        updateAmount(next);
+        input.focus();
+      }
     }
 
     function showToast(msg) {
@@ -582,24 +595,20 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     }
 
     function copyCurrentUssd() {
-      var code = NETWORKS[currentNet] ? NETWORKS[currentNet].ussd : "${escapeHtml(initialUssd)}";
       if (navigator.clipboard) {
-        navigator.clipboard.writeText(code).then(function() {
-          showToast("Copied: " + code);
+        navigator.clipboard.writeText(currentUssd).then(function() {
+          showToast("Copied: " + currentUssd);
         }).catch(function() {
-          showToast("Code: " + code);
+          showToast("Code: " + currentUssd);
         });
       } else {
-        showToast("Code: " + code);
+        showToast("Code: " + currentUssd);
       }
     }
 
     function triggerDial() {
       if (navigator.vibrate) navigator.vibrate([40, 50, 40]);
     }
-
-    // Apply initial network
-    applyActiveNetwork(currentNet);
   </script>
 </body>
 </html>`;
