@@ -130,7 +130,7 @@ export function AppSidebar({
   };
 
   return (
-    <aside className="w-64 shrink-0 flex flex-col h-screen border-r border-border/60 bg-card/60 backdrop-blur-xl select-none">
+    <aside className="w-64 shrink-0 flex flex-col h-full border-r border-border/60 bg-card/60 backdrop-blur-xl select-none">
       {/* 1. Sticky Brand Header */}
       <div className="p-4 border-b border-border/40 shrink-0">
         <Link

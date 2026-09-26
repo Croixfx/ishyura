@@ -34,9 +34,9 @@ export function AppLayout({
   // 1. UNLOGGED VISITOR: Old clean design without left tab
   if (!currentUser) {
     return (
-      <div className="min-h-screen w-full bg-background text-foreground flex flex-col">
+      <div className="fixed inset-0 w-full h-full bg-background text-foreground flex flex-col overflow-hidden">
         {/* Old Design Top Header (No Left Tab) */}
-        <header className="sticky top-0 z-30 border-b border-border/60 bg-background/95 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between">
+        <header className="sticky top-0 z-30 border-b border-border/60 bg-background/95 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
           <Link to="/" className="flex items-center gap-3">
             <div className="size-9 rounded-xl bg-gradient-to-br from-emerald-500 to-sky-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 font-bold text-sm">
               <QrCode className="size-5" />
@@ -68,7 +68,7 @@ export function AppLayout({
         </header>
 
         {/* Welcome Page Content */}
-        <main className="flex-1 w-full overflow-y-auto">{children}</main>
+        <main className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden">{children}</main>
 
         <InquiryDialog open={inquiryOpen} onOpenChange={setInquiryOpen} defaultPhone={undefined} />
       </div>
@@ -77,7 +77,7 @@ export function AppLayout({
 
   // 2. AUTHENTICATED USER (Admin or Merchant): Premium UI with Left Tab
   return (
-    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
+    <div className="fixed inset-0 w-full h-full bg-background text-foreground overflow-hidden flex">
       {/* Desktop Left Sidebar (Fixed & Scrollable on its own) */}
       <div className="hidden lg:flex h-full shrink-0">
         <AppSidebar

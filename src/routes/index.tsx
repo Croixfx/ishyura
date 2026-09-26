@@ -2477,7 +2477,7 @@ function Index() {
           </div>
         </div>
       ) : (
-        <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 pb-12 pt-6 sm:px-6 lg:px-8">
+        <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-4 pb-8 pt-6 sm:px-6 lg:px-8">
           {/* Page Title Header (Clean and focused) */}
           <div className="border-b border-border/50 pb-5 mb-2">
             <div className="flex items-center gap-2 mb-1">
