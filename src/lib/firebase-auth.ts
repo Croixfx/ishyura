@@ -148,7 +148,8 @@ export const signInWithGoogleReal = async (): Promise<GoogleAuthResult> => {
                   if (profile?.email) {
                     resolve({
                       email: profile.email,
-                      name: profile.name || profile.given_name || profile.email.split("@")[0],
+                      name:
+                        profile.name || profile.given_name || profile.email.split("@")[0] || "User",
                       uid: profile.sub || profile.email,
                       photoURL: profile.picture,
                       accessToken: resp.access_token,
@@ -191,7 +192,7 @@ export const signInWithGoogleReal = async (): Promise<GoogleAuthResult> => {
       throw new Error("No email found in Google account profile.");
     }
 
-    const name = result.user.displayName || email.split("@")[0];
+    const name = result.user.displayName || email.split("@")[0] || "User";
 
     return {
       email,

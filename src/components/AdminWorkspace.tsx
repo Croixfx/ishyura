@@ -223,8 +223,10 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
       if (stats) {
         setStats({
           ...stats,
-          newInquiries:
-            newStatus === "resolved" ? Math.max(0, stats.newInquiries - 1) : stats.newInquiries + 1,
+          new_inquiries:
+            newStatus === "resolved"
+              ? Math.max(0, stats.new_inquiries - 1)
+              : stats.new_inquiries + 1,
         });
       }
     } catch (err) {
@@ -243,10 +245,10 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
       if (stats) {
         setStats({
           ...stats,
-          pendingOrders:
+          pending_orders:
             nextStatus === "delivered"
-              ? Math.max(0, stats.pendingOrders - 1)
-              : stats.pendingOrders + 1,
+              ? Math.max(0, stats.pending_orders - 1)
+              : stats.pending_orders + 1,
         });
       }
     } catch (err) {
@@ -282,7 +284,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
       });
 
       setQrCodes((prev) => [created, ...prev]);
-      if (stats) setStats({ ...stats, totalQrCodes: stats.totalQrCodes + 1 });
+      if (stats) setStats({ ...stats, total_qr_codes: stats.total_qr_codes + 1 });
       setUnlockMsg(`Created QR card for ${created.business_name} (${created.network}).`);
       setTimeout(() => setUnlockMsg(null), 4000);
 
@@ -358,7 +360,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
     try {
       await IshyuraClient.deleteAdminQrCode(adminKey, deleteConfirmQr.id);
       setQrCodes((prev) => prev.filter((q) => q.id !== deleteConfirmQr.id));
-      if (stats) setStats({ ...stats, totalQrCodes: Math.max(0, stats.totalQrCodes - 1) });
+      if (stats) setStats({ ...stats, total_qr_codes: Math.max(0, stats.total_qr_codes - 1) });
       setUnlockMsg(
         `QR Card deleted for ${deleteConfirmQr.business_name}. The merchant is now unlocked and can generate or print a new card.`,
       );
@@ -379,15 +381,15 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
       const { toPng } = await import("html-to-image");
       const dataUrl = await toPng(printCardRef.current, { pixelRatio: 3 });
       const link = document.createElement("a");
-      const netSlug = selectedQrForPrint.network.replace(/[^a-zA-Z0-9]/g, "_");
-      link.download = `${selectedQrForPrint.business_name.replace(/\s+/g, "_")}_${netSlug}_card.png`;
+      const netSlug = (selectedQrForPrint.network || "MOMO").replace(/[^a-zA-Z0-9]/g, "_");
+      link.download = `${(selectedQrForPrint.business_name || "Merchant").replace(/\s+/g, "_")}_${netSlug}_card.png`;
       link.href = dataUrl;
       link.click();
       IshyuraClient.recordDownload({
-        business_name: selectedQrForPrint.business_name,
-        network: selectedQrForPrint.network,
-        dial_code: selectedQrForPrint.dial_code,
-        phone_number: selectedQrForPrint.phone_number,
+        business_name: selectedQrForPrint.business_name || "Merchant",
+        network: selectedQrForPrint.network || "MTN MoMo",
+        dial_code: selectedQrForPrint.dial_code || "*182#",
+        phone_number: selectedQrForPrint.phone_number || undefined,
         file_format: "png",
       }).catch(() => {});
     } catch (err) {
@@ -404,7 +406,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
     try {
       await IshyuraClient.unlockQr(adminKey, qrId);
       setQrCodes((prev) => prev.filter((q) => q.id !== qrId));
-      if (stats) setStats({ ...stats, totalQrCodes: Math.max(0, stats.totalQrCodes - 1) });
+      if (stats) setStats({ ...stats, total_qr_codes: Math.max(0, stats.total_qr_codes - 1) });
       setUnlockMsg(
         `QR Card ${qrId} unlocked and cleared. The merchant can now generate and print a new card without restrictions.`,
       );
@@ -474,9 +476,11 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
       return false;
     }
     if (qrNetworkFilter !== "all") {
-      if (qrNetworkFilter === "MTN" && !q.network.toLowerCase().includes("mtn")) return false;
-      if (qrNetworkFilter === "Airtel" && !q.network.toLowerCase().includes("airtel")) return false;
-      if (qrNetworkFilter === "Equity" && !q.network.toLowerCase().includes("equity")) return false;
+      if (qrNetworkFilter === "MTN" && !q.network?.toLowerCase().includes("mtn")) return false;
+      if (qrNetworkFilter === "Airtel" && !q.network?.toLowerCase().includes("airtel"))
+        return false;
+      if (qrNetworkFilter === "Equity" && !q.network?.toLowerCase().includes("equity"))
+        return false;
     }
     if (qrTypeFilter !== "all") {
       if (qrTypeFilter === "dynamic" && !q.is_dynamic) return false;
@@ -1180,7 +1184,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="size-9 rounded-full bg-rose-500/10 text-rose-500 flex items-center justify-center font-bold text-sm shrink-0">
-                      {admin.email[0].toUpperCase()}
+                      {admin.email.charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0">
                       <p className="font-bold text-xs text-foreground truncate">
@@ -1610,9 +1614,9 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
               >
                 <div
                   className={`h-3 w-full ${
-                    selectedQrForPrint.network.includes("Equity")
+                    (selectedQrForPrint.network || "").includes("Equity")
                       ? "bg-rose-800"
-                      : selectedQrForPrint.network.includes("Airtel")
+                      : (selectedQrForPrint.network || "").includes("Airtel")
                         ? "bg-red-600"
                         : "bg-amber-400"
                   }`}
@@ -1624,11 +1628,11 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                   </div>
 
                   <h3 className="mt-1.5 text-xl font-black text-slate-900 truncate max-w-full">
-                    {selectedQrForPrint.business_name}
+                    {selectedQrForPrint.business_name || "Merchant"}
                   </h3>
 
                   <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-slate-600">
-                    <span>{selectedQrForPrint.network}</span>
+                    <span>{selectedQrForPrint.network || "MTN MoMo"}</span>
                   </div>
 
                   {/* QR Code */}
@@ -1639,9 +1643,9 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                           ? `${window.location.origin}/p/${selectedQrForPrint.id}`
                           : `tel:${encodeURIComponent(
                               buildRwandaUssdString(
-                                selectedQrForPrint.network,
-                                selectedQrForPrint.payment_type,
-                                selectedQrForPrint.dial_code,
+                                selectedQrForPrint.network || "MTN MoMo",
+                                selectedQrForPrint.payment_type || "momo_code",
+                                selectedQrForPrint.dial_code || "*182#",
                                 selectedQrForPrint.amount,
                               ),
                             )}`
@@ -1666,16 +1670,16 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                     <p className="font-mono text-xl font-black text-slate-950 mt-0.5 tracking-wide">
                       {extractMerchantOrAccountCode(
                         selectedQrForPrint.dial_code,
-                        selectedQrForPrint.phone_number,
+                        selectedQrForPrint.phone_number || undefined,
                       )}
                     </p>
                     <div className="mt-1.5 pt-1.5 border-t border-slate-200 flex items-center justify-between text-[11px]">
                       <span className="text-slate-500 font-medium">Direct Dial:</span>
                       <span className="font-mono font-bold text-slate-900">
                         {buildRwandaUssdString(
-                          selectedQrForPrint.network,
-                          selectedQrForPrint.payment_type,
-                          selectedQrForPrint.dial_code,
+                          selectedQrForPrint.network || "MTN MoMo",
+                          selectedQrForPrint.payment_type || "momo_code",
+                          selectedQrForPrint.dial_code || "*182#",
                           selectedQrForPrint.amount,
                         )}
                       </span>

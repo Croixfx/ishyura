@@ -134,7 +134,8 @@ export function OrderDialog({
     }
   }, [defaultBusinessName, defaultPhone, preselectedProduct, businessName, customerPhone]);
 
-  const currentProduct = PRODUCTS.find((p) => p.id === selectedProduct) || PRODUCTS[0];
+  const defaultProd = PRODUCTS[0]!;
+  const currentProduct = PRODUCTS.find((p) => p.id === selectedProduct) ?? defaultProd;
   const totalPrice = currentProduct.priceRwf * quantity;
 
   const handleSubmit = async (e: React.FormEvent) => {

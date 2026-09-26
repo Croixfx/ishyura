@@ -8,14 +8,15 @@ import {
 } from "./sms-service";
 import { handleEdgePayPage } from "./edge-pay-renderer";
 
+export interface D1PreparedStatement {
+  bind(...params: unknown[]): D1PreparedStatement;
+  all<T = unknown>(): Promise<{ results: T[]; success: boolean }>;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  run(): Promise<{ success: boolean }>;
+}
+
 export interface D1Database {
-  prepare(query: string): {
-    bind(...params: unknown[]): {
-      all<T = unknown>(): Promise<{ results: T[]; success: boolean }>;
-      first<T = unknown>(colName?: string): Promise<T | null>;
-      run(): Promise<{ success: boolean }>;
-    };
-  };
+  prepare(query: string): D1PreparedStatement;
   exec(query: string): Promise<unknown>;
 }
 
@@ -1052,7 +1053,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
         const id = crypto.randomUUID();
         const description = body.description || "QR Payment Card";
-        const businessName = body.business_name || description.split("(")[0].trim();
+        const businessName = body.business_name || (description.split("(")[0] || "").trim();
         const network = body.network || "Mobile Money";
         const paymentType = body.payment_type || "momo_code";
         const rawDialCode = (body.dial_code || "*182#").trim();
@@ -1561,6 +1562,24 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
       const id = crypto.randomUUID();
       const orderNumber = `ISH-${Math.floor(100000 + Math.random() * 900000)}`;
+      const now = new Date().toISOString();
+      const createdOrder: MemOrder = {
+        id,
+        order_number: orderNumber,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        business_name: businessName,
+        delivery_location: deliveryLocation,
+        item_type: itemType,
+        quantity,
+        total_price: totalPrice,
+        notes,
+        network,
+        dial_code: dialCode,
+        status: "pending",
+        created_at: now,
+        updated_at: now,
+      };
 
       if (env.DB) {
         try {
@@ -1587,28 +1606,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           console.warn("D1 order insertion warning:", e);
         }
       } else {
-        memOrders.unshift({
-          id,
-          order_number: orderNumber,
-          customer_name: customerName,
-          customer_phone: customerPhone,
-          business_name: businessName,
-          delivery_location: deliveryLocation,
-          item_type: itemType,
-          quantity,
-          total_price: totalPrice,
-          notes,
-          network,
-          dial_code: dialCode,
-          status: "pending",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
+        memOrders.unshift(createdOrder);
       }
 
       return jsonResponse({
         success: true,
         order_number: orderNumber,
+        order: createdOrder,
         message:
           "Order placed successfully! We will contact you via WhatsApp / Phone to confirm delivery.",
       });
@@ -1704,12 +1708,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             "SELECT network, count(*) as count FROM qr_codes GROUP BY network",
           ).all<{ network: string; count: number }>();
 
-          const networkStats = (networks.results || []).reduce(
+          const networkStats = (networks.results || []).reduce<Record<string, number>>(
             (acc, row) => {
               acc[row.network] = row.count;
               return acc;
             },
-            {} as Record<string, number>,
+            {},
           );
 
           return jsonResponse({
@@ -2069,7 +2073,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         }
 
         const id = `admin-${crypto.randomUUID().slice(0, 8)}`;
-        const name = (body.name || email.split("@")[0]).trim();
+        const name = (body.name || email.split("@")[0] || "").trim();
         const now = new Date().toISOString();
 
         if (env.DB) {
@@ -2383,13 +2387,15 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           twilio_verify_service_sid?: string;
         };
 
-        if (env.DB) {
+        const db = env.DB;
+        if (db) {
           const now = new Date().toISOString();
           const upsertSetting = async (key: string, val?: string) => {
             if (val !== undefined && val.trim() !== "") {
-              await env.DB.prepare(
-                "INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-              )
+              await db
+                .prepare(
+                  "INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                )
                 .bind(key, val.trim(), now)
                 .run();
             }

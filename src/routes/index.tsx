@@ -47,6 +47,7 @@ import { AdminWorkspace } from "@/components/AdminWorkspace";
 import { type OrderItemType } from "@/lib/ishyura-client";
 import { signInWithGoogleReal, logoutGoogle } from "@/lib/firebase-auth";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -403,8 +404,8 @@ function Index() {
           .then((s) => {
             if (s) {
               setAdminStats({
-                newInquiries: s.newInquiries || 0,
-                pendingOrders: s.pendingOrders || 0,
+                newInquiries: s.new_inquiries || 0,
+                pendingOrders: s.pending_orders || 0,
               });
             }
           })
@@ -443,6 +444,7 @@ function Index() {
                   if (response?.credential) {
                     try {
                       const base64Url = response.credential.split(".")[1];
+                      if (!base64Url) return;
                       const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
                       const jsonPayload = decodeURIComponent(
                         atob(base64)
@@ -452,11 +454,19 @@ function Index() {
                       );
                       const payload = JSON.parse(jsonPayload);
                       if (payload.email) {
-                        handleGoogleSignIn(
-                          payload.email,
-                          payload.name || payload.given_name || payload.email.split("@")[0],
-                          payload.sub,
-                        );
+                        const email = payload.email as string;
+                        const name = (payload.name ||
+                          payload.given_name ||
+                          email.split("@")[0]) as string;
+                        const sub = (payload.sub || "") as string;
+                        IshyuraClient.signInWithGoogle({ email, name, sub })
+                          .then((u) => {
+                            setCurrentUser(u);
+                            if (isAdminUser(u)) {
+                              setActiveTab("inquiries");
+                            }
+                          })
+                          .catch((err) => console.error("GIS sign in error", err));
                       }
                     } catch (e) {
                       console.error("GIS decode error", e);
@@ -472,14 +482,18 @@ function Index() {
           }
         };
 
+        let timer: ReturnType<typeof setTimeout> | undefined;
         if ((window as unknown as { google?: unknown }).google) {
           initGsi();
         } else {
-          const timer = setTimeout(initGsi, 1500);
-          return () => clearTimeout(timer);
+          timer = setTimeout(initGsi, 1500);
         }
+        return () => {
+          if (timer) clearTimeout(timer);
+        };
       }
     }
+    return undefined;
   }, []);
 
   const currentProvider = PROVIDERS[network];
@@ -700,7 +714,8 @@ function Index() {
         } else {
           // Offline network fallback: preserve confirmed data, add to local QR history & sync queue
           const offlineRecord: QRCodeRecord = {
-            id: cardData.id,
+            id:
+              cardData.id || `offline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
             owner_id: currentUser?.id || "offline_owner",
             phone_number: currentUser?.phone_number || cardData.sanitizedInput,
             business_name: cardData.businessName,
@@ -755,15 +770,18 @@ function Index() {
       const { toPng } = await import("html-to-image");
       const dataUrl = await toPng(customerPrintCardRef.current, { pixelRatio: 3 });
       const link = document.createElement("a");
-      const netSlug = selectedQrForCustomerPrint.network.replace(/[^a-zA-Z0-9]/g, "_");
+      const netSlug = (selectedQrForCustomerPrint.network || "MTN MoMo").replace(
+        /[^a-zA-Z0-9]/g,
+        "_",
+      );
       link.download = `${(selectedQrForCustomerPrint.business_name || "Payment_Card").replace(/\s+/g, "_")}_${netSlug}_card.png`;
       link.href = dataUrl;
       link.click();
       IshyuraClient.recordDownload({
-        business_name: selectedQrForCustomerPrint.business_name,
-        network: selectedQrForCustomerPrint.network,
-        dial_code: selectedQrForCustomerPrint.dial_code,
-        phone_number: selectedQrForCustomerPrint.phone_number,
+        business_name: selectedQrForCustomerPrint.business_name || "Payment Card",
+        network: selectedQrForCustomerPrint.network || "MTN MoMo",
+        dial_code: selectedQrForCustomerPrint.dial_code || "*182#",
+        phone_number: selectedQrForCustomerPrint.phone_number || undefined,
         file_format: "png",
       }).catch(() => {});
     } catch (err) {
@@ -1813,9 +1831,9 @@ function Index() {
               >
                 <div
                   className={`h-3 w-full ${
-                    selectedQrForCustomerPrint.network.includes("Equity")
+                    (selectedQrForCustomerPrint.network || "").includes("Equity")
                       ? "bg-rose-800"
-                      : selectedQrForCustomerPrint.network.includes("Airtel")
+                      : (selectedQrForCustomerPrint.network || "").includes("Airtel")
                         ? "bg-red-600"
                         : "bg-amber-400"
                   }`}
@@ -1827,11 +1845,11 @@ function Index() {
                   </div>
 
                   <h3 className="mt-1.5 text-xl font-black text-slate-900 truncate max-w-full">
-                    {selectedQrForCustomerPrint.business_name}
+                    {selectedQrForCustomerPrint.business_name || "Merchant"}
                   </h3>
 
                   <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-slate-600">
-                    <span>{selectedQrForCustomerPrint.network}</span>
+                    <span>{selectedQrForCustomerPrint.network || "MTN MoMo"}</span>
                   </div>
 
                   {/* QR Code */}
@@ -1842,9 +1860,9 @@ function Index() {
                           ? `${window.location.origin}/p/${selectedQrForCustomerPrint.id}`
                           : `tel:${encodeURIComponent(
                               buildRwandaUssdString(
-                                selectedQrForCustomerPrint.network,
-                                selectedQrForCustomerPrint.payment_type,
-                                selectedQrForCustomerPrint.dial_code,
+                                selectedQrForCustomerPrint.network || "MTN MoMo",
+                                selectedQrForCustomerPrint.payment_type || "momo_code",
+                                selectedQrForCustomerPrint.dial_code || "*182#",
                                 selectedQrForCustomerPrint.amount,
                               ),
                             )}`
@@ -1869,16 +1887,16 @@ function Index() {
                     <p className="font-mono text-xl font-black text-slate-950 mt-0.5 tracking-wide">
                       {extractMerchantOrAccountCode(
                         selectedQrForCustomerPrint.dial_code,
-                        selectedQrForCustomerPrint.phone_number,
+                        selectedQrForCustomerPrint.phone_number || undefined,
                       )}
                     </p>
                     <div className="mt-1.5 pt-1.5 border-t border-slate-200 flex items-center justify-between text-[11px]">
                       <span className="text-slate-500 font-medium">Direct USSD Dial:</span>
                       <span className="font-mono font-bold text-slate-900">
                         {buildRwandaUssdString(
-                          selectedQrForCustomerPrint.network,
-                          selectedQrForCustomerPrint.payment_type,
-                          selectedQrForCustomerPrint.dial_code,
+                          selectedQrForCustomerPrint.network || "MTN MoMo",
+                          selectedQrForCustomerPrint.payment_type || "momo_code",
+                          selectedQrForCustomerPrint.dial_code || "*182#",
                           selectedQrForCustomerPrint.amount,
                         )}
                       </span>

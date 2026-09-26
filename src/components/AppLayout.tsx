@@ -70,11 +70,7 @@ export function AppLayout({
         {/* Welcome Page Content */}
         <main className="flex-1 w-full overflow-y-auto">{children}</main>
 
-        <InquiryDialog
-          open={inquiryOpen}
-          onOpenChange={setInquiryOpen}
-          defaultPhone={currentUser?.phone_number}
-        />
+        <InquiryDialog open={inquiryOpen} onOpenChange={setInquiryOpen} defaultPhone={undefined} />
       </div>
     );
   }

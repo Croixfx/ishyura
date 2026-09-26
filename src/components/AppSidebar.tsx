@@ -431,7 +431,11 @@ export function AppSidebar({
                       : "bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
                   }`}
                 >
-                  {isAdmin ? "A" : currentUser.email ? currentUser.email[0].toUpperCase() : "M"}
+                  {isAdmin
+                    ? "A"
+                    : currentUser.email
+                      ? currentUser.email.charAt(0).toUpperCase()
+                      : "M"}
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs font-bold text-foreground truncate">

@@ -5,6 +5,7 @@ export interface UserProfile {
   email?: string | null;
   name?: string | null;
   role?: "admin" | "merchant";
+  access_token?: string | null;
 }
 
 export const KNOWN_ADMIN_EMAILS = new Set<string>([
@@ -47,6 +48,7 @@ export interface AdminUserRecord {
 export interface QRCodeRecord {
   id: string;
   owner_id: string;
+  phone_number?: string | null;
   business_name?: string;
   network?: string;
   payment_type?: string;
@@ -594,19 +596,17 @@ export class IshyuraClient {
 
     const existingList = this.getLocalQrList();
     const idx = existingList.findIndex((item) => item.id === id);
-    if (idx !== -1) {
-      existingList[idx] = {
-        ...existingList[idx],
+    const current = idx !== -1 ? existingList[idx] : undefined;
+    if (current && idx !== -1) {
+      const updatedItem: QRCodeRecord = {
+        ...current,
         ...updates,
         is_dynamic:
-          updates.is_dynamic !== undefined
-            ? updates.is_dynamic
-              ? 1
-              : 0
-            : existingList[idx].is_dynamic,
+          updates.is_dynamic !== undefined ? (updates.is_dynamic ? 1 : 0) : current.is_dynamic,
       };
+      existingList[idx] = updatedItem;
       localStorage.setItem(QR_STORE_KEY, JSON.stringify(existingList));
-      return existingList[idx];
+      return updatedItem;
     }
     throw new Error("QR code not found to update.");
   }
@@ -755,7 +755,7 @@ export class IshyuraClient {
     business_name?: string;
     network: string;
     dial_code: string;
-    phone_number?: string;
+    phone_number?: string | null;
     file_format?: "png" | "pdf";
   }): Promise<void> {
     try {
@@ -779,6 +779,7 @@ export class IshyuraClient {
     success: boolean;
     order_number: string;
     message: string;
+    order?: OrderRecord;
   }> {
     try {
       const res = await fetch(getApiEndpoint("orders"), {
@@ -798,18 +799,22 @@ export class IshyuraClient {
       // Offline fallback
       const orderNum = `ISH-${Math.floor(100000 + Math.random() * 900000)}`;
       const localOrders = JSON.parse(localStorage.getItem("pending_orders") || "[]");
-      localOrders.unshift({
+      const offlineRecord: OrderRecord = {
         ...payload,
         id: crypto.randomUUID(),
         order_number: orderNum,
+        quantity: payload.quantity ?? 1,
+        total_price: payload.total_price,
         status: "pending",
         created_at: new Date().toISOString(),
-      });
+      };
+      localOrders.unshift(offlineRecord);
       localStorage.setItem("pending_orders", JSON.stringify(localOrders));
       return {
         success: true,
         order_number: orderNum,
         message: "Order placed successfully! We will contact you via WhatsApp/Phone.",
+        order: offlineRecord,
       };
     }
   }
@@ -1171,6 +1176,17 @@ export class IshyuraClient {
       throw new Error(err.detail || "Failed to add admin user.");
     }
     return await res.json();
+  }
+
+  static async addAdminUser(
+    adminKey: string,
+    emailOrObj: string | { email: string; name?: string },
+    name?: string,
+  ): Promise<{ success: boolean; message: string; admin?: AdminUserRecord }> {
+    if (typeof emailOrObj === "object") {
+      return this.addAdmin(adminKey, emailOrObj.email, emailOrObj.name);
+    }
+    return this.addAdmin(adminKey, emailOrObj, name);
   }
 
   static async removeAdmin(

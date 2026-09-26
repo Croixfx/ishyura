@@ -218,8 +218,9 @@ export function OrdersPage() {
     }
   }, [activeTab]);
 
+  const defaultProduct = PHYSICAL_PRODUCTS[0]!;
   const activeProductData =
-    PHYSICAL_PRODUCTS.find((p) => p.id === selectedProduct) || PHYSICAL_PRODUCTS[0];
+    PHYSICAL_PRODUCTS.find((p) => p.id === selectedProduct) ?? defaultProduct;
   const totalPrice = activeProductData.price * quantity;
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
@@ -259,7 +260,23 @@ export function OrdersPage() {
       };
 
       const result = await IshyuraClient.createOrder(payload);
-      setSubmitSuccess(result);
+      const createdRecord: OrderRecord = result.order || {
+        id: crypto.randomUUID(),
+        order_number: result.order_number,
+        customer_name: payload.customer_name,
+        customer_phone: payload.customer_phone,
+        business_name: payload.business_name,
+        delivery_location: payload.delivery_location,
+        item_type: payload.item_type,
+        quantity: payload.quantity ?? 1,
+        total_price: payload.total_price,
+        notes: payload.notes || null,
+        network: payload.network || null,
+        dial_code: payload.dial_code || null,
+        status: "pending",
+        created_at: new Date().toISOString(),
+      };
+      setSubmitSuccess(createdRecord);
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : "Failed to place order.");
     } finally {

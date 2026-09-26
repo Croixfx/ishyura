@@ -87,7 +87,7 @@ function AdminPage() {
   }
 
   // If not admin:
-  if (!isAdminUser(currentUser)) {
+  if (!currentUser || !isAdminUser(currentUser)) {
     return (
       <AppLayout currentUser={currentUser} onUserChange={setCurrentUser}>
         <div className="min-h-[80vh] flex items-center justify-center p-4">

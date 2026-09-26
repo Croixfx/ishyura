@@ -25,11 +25,12 @@ export interface ParsedPaymentCode {
  */
 export function extractMerchantOrAccountCode(
   rawInput: string | undefined | null,
-  fallback: string = "",
+  fallback: string | null | undefined = "",
 ): string {
-  if (!rawInput) return fallback;
+  const safeFallback = fallback || "";
+  if (!rawInput) return safeFallback;
   const trimmed = rawInput.trim();
-  if (!trimmed) return fallback;
+  if (!trimmed) return safeFallback;
 
   // 1. MoMo Pay / Airtel Merchant: *182*8*1*<CODE># or *182*8*1*<CODE>*<AMOUNT>#
   const momoMerchantMatch = trimmed.match(/^\*182\*8\*1\*([0-9A-Za-z]+)(?:\*[0-9]+)?#/);
@@ -86,7 +87,7 @@ export function extractMerchantOrAccountCode(
     return digitsOnly;
   }
 
-  return trimmed || fallback;
+  return trimmed || safeFallback;
 }
 
 /**

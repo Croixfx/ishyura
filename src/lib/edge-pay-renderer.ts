@@ -34,9 +34,9 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
   const pathParts = url.pathname.split("/").filter(Boolean);
   let id = url.searchParams.get("id") || "";
   if (!id && pathParts.length >= 2) {
-    id = pathParts[1];
+    id = pathParts[1] || "";
   } else if (!id && pathParts.length === 1 && pathParts[0] !== "p" && pathParts[0] !== "pay") {
-    id = pathParts[0];
+    id = pathParts[0] || "";
   }
 
   let record: PayRecord | null = null;
