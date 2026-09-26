@@ -284,6 +284,26 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     .amount-input::placeholder {
       color: rgba(255, 255, 255, 0.18);
     }
+    .dismiss-kbd-btn {
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 11px;
+      border-radius: 9px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.12s ease;
+      user-select: none;
+    }
+    .dismiss-kbd-btn:hover {
+      background: var(--accent);
+      color: #0f172a;
+    }
+    .dismiss-kbd-btn:active {
+      transform: scale(0.94);
+    }
     .quick-amounts {
       display: flex;
       flex-wrap: wrap;
@@ -490,7 +510,10 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
               ${record.item_name ? `<div class="item-desc">${escapeHtml(record.item_name)}</div>` : ""}
             </div>`
           : `<div class="amount-input-box">
-              <label for="amountInput" class="amount-input-label">Enter Amount to Pay (RWF)</label>
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <label for="amountInput" class="amount-input-label" style="margin-bottom: 0;">Enter Amount to Pay (RWF)</label>
+                <button type="button" class="dismiss-kbd-btn" onclick="dismissKeyboard()">Done ✓</button>
+              </div>
               <div class="amount-field-wrap">
                 <span class="currency-prefix">RWF</span>
                 <input
@@ -514,6 +537,15 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
             </div>`
       }
 
+      <!-- Direct Dial Action (Placed directly below amount for immediate thumb reach) -->
+      <a href="${initialTelUri}" class="pay-btn" id="dialBtn" onclick="triggerDial()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+        </svg>
+        <span id="btnLabel">${hasFixedPrice ? `Dial &amp; Pay ${escapeHtml(formattedAmount)}` : `Dial &amp; Pay via ${escapeHtml(brandName)}`}</span>
+      </a>
+
+      <!-- Merchant Details & USSD Code Box (Below Primary CTA) -->
       <div class="code-box">
         <div>
           <div class="code-label">${record.payment_type === "phone" ? "Recipient Phone" : "Merchant Code (Code y'Umucuruzi)"}</div>
@@ -522,14 +554,6 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         </div>
         <button type="button" class="copy-btn" id="copyBtn" onclick="copyCurrentUssd()">Copy Code</button>
       </div>
-
-      <!-- Direct Dial Action -->
-      <a href="${initialTelUri}" class="pay-btn" id="dialBtn" onclick="triggerDial()">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
-        </svg>
-        <span id="btnLabel">${hasFixedPrice ? `Dial &amp; Pay ${escapeHtml(formattedAmount)}` : `Dial &amp; Pay via ${escapeHtml(brandName)}`}</span>
-      </a>
 
       <p class="hint-text" id="hintText">
         Tapping opens your phone dialer with <strong>${escapeHtml(initialUssd)}</strong> ready. If your phone is Dual-SIM, choose your <strong>${escapeHtml(brandName)}</strong> SIM to dial.
@@ -552,6 +576,17 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
 
     function formatRwf(val) {
       return Number(val).toLocaleString() + " RWF";
+    }
+
+    function dismissKeyboard() {
+      var input = document.getElementById("amountInput");
+      if (input) {
+        input.blur();
+      }
+      var dialBtn = document.getElementById("dialBtn");
+      if (dialBtn) {
+        dialBtn.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
     }
 
     function updateAmount(val) {
@@ -582,8 +617,18 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         var next = current + amt;
         input.value = next;
         updateAmount(next);
-        input.focus();
+        input.blur(); // Dismiss software keyboard so payment button is clearly visible!
       }
+    }
+
+    var amtInput = document.getElementById("amountInput");
+    if (amtInput) {
+      amtInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter" || e.keyCode === 13) {
+          e.preventDefault();
+          dismissKeyboard();
+        }
+      });
     }
 
     function showToast(msg) {

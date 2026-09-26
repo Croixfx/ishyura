@@ -394,6 +394,17 @@ function Index() {
     }
   }, [searchParams.tab]);
 
+  // Auto-scroll directly to generated card so user never has to scroll back
+  useEffect(() => {
+    if (confirmedData && cardRef.current) {
+      const timer = setTimeout(() => {
+        cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [confirmedData]);
+
   useEffect(() => {
     const user = IshyuraClient.getSavedUser();
     if (user) {
@@ -2614,17 +2625,22 @@ function Index() {
                 {/* ---------------------------------------------------- */}
                 {/* TIER SELECTION: Basic Stand (Free) vs Dynamic PRO Stand */}
                 {/* ---------------------------------------------------- */}
-                <div className="space-y-4 pt-1">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs font-black uppercase tracking-wider text-muted-foreground">
-                      Choose Stand &amp; Feature Tier
-                    </Label>
-                    <span className="text-[10px] font-bold text-muted-foreground">
-                      {isDynamic ? "⚡ PRO Monthly Plan" : "📴 100% Free Forever"}
+                <div className="space-y-4 pt-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1">
+                    <div>
+                      <Label className="text-xs sm:text-sm font-black uppercase tracking-wider text-foreground">
+                        Select Payment Stand Tier
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Choose between 100% offline static card or smart update-anytime PRO stand
+                      </p>
+                    </div>
+                    <span className="text-xs font-bold text-muted-foreground shrink-0">
+                      {isDynamic ? "⚡ Dynamic PRO Selected" : "📴 Basic Offline Selected"}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
                     {/* TIER 1: Basic Offline (100% Free) */}
                     <div
                       role="button"
@@ -2639,33 +2655,67 @@ function Index() {
                           if (confirmedData) setConfirmedData(null);
                         }
                       }}
-                      className={`relative cursor-pointer rounded-2xl border p-4 transition-all text-left flex flex-col justify-between ${
+                      className={`relative cursor-pointer rounded-3xl border-2 p-5 sm:p-6 transition-all text-left flex flex-col justify-between shadow-xs ${
                         !isDynamic
-                          ? "border-primary bg-primary/5 ring-2 ring-primary/20 shadow-sm"
-                          : "border-border/80 bg-card/60 hover:border-border hover:bg-muted/30 opacity-80"
+                          ? "border-primary bg-primary/5 ring-4 ring-primary/15 shadow-md"
+                          : "border-border/80 bg-card/60 hover:border-primary/50 hover:bg-muted/30 opacity-85"
                       }`}
                     >
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-base">📴</span>
-                            <span className="font-extrabold text-sm text-foreground">
-                              Basic Stand
-                            </span>
+                      <div className="space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="size-12 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-2xl font-black shrink-0">
+                              📴
+                            </div>
+                            <div>
+                              <h3 className="font-black text-lg text-foreground tracking-tight">
+                                Basic Stand
+                              </h3>
+                              <p className="text-xs font-bold text-muted-foreground">
+                                100% Offline Direct USSD
+                              </p>
+                            </div>
                           </div>
-                          <span className="text-[10px] font-black rounded-md px-1.5 py-0.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                            0 RWF (Free)
-                          </span>
+                          <div className="flex flex-col items-end gap-1.5 shrink-0">
+                            <span className="text-xs font-black rounded-lg px-2.5 py-1 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                              0 RWF Free
+                            </span>
+                            <div
+                              className={`size-5 rounded-full border-2 flex items-center justify-center transition-colors ${
+                                !isDynamic
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "border-muted-foreground/40"
+                              }`}
+                            >
+                              {!isDynamic && <div className="size-2 rounded-full bg-white" />}
+                            </div>
+                          </div>
                         </div>
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          <strong>100% Offline Direct USSD</strong>. Customer camera scans to dial
-                          immediately with <strong>zero mobile data</strong>. Fixed once printed.
+
+                        <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
+                          Encodes direct phone USSD. Customers scan with their phone camera to dial
+                          immediately with <strong>zero mobile data</strong>.
                         </p>
+
+                        <div className="space-y-2 pt-3 border-t border-border/50 text-xs text-foreground font-medium">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+                            <span>100% Offline: Zero mobile data needed to pay</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+                            <span>One-Time Print: Tabletop stand &amp; stickers</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+                            <span>Free Forever: Zero recurring monthly fees</span>
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="mt-3 pt-2.5 border-t border-border/40 flex items-center justify-between text-[11px] text-muted-foreground font-medium">
-                        <span>Physical Stands &amp; Stickers</span>
-                        <span className="font-bold text-foreground">One-Time Print</span>
+                      <div className="mt-5 pt-3 border-t border-border/40 flex items-center justify-between text-xs text-muted-foreground font-semibold">
+                        <span>Physical Format</span>
+                        <span className="font-bold text-foreground">Static Counter Card</span>
                       </div>
                     </div>
 
@@ -2683,38 +2733,75 @@ function Index() {
                           if (confirmedData) setConfirmedData(null);
                         }
                       }}
-                      className={`relative cursor-pointer rounded-2xl border p-4 transition-all text-left flex flex-col justify-between ${
+                      className={`relative cursor-pointer rounded-3xl border-2 p-5 sm:p-6 transition-all text-left flex flex-col justify-between shadow-xs ${
                         isDynamic
-                          ? "border-amber-500 bg-amber-500/5 ring-2 ring-amber-500/25 shadow-sm"
-                          : "border-border/80 bg-card/60 hover:border-border hover:bg-muted/30 opacity-80"
+                          ? "border-amber-500 bg-amber-500/5 ring-4 ring-amber-500/20 shadow-md"
+                          : "border-border/80 bg-card/60 hover:border-amber-500/50 hover:bg-muted/30 opacity-85"
                       }`}
                     >
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-base">⚡</span>
-                            <span className="font-extrabold text-sm text-foreground">
-                              Dynamic PRO
+                      <div className="space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="size-12 rounded-2xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center text-2xl font-black shrink-0">
+                              ⚡
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-black text-lg text-foreground tracking-tight">
+                                  Dynamic PRO
+                                </h3>
+                                <span className="inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 px-2 py-0.5 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400">
+                                  PRO
+                                </span>
+                              </div>
+                              <p className="text-xs font-bold text-amber-700 dark:text-amber-400">
+                                Print Once, Update Forever
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1.5 shrink-0">
+                            <span className="text-xs font-black rounded-lg px-2.5 py-1 bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
+                              5,000 RWF/mo
                             </span>
-                            <span className="inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 px-1.5 py-0.2 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400">
-                              PRO
+                            <div
+                              className={`size-5 rounded-full border-2 flex items-center justify-center transition-colors ${
+                                isDynamic
+                                  ? "border-amber-500 bg-amber-500 text-slate-950"
+                                  : "border-muted-foreground/40"
+                              }`}
+                            >
+                              {isDynamic && <div className="size-2 rounded-full bg-slate-950" />}
+                            </div>
+                          </div>
+                        </div>
+
+                        <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
+                          Permanent Smart Stand &amp; NFC Tag. Change bill amounts or recipient
+                          codes in 3 seconds from your phone <strong>without reprinting</strong>.
+                        </p>
+
+                        <div className="space-y-2 pt-3 border-t border-border/50 text-xs text-foreground font-medium">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="size-4 text-amber-500 shrink-0" />
+                            <span>
+                              <strong>Print Once Guarantee</strong>: Never replace stands
                             </span>
                           </div>
-                          <span className="text-[10px] font-black rounded-md px-1.5 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-400">
-                            5,000 RWF/mo
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="size-4 text-amber-500 shrink-0" />
+                            <span>Live Bill Updater: Change bill in 1 click anytime</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="size-4 text-amber-500 shrink-0" />
+                            <span>Physical NFC Tag Ready: Tap-to-pay on modern phones</span>
+                          </div>
                         </div>
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          <strong>Print Once, Update Forever</strong>. Web QR &amp; Smart NFC.
-                          Update bill amounts or recipient numbers from your dashboard{" "}
-                          <strong>without reprinting</strong>.
-                        </p>
                       </div>
 
-                      <div className="mt-3 pt-2.5 border-t border-border/40 flex items-center justify-between text-[11px] text-muted-foreground font-medium">
-                        <span>NFC Tags &amp; Counter Stands</span>
+                      <div className="mt-5 pt-3 border-t border-border/40 flex items-center justify-between text-xs text-muted-foreground font-semibold">
+                        <span>Physical Format</span>
                         <span className="font-black text-amber-600 dark:text-amber-400">
-                          Never Reprint
+                          Smart Stand &amp; NFC Tag
                         </span>
                       </div>
                     </div>
