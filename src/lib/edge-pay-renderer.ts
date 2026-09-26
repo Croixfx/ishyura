@@ -221,63 +221,63 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       word-break: break-word;
     }
 
-    /* Auto-detected SIM card identification card: Never asks for choosing SIM cards */
-    .carrier-auto-card {
+    /* Network Provider Selector */
+    .network-select-wrap {
       width: 100%;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--card-border);
-      border-radius: 16px;
-      padding: 12px 14px;
       margin-bottom: 18px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
       text-align: left;
     }
-    .carrier-icon-badge {
-      width: 38px;
-      height: 38px;
-      border-radius: 12px;
+    .network-select-header {
       display: flex;
+      justify-content: space-between;
       align-items: center;
-      justify-content: center;
-      font-size: 18px;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid var(--card-border);
-      flex-shrink: 0;
+      margin-bottom: 8px;
+      padding: 0 4px;
     }
-    .carrier-details {
+    .network-select-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+    .network-pills {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      width: 100%;
+    }
+    .network-pill {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1.5px solid var(--card-border);
+      border-radius: 14px;
+      padding: 10px 4px;
       display: flex;
       flex-direction: column;
-      gap: 2px;
-    }
-    .carrier-title-row {
-      display: flex;
       align-items: center;
-      gap: 6px;
-    }
-    .pulse-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #10b981;
-      box-shadow: 0 0 8px #10b981;
-      animation: pulse 1.5s infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.5; transform: scale(0.85); }
-    }
-    .carrier-label {
-      font-size: 13px;
-      font-weight: 800;
+      gap: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
       color: var(--text);
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
     }
-    .carrier-desc {
+    .network-pill:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .network-pill.active {
+      border-color: var(--accent);
+      background: rgba(255, 255, 255, 0.1);
+      box-shadow: 0 0 16px -4px var(--brand-glow);
+    }
+    .pill-icon {
+      font-size: 20px;
+      line-height: 1;
+    }
+    .pill-name {
       font-size: 11px;
-      color: var(--muted);
-      font-weight: 500;
-      line-height: 1.3;
+      font-weight: 700;
+      white-space: nowrap;
     }
 
     .amount-box {
@@ -442,19 +442,24 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
 
       <h1 class="shop-title">${escapeHtml(record.business_name)}</h1>
 
-      <!-- Automatic SIM & Network Identification (Zero Prompt, No SIM choice asked) -->
-      <div class="carrier-auto-card">
-        <div class="carrier-icon-badge" id="carrierIcon">
-          ${isEquity ? "🏦" : isAirtel ? "🔴" : "🟡"}
+      <!-- Network Provider Selector -->
+      <div class="network-select-wrap">
+        <div class="network-select-header">
+          <span class="network-select-title">Choose Payment Network</span>
         </div>
-        <div class="carrier-details">
-          <div class="carrier-title-row">
-            <span class="pulse-dot"></span>
-            <span class="carrier-label" id="carrierBadgeLabel">Active SIM: ${escapeHtml(detectedLabel)}</span>
-          </div>
-          <p class="carrier-desc" id="carrierSubtext">
-            Auto-targeted active SIM card. Direct USSD dialing ready with no SIM selection needed.
-          </p>
+        <div class="network-pills">
+          <button type="button" class="network-pill ${isMtn ? "active" : ""}" id="pill-mtn" onclick="applyActiveNetwork('mtn')">
+            <span class="pill-icon">🟡</span>
+            <span class="pill-name">MTN MoMo</span>
+          </button>
+          <button type="button" class="network-pill ${isAirtel ? "active" : ""}" id="pill-airtel" onclick="applyActiveNetwork('airtel')">
+            <span class="pill-icon">🔴</span>
+            <span class="pill-name">Airtel Money</span>
+          </button>
+          <button type="button" class="network-pill ${isEquity ? "active" : ""}" id="pill-equity" onclick="applyActiveNetwork('equity')">
+            <span class="pill-icon">🏦</span>
+            <span class="pill-name">Equity eKash</span>
+          </button>
         </div>
       </div>
 
@@ -477,22 +482,22 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         <button type="button" class="copy-btn" id="copyBtn" onclick="copyCurrentUssd()">Copy Code</button>
       </div>
 
-      <!-- Single Direct 1-Tap Pay Action (No buttons to choose between SIM cards) -->
+      <!-- Direct Dial Action -->
       <a href="${initialTelUri}" class="pay-btn" id="dialBtn" onclick="triggerDial()">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
         </svg>
-        <span id="btnLabel">1-Tap Dial &amp; Pay (${escapeHtml(initialBrandName)}) ${hasFixedPrice ? escapeHtml(formattedAmount) : ""}</span>
+        <span id="btnLabel">Dial &amp; Pay via ${escapeHtml(initialBrandName)}${hasFixedPrice ? " " + escapeHtml(formattedAmount) : ""}</span>
       </a>
 
       <p class="hint-text" id="hintText">
-        Tapping opens your cellular phone dialer with <strong>${escapeHtml(initialUssd)}</strong> ready. Just tap Call &amp; enter your PIN.
+        Tapping opens your phone dialer with <strong>${escapeHtml(initialUssd)}</strong> ready. If using a Dual-SIM phone, tap Call with your ${escapeHtml(initialBrandName)} SIM.
       </p>
     </div>
   </div>
 
   <div class="footer">
-    <span>Instant Edge Pay by</span>
+    <span>Instant Multi-Network Pay by</span>
     <a href="/" target="_blank">Ishyura.rw</a>
     <span>• Zero Extra Fee</span>
   </div>
@@ -527,7 +532,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     var currentNet = "${initialCarrier}";
     var fixedAmtText = "${hasFixedPrice ? " " + escapeHtml(formattedAmount) : ""}";
 
-    // Check device local storage if carrier was previously detected on this phone
+    // Check device local storage if network was previously selected on this phone
     try {
       var savedPref = localStorage.getItem("ishyura_scanner_sim");
       if (savedPref && NETWORKS[savedPref] && "${carrierInfo.detected}" === "unknown") {
@@ -539,6 +544,14 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       currentNet = net;
       var data = NETWORKS[net] || NETWORKS.mtn;
 
+      // Update pills
+      var pills = document.querySelectorAll(".network-pill");
+      for (var i = 0; i < pills.length; i++) {
+        pills[i].classList.remove("active");
+      }
+      var activePill = document.getElementById("pill-" + net);
+      if (activePill) activePill.classList.add("active");
+
       // Update dial button
       var dialBtn = document.getElementById("dialBtn");
       dialBtn.href = "tel:" + encodeURIComponent(data.ussd);
@@ -546,16 +559,15 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       dialBtn.style.color = data.textColor;
 
       // Update labels & details
-      document.getElementById("btnLabel").innerText = "1-Tap Dial & Pay (" + data.name + ")" + fixedAmtText;
+      document.getElementById("btnLabel").innerText = "Dial & Pay via " + data.name + fixedAmtText;
       document.getElementById("ussdPreview").innerText = data.ussd;
-      document.getElementById("carrierBadgeLabel").innerText = "Active SIM: " + data.name;
-      document.getElementById("carrierIcon").innerText = data.icon;
-      document.getElementById("hintText").innerHTML = "Tapping opens your cellular phone dialer with <strong>" + data.ussd + "</strong> ready. Just tap Call & enter your PIN.";
+      document.getElementById("hintText").innerHTML = "Tapping opens your phone dialer with <strong>" + data.ussd + "</strong> ready. If using a Dual-SIM phone, tap Call with your " + data.name + " SIM.";
 
       // Update root accent variable
       document.documentElement.style.setProperty("--accent", data.color);
+      document.documentElement.style.setProperty("--brand-glow", data.color + "40");
 
-      // Persist active SIM network for subsequent scans
+      // Persist active network for subsequent scans
       try {
         localStorage.setItem("ishyura_scanner_sim", currentNet);
       } catch(e) {}
@@ -586,20 +598,8 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       if (navigator.vibrate) navigator.vibrate([40, 50, 40]);
     }
 
-    // Apply resolved network immediately
+    // Apply initial network
     applyActiveNetwork(currentNet);
-
-    // On mobile phone scan, trigger smooth dialer intent after 300ms if permitted
-    try {
-      if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-        setTimeout(function() {
-          // If in standalone or active scanner browser
-          if (window.navigator.standalone) {
-            window.location.href = "tel:" + encodeURIComponent(NETWORKS[currentNet].ussd);
-          }
-        }, 350);
-      }
-    } catch(e) {}
   </script>
 </body>
 </html>`;

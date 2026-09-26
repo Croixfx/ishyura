@@ -2492,7 +2492,7 @@ function Index() {
                           htmlFor="dynamic-toggle"
                           className="text-sm font-bold text-foreground cursor-pointer"
                         >
-                          Dynamic Smart QR
+                          Multi-Network Web QR (Dynamic)
                         </Label>
                         <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
                           <Sparkles className="size-3" />
@@ -2503,8 +2503,10 @@ function Index() {
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground leading-relaxed">
-                        Never reprint stickers. Change your recipient phone or merchant code
-                        anytime. Customers scanning get an instant sub-50ms 1-Tap Pay Sheet.
+                        Default (OFF) generates a <strong>100% Offline Static QR</strong>: customers
+                        scan with their camera to dial directly with zero internet. Turn ON only if
+                        you want a web link that lets customers choose between MTN, Airtel, or
+                        Equity on screen, or change details without reprinting.
                       </p>
                     </div>
                     <Switch
@@ -2518,14 +2520,15 @@ function Index() {
                   </div>
 
                   {isDynamic && (
-                    <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 text-xs space-y-1 text-primary animate-in fade-in-50 duration-200">
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs space-y-1 text-amber-600 dark:text-amber-400 animate-in fade-in-50 duration-200">
                       <div className="flex items-center gap-1.5 font-bold">
                         <Zap className="size-3.5" />
-                        <span>Instant Edge Pay Active (Sub-50ms)</span>
+                        <span>Multi-Network Web Pay Active</span>
                       </div>
                       <p className="text-[11px] text-muted-foreground leading-normal">
-                        Customers scanning will see your verified business name and can pay with a
-                        single tap on any smartphone.
+                        Customers scanning will open a web page to select their network (MTN MoMo,
+                        Airtel Money, or Equity eKash) and dial.{" "}
+                        <em>Requires mobile internet connection to open.</em>
                       </p>
                     </div>
                   )}
@@ -2990,8 +2993,16 @@ function Index() {
                               ? "Merchant Code (Code y'Umucuruzi)"
                               : "Phone Number"}
                           </p>
-                          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-500/10 px-1.5 py-0.5 rounded-full">
-                            Zero Data Needed
+                          <span
+                            className={
+                              confirmedData.isDynamic
+                                ? "text-[9px] font-bold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full"
+                                : "text-[9px] font-bold text-emerald-700 bg-emerald-500/10 px-1.5 py-0.5 rounded-full"
+                            }
+                          >
+                            {confirmedData.isDynamic
+                              ? "Web Link (Needs Data)"
+                              : "100% Offline (Zero Data Needed)"}
                           </span>
                         </div>
                         <p className="font-mono text-xl font-black text-print-ink mt-0.5 tracking-wide">
