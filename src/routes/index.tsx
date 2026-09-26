@@ -73,6 +73,10 @@ import {
   isAdminUser,
   getDynamicPayUrl,
 } from "@/lib/ishyura-client";
+import { PWAInstallButton } from "@/components/PWAInstallButton";
+import { OfflineIndicator } from "@/components/OfflineIndicator";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { extractMerchantOrAccountCode, buildRwandaUssdString } from "@/lib/momo-formatters";
 
 interface IndexSearch {
   tab?: string;
@@ -275,8 +279,59 @@ function Index() {
   const [upgradeSuccess, setUpgradeSuccess] = useState(false);
   const [upgradeError, setUpgradeError] = useState<string | null>(null);
 
-  // QR History
+  // QR History - initialized to empty array for SSR hydration safety, populated after mount
   const [qrHistory, setQrHistory] = useState<QRCodeRecord[]>([]);
+
+  // Load from local storage after client mount
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem("ishyura_cached_qr_cards_v2");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setQrHistory(parsed);
+        }
+      }
+    } catch {
+      // Fallback to empty list if local cache is unavailable or corrupted
+    }
+  }, []);
+
+  // Keep local cache in sync for offline resilience
+  useEffect(() => {
+    if (typeof window !== "undefined" && qrHistory.length > 0) {
+      try {
+        localStorage.setItem("ishyura_cached_qr_cards_v2", JSON.stringify(qrHistory));
+      } catch {
+        // Ignore quota/private browsing write errors
+      }
+    }
+  }, [qrHistory]);
+
+  // Sync offline-generated cards when network reconnects
+  useEffect(() => {
+    const handleOnlineSync = async () => {
+      try {
+        const pendingRaw = localStorage.getItem("ishyura_pending_offline_sync");
+        if (pendingRaw) {
+          const pending = JSON.parse(pendingRaw);
+          if (Array.isArray(pending) && pending.length > 0) {
+            for (const item of pending) {
+              await IshyuraClient.createQrCode(item.name, item.amount, item.meta).catch(() => {});
+            }
+            localStorage.removeItem("ishyura_pending_offline_sync");
+            const refreshed = await IshyuraClient.listQrCodes().catch(() => null);
+            if (refreshed) setQrHistory(refreshed);
+          }
+        }
+      } catch {
+        // Ignore offline sync errors
+      }
+    };
+
+    window.addEventListener("online", handleOnlineSync);
+    return () => window.removeEventListener("online", handleOnlineSync);
+  }, []);
 
   // Verification & Confirmation state: prevents generating or exporting incomplete/miskeyed codes
   const [confirmedData, setConfirmedData] = useState<ConfirmedCardData | null>(null);
@@ -548,7 +603,7 @@ function Index() {
 
         if (isOwner) {
           // Legitimate owner re-printing or reloading their lost QR card
-          const cleanDigits = (existing.dial_code || "").replace(/[^0-9]/g, "") || sanitizedInput;
+          const cleanDigits = extractMerchantOrAccountCode(existing.dial_code, sanitizedInput);
           const isDyn = Boolean(existing.is_dynamic);
           const dynUrl = isDyn ? getDynamicPayUrl(existing.id) : undefined;
           const reloadedCard: ConfirmedCardData = {
@@ -642,6 +697,44 @@ function Index() {
             dialCode: errorObj.existing_qr?.dial_code || cardData.ussdString,
             message: errorObj.message || "This QR code already exists.",
           });
+        } else {
+          // Offline network fallback: preserve confirmed data, add to local QR history & sync queue
+          const offlineRecord: QRCodeRecord = {
+            id: cardData.id,
+            owner_id: currentUser?.id || "offline_owner",
+            phone_number: currentUser?.phone_number || cardData.sanitizedInput,
+            business_name: cardData.businessName,
+            network: cardData.network,
+            payment_type: cardData.paymentType,
+            dial_code: cardData.ussdString,
+            description: `${cardData.businessName} (${cardData.network} - ${cardData.sanitizedInput})`,
+            amount: cardData.amount,
+            item_name: cardData.itemName,
+            is_dynamic: cardData.isDynamic ? 1 : 0,
+            created_at: new Date().toISOString(),
+          };
+          setQrHistory((prev) => [offlineRecord, ...prev.filter((q) => q.id !== offlineRecord.id)]);
+          try {
+            const pending = JSON.parse(
+              localStorage.getItem("ishyura_pending_offline_sync") || "[]",
+            );
+            pending.push({
+              name: offlineRecord.description,
+              amount: numAmount,
+              meta: {
+                business_name: cardData.businessName,
+                network: cardData.network,
+                payment_type: cardData.paymentType,
+                dial_code: cardData.ussdString,
+                is_dynamic: isDynamic,
+                item_name: cleanItem || undefined,
+              },
+            });
+            localStorage.setItem("ishyura_pending_offline_sync", JSON.stringify(pending));
+          } catch {
+            // Ignore offline pending queue write errors
+          }
+          setSavedSuccess(true);
         }
       })
       .finally(() => {
@@ -709,7 +802,7 @@ function Index() {
   const handleOpenEditDestination = (qr: QRCodeRecord) => {
     setEditingQr(qr);
     setEditBusinessName(qr.business_name || "");
-    const cleanDigits = (qr.dial_code || "").replace(/[^0-9]/g, "");
+    const cleanDigits = extractMerchantOrAccountCode(qr.dial_code, qr.phone_number);
     setEditAccountValue(cleanDigits || qr.phone_number || "");
     setEditNetwork((qr.network as Network) || "MTN MoMo");
     setEditPaymentType((qr.payment_type as PaymentType) || "momo_code");
@@ -724,19 +817,9 @@ function Index() {
     setEditSaving(true);
     setEditSuccessMsg(null);
     try {
-      const cleanDigits = editAccountValue.replace(/[^0-9]/g, "");
-      const provider = PROVIDERS[editNetwork] || PROVIDERS["MTN MoMo"];
-      const prefix = provider.prefixes[editPaymentType];
+      const cleanDigits = extractMerchantOrAccountCode(editAccountValue);
       const numAmount = editAmount.trim() ? parseFloat(editAmount) : null;
-
-      let newUssd = `${prefix}${cleanDigits}#`;
-      if (numAmount) {
-        if (editNetwork === "Equity Bank (eKash)") {
-          newUssd = `*555*2*${cleanDigits}*${Math.round(numAmount)}#`;
-        } else {
-          newUssd = `${prefix}${cleanDigits}*${Math.round(numAmount)}#`;
-        }
-      }
+      const newUssd = buildRwandaUssdString(editNetwork, editPaymentType, cleanDigits, numAmount);
 
       const updated = await IshyuraClient.updateQrCode(editingQr.id, {
         business_name: editBusinessName.trim() || editingQr.business_name,
@@ -1127,6 +1210,9 @@ function Index() {
       inquiryCount={adminStats.newInquiries}
       orderCount={adminStats.pendingOrders}
     >
+      {/* Offline Status & Bad Network Assistance Indicator */}
+      <OfflineIndicator />
+
       {/* Global Dialog for Sign In when triggered */}
       <Dialog open={authDialogOpen} onOpenChange={setAuthDialogOpen}>
         <DialogContent className="sm:max-w-md">
@@ -1754,23 +1840,49 @@ function Index() {
                       value={
                         selectedQrForCustomerPrint.is_dynamic
                           ? `${window.location.origin}/p/${selectedQrForCustomerPrint.id}`
-                          : `tel:${selectedQrForCustomerPrint.dial_code}`
+                          : `tel:${encodeURIComponent(
+                              buildRwandaUssdString(
+                                selectedQrForCustomerPrint.network,
+                                selectedQrForCustomerPrint.payment_type,
+                                selectedQrForCustomerPrint.dial_code,
+                                selectedQrForCustomerPrint.amount,
+                              ),
+                            )}`
                       }
                       size={180}
                       level="H"
                     />
                   </div>
 
-                  {/* Dial Code Display */}
-                  <div className="mt-3 w-full rounded-xl bg-slate-100 border border-slate-200 px-3 py-1.5">
-                    <p className="text-[10px] font-bold uppercase text-slate-500">
-                      {selectedQrForCustomerPrint.payment_type === "momo_code"
-                        ? "Merchant Pay Code"
-                        : "Recipient Phone"}
+                  {/* Clean Merchant Code & Dial Code Display */}
+                  <div className="mt-3 w-full rounded-xl bg-slate-100 border border-slate-200 px-3.5 py-2 text-left">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                        {selectedQrForCustomerPrint.payment_type === "momo_code"
+                          ? "Merchant Code (Code y'Umucuruzi)"
+                          : "Recipient Phone"}
+                      </p>
+                      <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+                        Zero Internet Needed
+                      </span>
+                    </div>
+                    <p className="font-mono text-xl font-black text-slate-950 mt-0.5 tracking-wide">
+                      {extractMerchantOrAccountCode(
+                        selectedQrForCustomerPrint.dial_code,
+                        selectedQrForCustomerPrint.phone_number,
+                      )}
                     </p>
-                    <p className="font-mono text-sm font-black text-slate-950">
-                      {selectedQrForCustomerPrint.dial_code}
-                    </p>
+                    <div className="mt-1.5 pt-1.5 border-t border-slate-200 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-500 font-medium">Direct USSD Dial:</span>
+                      <span className="font-mono font-bold text-slate-900">
+                        {buildRwandaUssdString(
+                          selectedQrForCustomerPrint.network,
+                          selectedQrForCustomerPrint.payment_type,
+                          selectedQrForCustomerPrint.dial_code,
+                          selectedQrForCustomerPrint.amount,
+                        )}
+                      </span>
+                    </div>
                   </div>
 
                   {selectedQrForCustomerPrint.amount && (
@@ -1785,7 +1897,7 @@ function Index() {
                   )}
 
                   <p className="mt-2.5 text-[10px] text-slate-500">
-                    Scan with camera &amp; tap Call to pay • Ishyura.rw
+                    📶 100% Offline • Zero mobile data needed to pay • Ishyura.rw
                   </p>
                 </div>
               </div>
@@ -1990,10 +2102,17 @@ function Index() {
                     </span>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-muted/40 border border-border/40 font-mono text-xs font-bold text-foreground flex items-center justify-between">
-                    <span className="tracking-wide truncate mr-2">{qr.dial_code}</span>
-                    <span className="text-[10px] text-muted-foreground font-sans font-normal shrink-0">
-                      {qr.is_dynamic ? "Edge Route" : "Verified Route"}
+                  <div className="p-3 rounded-xl bg-muted/40 border border-border/40 text-xs flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-bold text-muted-foreground uppercase">
+                        {qr.payment_type === "momo_code" ? "Merchant Code:" : "Phone:"}
+                      </span>
+                      <span className="font-mono font-black text-foreground">
+                        {extractMerchantOrAccountCode(qr.dial_code, qr.phone_number)}
+                      </span>
+                    </div>
+                    <span className="font-mono text-[11px] text-muted-foreground truncate ml-2">
+                      {qr.dial_code}
                     </span>
                   </div>
 
@@ -2043,8 +2162,10 @@ function Index() {
                           setBusinessName(qr.business_name || "");
                           setNetwork((qr.network as Network) || "MTN MoMo");
                           setPaymentType((qr.payment_type as PaymentType) || "momo_code");
-                          const digits =
-                            (qr.dial_code || "").replace(/[^0-9]/g, "") || qr.phone_number || "";
+                          const digits = extractMerchantOrAccountCode(
+                            qr.dial_code,
+                            qr.phone_number,
+                          );
                           setAccountValue(digits);
                           setActiveTab("generator");
                         }}
@@ -2844,14 +2965,30 @@ function Index() {
                         )}
                       </div>
 
-                      <div className="mt-4 w-full rounded-xl bg-print-muted px-4 py-2.5">
-                        <p className="text-[10px] font-semibold uppercase text-print-muted-ink">
-                          {confirmedData.paymentType === "momo_code" ? "MoMo Code" : "Phone Number"}
-                          : {confirmedData.sanitizedInput}
+                      <div className="mt-4 w-full rounded-xl bg-print-muted px-4 py-2.5 text-left">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-print-muted-ink">
+                            {confirmedData.paymentType === "momo_code"
+                              ? "Merchant Code (Code y'Umucuruzi)"
+                              : "Phone Number"}
+                          </p>
+                          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-500/10 px-1.5 py-0.5 rounded-full">
+                            Zero Data Needed
+                          </span>
+                        </div>
+                        <p className="font-mono text-xl font-black text-print-ink mt-0.5 tracking-wide">
+                          {extractMerchantOrAccountCode(
+                            confirmedData.sanitizedInput || confirmedData.ussdString,
+                          )}
                         </p>
-                        <p className="font-mono text-sm font-bold tracking-tight text-print-ink">
-                          {confirmedData.ussdString}
-                        </p>
+                        <div className="mt-1.5 pt-1.5 border-t border-print-muted-ink/15 flex items-center justify-between">
+                          <span className="text-[10px] text-print-muted-ink font-semibold">
+                            Direct USSD Dial:
+                          </span>
+                          <span className="font-mono text-xs font-bold tracking-tight text-print-ink">
+                            {confirmedData.ussdString}
+                          </span>
+                        </div>
                         {confirmedData.feeNote && (
                           <p className="mt-1 text-[11px] font-bold text-emerald-700">
                             {confirmedData.feeNote}
@@ -2871,7 +3008,7 @@ function Index() {
                       )}
 
                       <p className="mt-3 text-[11px] font-medium text-print-muted-ink">
-                        Scan with camera &amp; tap Call to pay
+                        📶 Works 100% Offline • Scan camera or dial code • No internet data needed
                       </p>
                     </div>
                     <div className="flex items-center justify-between border-t border-print-muted bg-print-muted/40 px-5 py-3">

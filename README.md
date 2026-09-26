@@ -96,10 +96,10 @@ npm run dev
 The repository includes a GitHub Actions CI/CD workflow in `.github/workflows/deploy.yml` that builds the application, applies Cloudflare D1 migrations automatically, and deploys the Cloudflare Worker.
 
 To enable automated deployment:
+
 1. Open your repository on GitHub.
 2. Go to **Settings** > **Secrets and variables** > **Actions**.
 3. Under **Repository secrets**, click **New repository secret**:
    - **`CLOUDFLARE_API_TOKEN`**: Create an API Token in [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens) using the **Edit Cloudflare Workers** template (or custom token with `Account: Worker Scripts: Edit` and `D1: Edit` permissions).
    - **`CLOUDFLARE_ACCOUNT_ID`**: Found in your Cloudflare dashboard URL or on the right sidebar of the Workers & Pages dashboard overview.
 4. Once added, subsequent pushes to `main` will automatically build, apply database migrations, and deploy.
-

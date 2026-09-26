@@ -21,6 +21,7 @@ import {
   Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PWAInstallButton } from "@/components/PWAInstallButton";
 import { IshyuraClient, type UserProfile, isAdminUser } from "@/lib/ishyura-client";
 
 interface AppSidebarProps {
@@ -486,6 +487,9 @@ export function AppSidebar({
             </Button>
           </div>
         )}
+
+        {/* In-App PWA Install */}
+        <PWAInstallButton className="w-full justify-center mb-2" />
 
         {/* Currency & Theme Toggle */}
         <div className="flex items-center justify-between pt-1 px-1 text-[11px] text-muted-foreground">

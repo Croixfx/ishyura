@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { Menu, X, MessageSquare, QrCode, LogIn } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { InquiryDialog } from "@/components/InquiryDialog";
+import { PWAInstallButton } from "@/components/PWAInstallButton";
 import { type UserProfile, isAdminUser } from "@/lib/ishyura-client";
 import { Button } from "@/components/ui/button";
 
@@ -54,6 +55,7 @@ export function AppLayout({
           </Link>
 
           <div className="flex items-center gap-2.5">
+            <PWAInstallButton />
             <Button
               size="sm"
               onClick={onOpenAuthDialog}
@@ -159,6 +161,7 @@ export function AppLayout({
           </div>
 
           <div className="flex items-center gap-2">
+            <PWAInstallButton />
             {!isAdminUser(currentUser) && (
               <Button
                 variant="ghost"

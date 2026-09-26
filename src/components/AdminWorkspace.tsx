@@ -58,6 +58,7 @@ import {
   type QRCodeRecord,
   type UserProfile,
 } from "@/lib/ishyura-client";
+import { extractMerchantOrAccountCode, buildRwandaUssdString } from "@/lib/momo-formatters";
 
 interface AdminWorkspaceProps {
   activeTab: string;
@@ -255,12 +256,8 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
 
   // Helper to build USSD
   const buildUssdCode = (net: string, type: string, val: string, amt?: number | null) => {
-    const cleanDigits = val.replace(/[^0-9]/g, "");
-    if (net.toLowerCase().includes("equity") || net.toLowerCase().includes("ekash")) {
-      return amt ? `*555*2*${cleanDigits}*${Math.round(amt)}#` : `*555*2*${cleanDigits}#`;
-    }
-    const prefix = type === "momo_code" ? "*182*8*1*" : "*182*1*1*";
-    return amt ? `${prefix}${cleanDigits}*${Math.round(amt)}#` : `${prefix}${cleanDigits}#`;
+    const cleanDigits = extractMerchantOrAccountCode(val);
+    return buildRwandaUssdString(net, type, cleanDigits, amt);
   };
 
   // Handle Admin Creating QR
@@ -270,7 +267,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
     setCreatingQr(true);
     try {
       const numAmt = newQrAmount.trim() ? parseFloat(newQrAmount) : null;
-      const cleanDigits = newQrAccountValue.replace(/[^0-9]/g, "");
+      const cleanDigits = extractMerchantOrAccountCode(newQrAccountValue);
       const ussd = buildUssdCode(newQrNetwork, newQrPaymentType, cleanDigits, numAmt);
 
       const created = await IshyuraClient.createAdminQrCode(adminKey, {
@@ -311,8 +308,8 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
     setEditQrPhone(qr.phone_number || "");
     setEditQrNetwork(qr.network || "MTN MoMo");
     setEditQrPaymentType((qr.payment_type as "momo_code" | "phone") || "momo_code");
-    const digits = (qr.dial_code || "").replace(/[^0-9]/g, "");
-    setEditQrAccountValue(digits || qr.phone_number || "");
+    const cleanCode = extractMerchantOrAccountCode(qr.dial_code, qr.phone_number);
+    setEditQrAccountValue(cleanCode || qr.phone_number || "");
     setEditQrAmount(qr.amount ? String(qr.amount) : "");
     setEditQrItemName(qr.item_name || "");
     setEditQrIsDynamic(Boolean(qr.is_dynamic));
@@ -326,7 +323,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
     setUpdatingQr(true);
     try {
       const numAmt = editQrAmount.trim() ? parseFloat(editQrAmount) : null;
-      const cleanDigits = editQrAccountValue.replace(/[^0-9]/g, "");
+      const cleanDigits = extractMerchantOrAccountCode(editQrAccountValue);
       const ussd = buildUssdCode(editQrNetwork, editQrPaymentType, cleanDigits, numAmt);
 
       const updated = await IshyuraClient.updateAdminQrCode(adminKey, editingQr.id, {
@@ -1640,7 +1637,14 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                       value={
                         selectedQrForPrint.is_dynamic
                           ? `${window.location.origin}/p/${selectedQrForPrint.id}`
-                          : `tel:${selectedQrForPrint.dial_code}`
+                          : `tel:${encodeURIComponent(
+                              buildRwandaUssdString(
+                                selectedQrForPrint.network,
+                                selectedQrForPrint.payment_type,
+                                selectedQrForPrint.dial_code,
+                                selectedQrForPrint.amount,
+                              ),
+                            )}`
                       }
                       size={180}
                       level="H"
@@ -1648,15 +1652,34 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                   </div>
 
                   {/* Dial Code Display */}
-                  <div className="mt-3 w-full rounded-xl bg-slate-100 border border-slate-200 px-3 py-1.5">
-                    <p className="text-[10px] font-bold uppercase text-slate-500">
-                      {selectedQrForPrint.payment_type === "momo_code"
-                        ? "Merchant Pay Code"
-                        : "Recipient Phone"}
+                  <div className="mt-3 w-full rounded-xl bg-slate-100 border border-slate-200 px-3.5 py-2 text-left">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                        {selectedQrForPrint.payment_type === "momo_code"
+                          ? "Merchant Code (Code y'Umucuruzi)"
+                          : "Recipient Phone"}
+                      </p>
+                      <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+                        No Internet Needed
+                      </span>
+                    </div>
+                    <p className="font-mono text-xl font-black text-slate-950 mt-0.5 tracking-wide">
+                      {extractMerchantOrAccountCode(
+                        selectedQrForPrint.dial_code,
+                        selectedQrForPrint.phone_number,
+                      )}
                     </p>
-                    <p className="font-mono text-sm font-black text-slate-950">
-                      {selectedQrForPrint.dial_code}
-                    </p>
+                    <div className="mt-1.5 pt-1.5 border-t border-slate-200 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-500 font-medium">Direct Dial:</span>
+                      <span className="font-mono font-bold text-slate-900">
+                        {buildRwandaUssdString(
+                          selectedQrForPrint.network,
+                          selectedQrForPrint.payment_type,
+                          selectedQrForPrint.dial_code,
+                          selectedQrForPrint.amount,
+                        )}
+                      </span>
+                    </div>
                   </div>
 
                   {selectedQrForPrint.amount && (
@@ -1671,7 +1694,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                   )}
 
                   <p className="mt-2.5 text-[10px] text-slate-500">
-                    Scan with camera &amp; tap Call to pay • Ishyura.rw
+                    📶 100% Offline • Cellular USSD requires zero internet • Ishyura.rw
                   </p>
                 </div>
               </div>

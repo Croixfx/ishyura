@@ -48,10 +48,11 @@ Interactive Swagger documentation is available at `http://127.0.0.1:8000/docs`.
 ## Real OTP SMS Delivery (Twilio)
 
 The backend dispatches real SMS verification codes to Rwandan and international mobile numbers via **Twilio**:
+
 - **Twilio SMS API**: Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER` in `.env`.
 - **Twilio Verify API (Optional)**: Set `TWILIO_VERIFY_SERVICE_SID` if using Twilio's managed Verify service.
 - **Development Fallback**: When Twilio keys are not set, it generates a secure code, logs it directly to the server terminal, and returns it for development testing.
-*(Additional regional providers like Africa's Talking will be integrated in later milestones).*
+  _(Additional regional providers like Africa's Talking will be integrated in later milestones)._
 
 | Method | Endpoint            | Auth         | Description                                  |
 | ------ | ------------------- | ------------ | -------------------------------------------- |

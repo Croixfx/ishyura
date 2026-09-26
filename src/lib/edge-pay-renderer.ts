@@ -1,8 +1,14 @@
 // Ultra-Fast Edge Dynamic Payment Sheet Renderer (Sub-50ms TTFB)
 // Serves customer scan requests (/p/:id or /pay/:id) directly from Cloudflare Edge
 // Pure HTML/CSS with zero bloated client bundle overhead.
+// Fully automated carrier detection — NEVER asks the user to choose between SIM cards!
 
 import { type AppEnv, corsHeaders } from "./api-router";
+import {
+  extractMerchantOrAccountCode,
+  getAllNetworkDialStrings,
+  detectCarrierFromRequest,
+} from "./momo-formatters";
 
 export interface PayRecord {
   id: string;
@@ -18,43 +24,6 @@ export interface PayRecord {
 
 export function formatRwf(amount: number): string {
   return `${Math.round(amount).toLocaleString()} RWF`;
-}
-
-export function computeDialString(
-  network: string,
-  paymentType: string,
-  rawDialCode: string,
-  amount?: number | null,
-): { ussdString: string; telUri: string; rawCode: string } {
-  const digits = rawDialCode.replace(/[^0-9]/g, "");
-  const numAmount =
-    typeof amount === "number" && !isNaN(amount) && amount > 0 ? Math.round(amount) : null;
-
-  let ussdString = "";
-  const cleanNet = network.toLowerCase();
-
-  if (cleanNet.includes("equity") || cleanNet.includes("ekash")) {
-    ussdString = numAmount ? `*555*2*${digits}*${numAmount}#` : `*555*2*${digits}#`;
-  } else if (cleanNet.includes("airtel")) {
-    if (paymentType === "momo_code") {
-      ussdString = numAmount ? `*182*8*1*${digits}*${numAmount}#` : `*182*8*1*${digits}#`;
-    } else {
-      ussdString = numAmount ? `*182*1*1*${digits}*${numAmount}#` : `*182*1*1*${digits}#`;
-    }
-  } else {
-    // Default to MTN MoMo
-    if (paymentType === "momo_code") {
-      ussdString = numAmount ? `*182*8*1*${digits}*${numAmount}#` : `*182*8*1*${digits}#`;
-    } else {
-      ussdString = numAmount ? `*182*1*1*${digits}*${numAmount}#` : `*182*1*1*${digits}#`;
-    }
-  }
-
-  return {
-    ussdString,
-    telUri: `tel:${encodeURIComponent(ussdString)}`,
-    rawCode: digits,
-  };
 }
 
 export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Promise<Response> {
@@ -119,23 +88,42 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     }
   }
 
-  const { ussdString, telUri, rawCode } = computeDialString(
-    record.network,
-    record.payment_type,
+  // 1. Detect scanner's carrier/SIM automatically (Zero prompt, zero manual choice)
+  const carrierInfo = detectCarrierFromRequest(request);
+
+  // 2. Build formatted dial strings for all payment networks
+  const allDialOptions = getAllNetworkDialStrings(
     record.dial_code,
     record.amount,
+    record.payment_type,
   );
 
-  const isMtn = record.network.toLowerCase().includes("mtn");
-  const isAirtel = record.network.toLowerCase().includes("airtel");
-  const isEquity =
-    record.network.toLowerCase().includes("equity") ||
-    record.network.toLowerCase().includes("ekash");
+  const cleanCode = allDialOptions.cleanCode;
+  const mtnUssd = allDialOptions.mtnUssd;
+  const airtelUssd = allDialOptions.airtelUssd;
+  const equityUssd = allDialOptions.equityUssd;
 
-  const brandColor = isEquity ? "#8b1e0f" : isAirtel ? "#dc2626" : "#eab308";
-  const brandBg = isEquity ? "#450a0a" : isAirtel ? "#450a0a" : "#422006";
-  const brandName = isEquity ? "Equity eKash" : isAirtel ? "Airtel Money" : "MTN MoMo";
-  const brandIcon = isEquity ? "🏦" : isAirtel ? "🔴" : "🟡";
+  // 3. Determine active network automatically:
+  // If scanner request came from MTN or Airtel or Equity cellular data, use that directly.
+  // Otherwise, default to merchant's registered terminal network (e.g. MTN MoMo).
+  let initialCarrier = carrierInfo.detected;
+  if (initialCarrier === "unknown") {
+    const net = (record.network || "").toLowerCase();
+    if (net.includes("airtel")) initialCarrier = "airtel";
+    else if (net.includes("equity") || net.includes("ekash")) initialCarrier = "equity";
+    else initialCarrier = "mtn";
+  }
+
+  const isMtn = initialCarrier === "mtn";
+  const isAirtel = initialCarrier === "airtel";
+  const isEquity = initialCarrier === "equity";
+
+  const initialUssd = isEquity ? equityUssd : isAirtel ? airtelUssd : mtnUssd;
+  const initialTelUri = `tel:${encodeURIComponent(initialUssd)}`;
+  const initialBrandName = isEquity ? "Equity eKash" : isAirtel ? "Airtel Money" : "MTN MoMo";
+  const initialBrandColor = isEquity ? "#8b1e0f" : isAirtel ? "#dc2626" : "#eab308";
+  const detectedLabel =
+    carrierInfo.carrierName !== "Unknown" ? carrierInfo.carrierName : initialBrandName;
 
   const hasFixedPrice =
     typeof record.amount === "number" && !isNaN(record.amount) && record.amount > 0;
@@ -147,8 +135,8 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Pay ${escapeHtml(record.business_name)} — Ishyura Instant Pay</title>
-  <meta name="description" content="Instant 1-Tap Mobile Money &amp; Bank payment for ${escapeHtml(record.business_name)}" />
-  <meta name="theme-color" content="${brandColor}" />
+  <meta name="description" content="Instant 1-Tap Mobile Money payment for ${escapeHtml(record.business_name)}. Works automatically with your active SIM (MTN, Airtel, or Equity eKash)." />
+  <meta name="theme-color" content="${initialBrandColor}" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -157,8 +145,8 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       --card-border: #1e293b;
       --text: #f8fafc;
       --muted: #94a3b8;
-      --accent: ${brandColor};
-      --brand-glow: ${brandColor}40;
+      --accent: ${initialBrandColor};
+      --brand-glow: ${initialBrandColor}40;
     }
     @media (prefers-color-scheme: light) {
       :root {
@@ -167,8 +155,8 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         --card-border: #e2e8f0;
         --text: #0f172a;
         --muted: #64748b;
-        --accent: ${brandColor};
-        --brand-glow: ${brandColor}30;
+        --accent: ${initialBrandColor};
+        --brand-glow: ${initialBrandColor}30;
       }
     }
     body {
@@ -199,7 +187,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     }
     .header-bar {
       height: 6px;
-      background: linear-gradient(90deg, ${brandColor}, #3b82f6);
+      background: linear-gradient(90deg, #eab308, #dc2626, #8b1e0f);
     }
     .content {
       padding: 24px 22px 28px;
@@ -221,7 +209,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       font-weight: 700;
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
     .shop-title {
       font-size: 24px;
@@ -229,28 +217,76 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       letter-spacing: -0.02em;
       line-height: 1.2;
       color: var(--text);
-      margin-bottom: 6px;
+      margin-bottom: 8px;
       word-break: break-word;
     }
-    .network-pill {
-      display: inline-flex;
+
+    /* Auto-detected SIM card identification card: Never asks for choosing SIM cards */
+    .carrier-auto-card {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 12px 14px;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-align: left;
+    }
+    .carrier-icon-badge {
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--card-border);
+      flex-shrink: 0;
+    }
+    .carrier-details {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .carrier-title-row {
+      display: flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
-      border-radius: 8px;
-      background: ${brandBg};
-      color: ${brandColor};
-      font-size: 12px;
-      font-weight: 700;
-      margin-bottom: 20px;
     }
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+    .carrier-label {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .carrier-desc {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 500;
+      line-height: 1.3;
+    }
+
     .amount-box {
       width: 100%;
       background: rgba(255, 255, 255, 0.04);
       border: 1.5px dashed var(--card-border);
       border-radius: 20px;
-      padding: 18px 16px;
-      margin-bottom: 22px;
+      padding: 16px;
+      margin-bottom: 18px;
     }
     .amount-label {
       font-size: 11px;
@@ -261,7 +297,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       margin-bottom: 4px;
     }
     .amount-val {
-      font-size: 38px;
+      font-size: 34px;
       font-weight: 900;
       letter-spacing: -0.03em;
       color: var(--accent);
@@ -273,16 +309,17 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       color: var(--text);
       margin-top: 6px;
     }
+
     .code-box {
       width: 100%;
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(0, 0, 0, 0.25);
       border: 1px solid var(--card-border);
       border-radius: 14px;
       padding: 12px 14px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
+      margin-bottom: 18px;
     }
     .code-label {
       font-size: 11px;
@@ -292,34 +329,46 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     }
     .code-val {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 15px;
-      font-weight: 700;
+      font-size: 18px;
+      font-weight: 900;
       color: var(--text);
       text-align: left;
       margin-top: 2px;
+      letter-spacing: 0.03em;
+    }
+    .code-ussd {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      text-align: left;
+      margin-top: 3px;
     }
     .copy-btn {
       background: rgba(255, 255, 255, 0.08);
       border: 1px solid var(--card-border);
       color: var(--text);
-      padding: 6px 12px;
+      padding: 7px 12px;
       border-radius: 8px;
       font-size: 11px;
       font-weight: 700;
       cursor: pointer;
       transition: all 0.15s ease;
+      white-space: nowrap;
     }
     .copy-btn:active {
       transform: scale(0.95);
       background: rgba(16, 185, 129, 0.2);
       color: #10b981;
     }
+
+    /* Massive Direct 1-Tap Pay Button */
     .pay-btn {
       width: 100%;
       background: var(--accent);
-      color: ${isEquity || isAirtel ? "#ffffff" : "#0f172a"};
+      color: ${isMtn ? "#0f172a" : "#ffffff"};
       text-decoration: none;
-      font-size: 17px;
+      font-size: 16px;
       font-weight: 800;
       padding: 18px 20px;
       border-radius: 18px;
@@ -331,6 +380,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       transition: transform 0.12s ease, filter 0.12s ease;
       -webkit-tap-highlight-color: transparent;
       user-select: none;
+      cursor: pointer;
     }
     .pay-btn:active {
       transform: scale(0.97);
@@ -392,9 +442,20 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
 
       <h1 class="shop-title">${escapeHtml(record.business_name)}</h1>
 
-      <div class="network-pill">
-        <span>${brandIcon}</span>
-        <span>${escapeHtml(brandName)}</span>
+      <!-- Automatic SIM & Network Identification (Zero Prompt, No SIM choice asked) -->
+      <div class="carrier-auto-card">
+        <div class="carrier-icon-badge" id="carrierIcon">
+          ${isEquity ? "🏦" : isAirtel ? "🔴" : "🟡"}
+        </div>
+        <div class="carrier-details">
+          <div class="carrier-title-row">
+            <span class="pulse-dot"></span>
+            <span class="carrier-label" id="carrierBadgeLabel">Active SIM: ${escapeHtml(detectedLabel)}</span>
+          </div>
+          <p class="carrier-desc" id="carrierSubtext">
+            Auto-targeted active SIM card. Direct USSD dialing ready with no SIM selection needed.
+          </p>
+        </div>
       </div>
 
       ${
@@ -409,21 +470,23 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
 
       <div class="code-box">
         <div>
-          <div class="code-label">${record.payment_type === "momo_code" ? "Merchant Pay Code" : "Recipient Phone"}</div>
-          <div class="code-val">${escapeHtml(rawCode)}</div>
+          <div class="code-label">${record.payment_type === "momo_code" ? "Merchant Code (Code y'Umucuruzi)" : "Recipient Phone"}</div>
+          <div class="code-val">${escapeHtml(cleanCode)}</div>
+          <div class="code-ussd" id="ussdPreview">${escapeHtml(initialUssd)}</div>
         </div>
-        <button class="copy-btn" id="copyBtn" onclick="copyUssd('${escapeHtml(ussdString)}')">Copy Code</button>
+        <button type="button" class="copy-btn" id="copyBtn" onclick="copyCurrentUssd()">Copy Code</button>
       </div>
 
-      <a href="${telUri}" class="pay-btn" id="dialBtn" onclick="triggerDial()">
+      <!-- Single Direct 1-Tap Pay Action (No buttons to choose between SIM cards) -->
+      <a href="${initialTelUri}" class="pay-btn" id="dialBtn" onclick="triggerDial()">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
         </svg>
-        <span>1-Tap Dial &amp; Pay ${hasFixedPrice ? escapeHtml(formattedAmount) : ""}</span>
+        <span id="btnLabel">1-Tap Dial &amp; Pay (${escapeHtml(initialBrandName)}) ${hasFixedPrice ? escapeHtml(formattedAmount) : ""}</span>
       </a>
 
-      <p class="hint-text">
-        Tapping opens your phone's dialer with <strong>${escapeHtml(ussdString)}</strong> ready. Just tap Call &amp; enter your PIN.
+      <p class="hint-text" id="hintText">
+        Tapping opens your cellular phone dialer with <strong>${escapeHtml(initialUssd)}</strong> ready. Just tap Call &amp; enter your PIN.
       </p>
     </div>
   </div>
@@ -437,14 +500,77 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
   <div class="toast" id="toastMsg">USSD Code Copied!</div>
 
   <script>
+    var NETWORKS = {
+      mtn: {
+        name: "MTN MoMo",
+        icon: "🟡",
+        ussd: "${escapeHtml(mtnUssd)}",
+        color: "#eab308",
+        textColor: "#0f172a"
+      },
+      airtel: {
+        name: "Airtel Money",
+        icon: "🔴",
+        ussd: "${escapeHtml(airtelUssd)}",
+        color: "#dc2626",
+        textColor: "#ffffff"
+      },
+      equity: {
+        name: "Equity eKash",
+        icon: "🏦",
+        ussd: "${escapeHtml(equityUssd)}",
+        color: "#8b1e0f",
+        textColor: "#ffffff"
+      }
+    };
+
+    var currentNet = "${initialCarrier}";
+    var fixedAmtText = "${hasFixedPrice ? " " + escapeHtml(formattedAmount) : ""}";
+
+    // Check device local storage if carrier was previously detected on this phone
+    try {
+      var savedPref = localStorage.getItem("ishyura_scanner_sim");
+      if (savedPref && NETWORKS[savedPref] && "${carrierInfo.detected}" === "unknown") {
+        currentNet = savedPref;
+      }
+    } catch(e) {}
+
+    function applyActiveNetwork(net) {
+      currentNet = net;
+      var data = NETWORKS[net] || NETWORKS.mtn;
+
+      // Update dial button
+      var dialBtn = document.getElementById("dialBtn");
+      dialBtn.href = "tel:" + encodeURIComponent(data.ussd);
+      dialBtn.style.background = data.color;
+      dialBtn.style.color = data.textColor;
+
+      // Update labels & details
+      document.getElementById("btnLabel").innerText = "1-Tap Dial & Pay (" + data.name + ")" + fixedAmtText;
+      document.getElementById("ussdPreview").innerText = data.ussd;
+      document.getElementById("carrierBadgeLabel").innerText = "Active SIM: " + data.name;
+      document.getElementById("carrierIcon").innerText = data.icon;
+      document.getElementById("hintText").innerHTML = "Tapping opens your cellular phone dialer with <strong>" + data.ussd + "</strong> ready. Just tap Call & enter your PIN.";
+
+      // Update root accent variable
+      document.documentElement.style.setProperty("--accent", data.color);
+
+      // Persist active SIM network for subsequent scans
+      try {
+        localStorage.setItem("ishyura_scanner_sim", currentNet);
+      } catch(e) {}
+    }
+
     function showToast(msg) {
       var t = document.getElementById("toastMsg");
       t.innerText = msg;
       t.classList.add("show");
-      if (navigator.vibrate) navigator.vibrate(40);
-      setTimeout(function() { t.classList.remove("show"); }, 2000);
+      if (navigator.vibrate) navigator.vibrate(30);
+      setTimeout(function() { t.classList.remove("show"); }, 2200);
     }
-    function copyUssd(code) {
+
+    function copyCurrentUssd() {
+      var code = NETWORKS[currentNet] ? NETWORKS[currentNet].ussd : "${escapeHtml(initialUssd)}";
       if (navigator.clipboard) {
         navigator.clipboard.writeText(code).then(function() {
           showToast("Copied: " + code);
@@ -455,9 +581,25 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         showToast("Code: " + code);
       }
     }
+
     function triggerDial() {
       if (navigator.vibrate) navigator.vibrate([40, 50, 40]);
     }
+
+    // Apply resolved network immediately
+    applyActiveNetwork(currentNet);
+
+    // On mobile phone scan, trigger smooth dialer intent after 300ms if permitted
+    try {
+      if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        setTimeout(function() {
+          // If in standalone or active scanner browser
+          if (window.navigator.standalone) {
+            window.location.href = "tel:" + encodeURIComponent(NETWORKS[currentNet].ussd);
+          }
+        }, 350);
+      }
+    } catch(e) {}
   </script>
 </body>
 </html>`;
