@@ -6,6 +6,9 @@ export interface UserProfile {
   name?: string | null;
   role?: "admin" | "merchant";
   access_token?: string | null;
+  plan?: "free" | "pro";
+  subscription_status?: "active" | "trial" | "inactive";
+  monthly_fee?: number;
 }
 
 export const KNOWN_ADMIN_EMAILS = new Set<string>([
@@ -34,6 +37,7 @@ export interface AuthTokenResponse {
   email?: string | null;
   name?: string | null;
   role?: "admin" | "merchant";
+  plan?: "free" | "pro";
 }
 
 export interface AdminUserRecord {
@@ -58,6 +62,7 @@ export interface QRCodeRecord {
   is_dynamic?: boolean | number;
   description: string;
   created_at: string;
+  updated_in_place?: boolean;
 }
 
 export function getDynamicPayUrl(qrId: string): string {
@@ -477,6 +482,7 @@ export class IshyuraClient {
       dial_code?: string;
       is_dynamic?: boolean;
       item_name?: string;
+      update_if_exists?: boolean;
     },
   ): Promise<QRCodeRecord> {
     const token = this.getToken();
@@ -495,6 +501,7 @@ export class IshyuraClient {
       dial_code: metadata?.dial_code,
       is_dynamic: metadata?.is_dynamic ? 1 : 0,
       item_name: metadata?.item_name || null,
+      update_if_exists: Boolean(metadata?.update_if_exists),
     };
 
     try {
@@ -509,10 +516,13 @@ export class IshyuraClient {
       if (res.ok) {
         const created: QRCodeRecord = await res.json();
         const existingList = this.getLocalQrList();
-        if (!existingList.some((item) => item.id === created.id)) {
+        const existingIdx = existingList.findIndex((item) => item.id === created.id);
+        if (existingIdx !== -1) {
+          existingList[existingIdx] = { ...existingList[existingIdx], ...created };
+        } else {
           existingList.unshift(created);
-          localStorage.setItem(QR_STORE_KEY, JSON.stringify(existingList));
         }
+        localStorage.setItem(QR_STORE_KEY, JSON.stringify(existingList));
         return created;
       } else {
         const errData = await res.json().catch(() => ({ detail: "Failed to generate QR" }));
@@ -609,6 +619,17 @@ export class IshyuraClient {
       return updatedItem;
     }
     throw new Error("QR code not found to update.");
+  }
+
+  static async quickUpdateCounterBill(
+    id: string,
+    amount: number | null,
+    itemName?: string | null,
+  ): Promise<QRCodeRecord> {
+    return this.updateQrCode(id, {
+      amount,
+      item_name: itemName !== undefined ? itemName : undefined,
+    });
   }
 
   static async deleteQrCode(id: string): Promise<{ success: boolean; message?: string }> {

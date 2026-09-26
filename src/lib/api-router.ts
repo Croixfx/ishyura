@@ -7,6 +7,7 @@ import {
   type SmsEnvConfig,
 } from "./sms-service";
 import { handleEdgePayPage } from "./edge-pay-renderer";
+import { extractMerchantOrAccountCode } from "./momo-formatters";
 
 export interface D1PreparedStatement {
   bind(...params: unknown[]): D1PreparedStatement;
@@ -1035,8 +1036,61 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       path === "/qr/create" ||
       path === "/qr/list" ||
       path === "/qr-codes/delete" ||
-      path === "/qr/delete"
+      path === "/qr/delete" ||
+      path === "/qr-codes/quick-bill"
     ) {
+      // Quick bill update endpoint for PRO merchants
+      if (path === "/qr-codes/quick-bill" && request.method === "POST") {
+        const quickBody = (await request.json().catch(() => ({}))) as {
+          id?: string;
+          amount?: number | null;
+          item_name?: string | null;
+        };
+
+        if (!quickBody.id) {
+          return jsonResponse({ detail: "QR code ID required." }, 400);
+        }
+
+        const newAmount =
+          typeof quickBody.amount === "number" && !isNaN(quickBody.amount)
+            ? quickBody.amount
+            : null;
+        const newItem = quickBody.item_name !== undefined ? quickBody.item_name : undefined;
+
+        if (env.DB) {
+          const current = await env.DB.prepare("SELECT * FROM qr_codes WHERE id = ?")
+            .bind(quickBody.id)
+            .first<MemQrCode>();
+
+          if (!current) {
+            return jsonResponse({ detail: "QR code not found." }, 404);
+          }
+
+          const finalItem = newItem !== undefined ? newItem : current.item_name;
+          await env.DB.prepare("UPDATE qr_codes SET amount = ?, item_name = ? WHERE id = ?")
+            .bind(newAmount, finalItem, quickBody.id)
+            .run();
+
+          return jsonResponse({
+            ...current,
+            amount: newAmount,
+            item_name: finalItem,
+            message: "Live counter bill updated instantly without reprinting!",
+          });
+        }
+
+        const memItem = memQrCodes.find((q) => q.id === quickBody.id);
+        if (!memItem) {
+          return jsonResponse({ detail: "QR code not found." }, 404);
+        }
+        memItem.amount = newAmount;
+        if (newItem !== undefined) memItem.item_name = newItem;
+        return jsonResponse({
+          ...memItem,
+          message: "Live counter bill updated instantly without reprinting!",
+        });
+      }
+
       if (request.method === "POST") {
         const body = (await request.json().catch(() => ({}))) as {
           owner_id?: string;
@@ -1049,6 +1103,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           payment_type?: string;
           dial_code?: string;
           phone_number?: string;
+          update_if_exists?: boolean;
         };
 
         const id = crypto.randomUUID();
@@ -1059,6 +1114,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const rawDialCode = (body.dial_code || "*182#").trim();
         const dialCode = rawDialCode;
         const cleanTarget = rawDialCode.replace(/[^0-9*#]/g, "");
+        const codeDigits = extractMerchantOrAccountCode(rawDialCode);
         const phone = body.phone_number || body.owner_id || "unassigned";
         const ownerId = body.owner_id || body.phone_number || phone;
         const isDynamic = body.is_dynamic ? 1 : 0;
@@ -1069,14 +1125,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         // Check if requester has Admin credentials
         const isAdmin = verifyAdminAuth(request, env);
 
-        // ENFORCE SINGLE GENERATION RULE:
-        // Check if QR code for this merchant dial code already exists!
+        // ENFORCE SINGLE GENERATION & IN-PLACE DYNAMIC UPDATES:
         if (env.DB) {
           try {
             const existing = await env.DB.prepare(
-              "SELECT * FROM qr_codes WHERE dial_code = ? OR REPLACE(REPLACE(dial_code, ' ', ''), '-', '') = ? LIMIT 1",
+              "SELECT * FROM qr_codes WHERE dial_code = ? OR REPLACE(REPLACE(dial_code, ' ', ''), '-', '') = ? OR (network = ? AND dial_code LIKE ?) LIMIT 1",
             )
-              .bind(dialCode, cleanTarget)
+              .bind(dialCode, cleanTarget, network, `%${codeDigits}%`)
               .first<MemQrCode>();
 
             if (existing && !isAdmin) {
@@ -1093,6 +1148,69 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 );
 
               if (isOwner) {
+                // If it's a Dynamic PRO Stand or update requested, update in-place without reprinting!
+                const shouldUpdateInPlace = Boolean(
+                  isDynamic || existing.is_dynamic || body.update_if_exists,
+                );
+                if (shouldUpdateInPlace) {
+                  const updatedName = businessName || existing.business_name;
+                  const updatedNet = network || existing.network;
+                  const updatedType = paymentType || existing.payment_type;
+                  const updatedDial = dialCode || existing.dial_code;
+                  const updatedAmount =
+                    numAmount !== null
+                      ? numAmount
+                      : body.amount !== undefined
+                        ? numAmount
+                        : existing.amount;
+                  const updatedItem =
+                    itemName !== null
+                      ? itemName
+                      : body.item_name !== undefined
+                        ? itemName
+                        : existing.item_name;
+                  const updatedDynamic = isDynamic || (existing.is_dynamic ? 1 : 0);
+                  const updatedDesc = `${updatedName} (${updatedNet} - ${updatedDial})`;
+
+                  try {
+                    await env.DB.prepare(
+                      "UPDATE qr_codes SET business_name = ?, network = ?, payment_type = ?, dial_code = ?, amount = ?, item_name = ?, is_dynamic = ?, description = ? WHERE id = ?",
+                    )
+                      .bind(
+                        updatedName,
+                        updatedNet,
+                        updatedType,
+                        updatedDial,
+                        updatedAmount,
+                        updatedItem,
+                        updatedDynamic,
+                        updatedDesc,
+                        existing.id,
+                      )
+                      .run();
+                  } catch (updateErr) {
+                    console.warn("D1 in-place update fallback notice:", updateErr);
+                  }
+
+                  return jsonResponse({
+                    id: existing.id,
+                    owner_id: existing.owner_id,
+                    phone_number: existing.phone_number,
+                    business_name: updatedName,
+                    network: updatedNet,
+                    payment_type: updatedType,
+                    dial_code: updatedDial,
+                    description: updatedDesc,
+                    amount: updatedAmount,
+                    item_name: updatedItem,
+                    is_dynamic: updatedDynamic,
+                    created_at: existing.created_at,
+                    updated_in_place: true,
+                    message:
+                      "Existing Smart Stand updated! Your counter stand and NFC tag will show this new bill immediately without reprinting.",
+                  });
+                }
+
                 return jsonResponse({
                   ...existing,
                   is_owner_reprint: true,
@@ -1174,7 +1292,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const existing = memQrCodes.find(
           (q) =>
             q.dial_code === dialCode ||
-            (q.dial_code && q.dial_code.replace(/[^0-9*#]/g, "") === cleanTarget),
+            (q.dial_code && q.dial_code.replace(/[^0-9*#]/g, "") === cleanTarget) ||
+            (codeDigits &&
+              extractMerchantOrAccountCode(q.dial_code) === codeDigits &&
+              (q.network || "").toLowerCase() === (network || "").toLowerCase()),
         );
 
         if (existing && !isAdmin) {
@@ -1191,6 +1312,27 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             );
 
           if (isOwner) {
+            const shouldUpdateInPlace = Boolean(
+              isDynamic || existing.is_dynamic || body.update_if_exists,
+            );
+            if (shouldUpdateInPlace) {
+              if (businessName) existing.business_name = businessName;
+              if (network) existing.network = network;
+              if (paymentType) existing.payment_type = paymentType;
+              if (dialCode) existing.dial_code = dialCode;
+              if (numAmount !== null) existing.amount = numAmount;
+              if (itemName !== null) existing.item_name = itemName;
+              if (isDynamic) existing.is_dynamic = 1;
+              existing.description = `${existing.business_name} (${existing.network} - ${existing.dial_code})`;
+
+              return jsonResponse({
+                ...existing,
+                updated_in_place: true,
+                message:
+                  "Existing Smart Stand updated! Your counter stand and NFC tag will show this new bill immediately without reprinting.",
+              });
+            }
+
             return jsonResponse({
               ...existing,
               is_owner_reprint: true,

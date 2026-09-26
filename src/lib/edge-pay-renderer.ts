@@ -469,7 +469,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="20 6 9 17 4 12"></polyline>
         </svg>
-        <span>Verified Ishyura Pay</span>
+        <span>${record.is_dynamic ? "Verified PRO Smart Stand" : "Verified Ishyura Pay"}</span>
       </div>
 
       <h1 class="shop-title">${escapeHtml(record.business_name)}</h1>
@@ -485,7 +485,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       ${
         hasFixedPrice
           ? `<div class="amount-box">
-              <div class="amount-label">Fixed Payment Amount</div>
+              <div class="amount-label">Pre-set Bill / Amount to Pay</div>
               <div class="amount-val">${escapeHtml(formattedAmount)}</div>
               ${record.item_name ? `<div class="item-desc">${escapeHtml(record.item_name)}</div>` : ""}
             </div>`

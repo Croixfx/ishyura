@@ -243,6 +243,9 @@ function Index() {
   const [editItemName, setEditItemName] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
+  const [quickBillToast, setQuickBillToast] = useState<{ id: string; message: string } | null>(
+    null,
+  );
 
   // Instant Customer Scan Preview Dialog
   const [scanPreviewUrl, setScanPreviewUrl] = useState<string | null>(null);
@@ -616,10 +619,56 @@ function Index() {
         );
 
         if (isOwner) {
-          // Legitimate owner re-printing or reloading their lost QR card
           const cleanDigits = extractMerchantOrAccountCode(existing.dial_code, sanitizedInput);
-          const isDyn = Boolean(existing.is_dynamic);
+          const isDyn = Boolean(isDynamic || existing.is_dynamic);
           const dynUrl = isDyn ? getDynamicPayUrl(existing.id) : undefined;
+
+          // If updating a Dynamic Stand, update it in-place without creating a duplicate record or new print!
+          if (isDyn) {
+            try {
+              const updated = await IshyuraClient.updateQrCode(existing.id, {
+                business_name: businessName.trim() || existing.business_name,
+                network,
+                payment_type: paymentType,
+                dial_code: ussdString,
+                amount: numAmount,
+                item_name: cleanItem,
+                is_dynamic: true,
+              });
+              const reloadedCard: ConfirmedCardData = {
+                id: updated.id,
+                businessName: updated.business_name || businessName.trim(),
+                network: (updated.network as Network) || network,
+                paymentType: (updated.payment_type as PaymentType) || paymentType,
+                sanitizedInput: cleanDigits,
+                ussdString: updated.dial_code || ussdString,
+                qrTelUri: getDynamicPayUrl(updated.id),
+                feeNote:
+                  (updated.network || network) === "Equity Bank (eKash)"
+                    ? "Only 20 RWF fee via eKash"
+                    : undefined,
+                isDynamic: true,
+                amount: updated.amount ?? null,
+                itemName: updated.item_name ?? null,
+                dynamicUrl: getDynamicPayUrl(updated.id),
+              };
+              setConfirmedData(reloadedCard);
+              setOwnerReprintNotice({
+                businessName: reloadedCard.businessName,
+                dialCode: reloadedCard.ussdString,
+                message: `⚡ Smart Stand updated! Your existing physical stand and NFC tag will show this new bill immediately without reprinting.`,
+              });
+              setDuplicateWarning(null);
+              IshyuraClient.listQrCodes()
+                .then(setQrHistory)
+                .catch(() => {});
+              return;
+            } catch (err) {
+              console.warn("Client in-place update notice:", err);
+            }
+          }
+
+          // Legitimate owner re-printing or reloading their lost QR card
           const reloadedCard: ConfirmedCardData = {
             id: existing.id,
             businessName: existing.business_name || businessName.trim(),
@@ -679,6 +728,7 @@ function Index() {
         dial_code: cardData.ussdString,
         is_dynamic: isDynamic,
         item_name: cleanItem || undefined,
+        update_if_exists: true,
       },
     )
       .then((saved) => {
@@ -885,6 +935,22 @@ function Index() {
       console.warn("Failed to update QR destination:", err);
     } finally {
       setEditSaving(false);
+    }
+  };
+
+  const handleQuickBillUpdate = async (qrId: string, amount: number | null) => {
+    try {
+      const updated = await IshyuraClient.quickUpdateCounterBill(qrId, amount);
+      setQrHistory((prev) => prev.map((q) => (q.id === qrId ? { ...q, ...updated } : q)));
+      setQuickBillToast({
+        id: qrId,
+        message: amount
+          ? `✓ Bill updated to ${amount.toLocaleString()} RWF! Stand & NFC will show this amount instantly.`
+          : `✓ Bill cleared! Customers will now enter their own amount.`,
+      });
+      setTimeout(() => setQuickBillToast(null), 4000);
+    } catch {
+      alert("Failed to update bill amount.");
     }
   };
 
@@ -2134,6 +2200,68 @@ function Index() {
                     </span>
                   </div>
 
+                  {Boolean(qr.is_dynamic) && (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+                          <Zap className="size-3.5" />
+                          Live Stand Bill (Print Once):
+                        </span>
+                        <span className="font-mono font-black text-foreground">
+                          {qr.amount
+                            ? `${qr.amount.toLocaleString()} RWF`
+                            : "Open (Customer Enters)"}
+                        </span>
+                      </div>
+
+                      {/* Quick inline updater */}
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          placeholder={qr.amount ? String(qr.amount) : "Set new bill amount..."}
+                          defaultValue=""
+                          id={`quick-bill-${qr.id}`}
+                          className="h-8 text-xs font-mono font-bold bg-background/80"
+                        />
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            const inputEl = document.getElementById(
+                              `quick-bill-${qr.id}`,
+                            ) as HTMLInputElement | null;
+                            const val = inputEl?.value?.trim();
+                            if (val) {
+                              handleQuickBillUpdate(qr.id, parseFloat(val));
+                              if (inputEl) inputEl.value = "";
+                            }
+                          }}
+                          className="h-8 text-xs font-bold rounded-lg px-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 shrink-0"
+                        >
+                          Set Bill
+                        </Button>
+                        {qr.amount ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleQuickBillUpdate(qr.id, null)}
+                            className="h-8 text-[11px] text-muted-foreground hover:text-foreground px-2"
+                            title="Clear to open customer entry"
+                          >
+                            Reset
+                          </Button>
+                        ) : null}
+                      </div>
+
+                      {quickBillToast?.id === qr.id && (
+                        <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 animate-in fade-in-50">
+                          <CheckCircle2 className="size-3.5" />
+                          <span>{quickBillToast.message}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="pt-2.5 border-t border-border/40 flex flex-wrap items-center justify-between gap-1.5">
                     {/* Direct Print / Download Counter Card (Key feature for lost QR recovery!) */}
                     <Button
@@ -2483,157 +2611,361 @@ function Index() {
                   />
                 </div>
 
-                {/* PRO Feature: Dynamic Smart QR & Pre-defined Price */}
-                <div className="rounded-2xl border border-border/80 bg-muted/20 p-4 space-y-4 transition-all">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Label
-                          htmlFor="dynamic-toggle"
-                          className="text-sm font-bold text-foreground cursor-pointer"
-                        >
-                          Multi-Network Web QR (Dynamic)
-                        </Label>
-                        <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
-                          <Sparkles className="size-3" />
-                          PRO
-                        </span>
-                        <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                          Free Testing Preview
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground leading-relaxed">
-                        Default (OFF) generates a <strong>100% Offline Static QR</strong>: customers
-                        scan with their camera to dial directly with zero internet. Turn ON only if
-                        you want a web link that lets customers choose between MTN, Airtel, or
-                        Equity on screen, or change details without reprinting.
-                      </p>
-                    </div>
-                    <Switch
-                      id="dynamic-toggle"
-                      checked={isDynamic}
-                      onCheckedChange={(val) => {
-                        setIsDynamic(val);
-                        if (confirmedData) setConfirmedData(null);
-                      }}
-                    />
+                {/* ---------------------------------------------------- */}
+                {/* TIER SELECTION: Basic Stand (Free) vs Dynamic PRO Stand */}
+                {/* ---------------------------------------------------- */}
+                <div className="space-y-4 pt-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-black uppercase tracking-wider text-muted-foreground">
+                      Choose Stand &amp; Feature Tier
+                    </Label>
+                    <span className="text-[10px] font-bold text-muted-foreground">
+                      {isDynamic ? "⚡ PRO Monthly Plan" : "📴 100% Free Forever"}
+                    </span>
                   </div>
 
-                  {isDynamic && (
-                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs space-y-1 text-amber-600 dark:text-amber-400 animate-in fade-in-50 duration-200">
-                      <div className="flex items-center gap-1.5 font-bold">
-                        <Zap className="size-3.5" />
-                        <span>Multi-Network Web Pay Active</span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground leading-normal">
-                        Customers scanning will open a web page to select their network (MTN MoMo,
-                        Airtel Money, or Equity eKash) and dial.{" "}
-                        <em>Requires mobile internet connection to open.</em>
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="border-t border-border/50 pt-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Label
-                            htmlFor="fixed-price-toggle"
-                            className="text-sm font-bold text-foreground cursor-pointer"
-                          >
-                            Pre-defined Price (Fixed Amount)
-                          </Label>
-                          <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/40 px-2 py-0.5 text-[10px] font-black uppercase text-purple-600 dark:text-purple-400">
-                            PRO
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    {/* TIER 1: Basic Offline (100% Free) */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        setIsDynamic(false);
+                        if (confirmedData) setConfirmedData(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          setIsDynamic(false);
+                          if (confirmedData) setConfirmedData(null);
+                        }
+                      }}
+                      className={`relative cursor-pointer rounded-2xl border p-4 transition-all text-left flex flex-col justify-between ${
+                        !isDynamic
+                          ? "border-primary bg-primary/5 ring-2 ring-primary/20 shadow-sm"
+                          : "border-border/80 bg-card/60 hover:border-border hover:bg-muted/30 opacity-80"
+                      }`}
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-base">📴</span>
+                            <span className="font-extrabold text-sm text-foreground">
+                              Basic Stand
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-black rounded-md px-1.5 py-0.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                            0 RWF (Free)
                           </span>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          Pre-fill the exact price for menu items, haircuts, buffet, tickets, or car
-                          washes.
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          <strong>100% Offline Direct USSD</strong>. Customer camera scans to dial
+                          immediately with <strong>zero mobile data</strong>. Fixed once printed.
                         </p>
                       </div>
-                      <Switch
-                        id="fixed-price-toggle"
-                        checked={hasFixedAmount}
-                        onCheckedChange={(val) => {
-                          setHasFixedAmount(val);
-                          if (confirmedData) setConfirmedData(null);
-                        }}
-                      />
+
+                      <div className="mt-3 pt-2.5 border-t border-border/40 flex items-center justify-between text-[11px] text-muted-foreground font-medium">
+                        <span>Physical Stands &amp; Stickers</span>
+                        <span className="font-bold text-foreground">One-Time Print</span>
+                      </div>
                     </div>
 
-                    {hasFixedAmount && (
-                      <div className="mt-3.5 space-y-3 rounded-xl bg-card/80 border border-border/70 p-3.5 animate-in fade-in-50 duration-200">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div className="space-y-1.5">
-                            <Label
-                              htmlFor="fixed-amount"
-                              className="text-xs font-bold text-foreground"
-                            >
-                              Fixed Amount (RWF)
-                            </Label>
-                            <div className="relative">
-                              <Input
-                                id="fixed-amount"
-                                type="number"
-                                inputMode="numeric"
-                                placeholder="e.g. 5000"
-                                value={fixedAmount}
-                                onChange={(e) => {
-                                  setFixedAmount(e.target.value);
-                                  if (confirmedData) setConfirmedData(null);
-                                }}
-                                className="h-10 font-mono font-bold pr-14"
-                              />
-                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">
-                                RWF
-                              </span>
-                            </div>
+                    {/* TIER 2: Dynamic PRO (Monthly Plan - Print Once, Update Forever) */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        setIsDynamic(true);
+                        if (confirmedData) setConfirmedData(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          setIsDynamic(true);
+                          if (confirmedData) setConfirmedData(null);
+                        }
+                      }}
+                      className={`relative cursor-pointer rounded-2xl border p-4 transition-all text-left flex flex-col justify-between ${
+                        isDynamic
+                          ? "border-amber-500 bg-amber-500/5 ring-2 ring-amber-500/25 shadow-sm"
+                          : "border-border/80 bg-card/60 hover:border-border hover:bg-muted/30 opacity-80"
+                      }`}
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-base">⚡</span>
+                            <span className="font-extrabold text-sm text-foreground">
+                              Dynamic PRO
+                            </span>
+                            <span className="inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 px-1.5 py-0.2 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400">
+                              PRO
+                            </span>
                           </div>
+                          <span className="text-[10px] font-black rounded-md px-1.5 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                            5,000 RWF/mo
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          <strong>Print Once, Update Forever</strong>. Web QR &amp; Smart NFC.
+                          Update bill amounts or recipient numbers from your dashboard{" "}
+                          <strong>without reprinting</strong>.
+                        </p>
+                      </div>
 
-                          <div className="space-y-1.5">
+                      <div className="mt-3 pt-2.5 border-t border-border/40 flex items-center justify-between text-[11px] text-muted-foreground font-medium">
+                        <span>NFC Tags &amp; Counter Stands</span>
+                        <span className="font-black text-amber-600 dark:text-amber-400">
+                          Never Reprint
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Contextual Tier Configuration Box */}
+                  <div className="rounded-2xl border border-border/80 bg-card/60 p-4 space-y-4">
+                    {/* If Basic Stand: Option for static predefined price */}
+                    {!isDynamic ? (
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-0.5">
                             <Label
-                              htmlFor="item-name"
-                              className="text-xs font-bold text-foreground"
+                              htmlFor="basic-fixed-toggle"
+                              className="text-xs font-bold text-foreground cursor-pointer"
                             >
-                              Item or Service Label (Optional)
+                              Encode Fixed Predefined Price (Static USSD)
                             </Label>
-                            <Input
-                              id="item-name"
-                              type="text"
-                              placeholder="e.g. Lunch Buffet, Car Wash"
-                              value={itemName}
-                              onChange={(e) => {
-                                setItemName(e.target.value);
-                                if (confirmedData) setConfirmedData(null);
-                              }}
-                              className="h-10 text-xs"
-                            />
+                            <p className="text-[11px] text-muted-foreground">
+                              Bake fixed amount (e.g. 1,000 RWF parking, 500 RWF entry) directly
+                              into offline QR.
+                            </p>
                           </div>
+                          <Switch
+                            id="basic-fixed-toggle"
+                            checked={hasFixedAmount}
+                            onCheckedChange={(val) => {
+                              setHasFixedAmount(val);
+                              if (confirmedData) setConfirmedData(null);
+                            }}
+                          />
                         </div>
 
-                        {/* Quick Preset Chips */}
-                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                          <span className="text-[10px] font-semibold text-muted-foreground mr-1">
-                            Quick:
+                        {hasFixedAmount && (
+                          <div className="pt-2 border-t border-border/40 space-y-3 animate-in fade-in-50">
+                            <div className="space-y-1.5">
+                              <Label
+                                htmlFor="basic-fixed-amount"
+                                className="text-xs font-bold text-foreground"
+                              >
+                                Fixed Price to Encode (RWF)
+                              </Label>
+                              <div className="relative">
+                                <Input
+                                  id="basic-fixed-amount"
+                                  type="number"
+                                  inputMode="numeric"
+                                  placeholder="e.g. 2000"
+                                  value={fixedAmount}
+                                  onChange={(e) => {
+                                    setFixedAmount(e.target.value);
+                                    if (confirmedData) setConfirmedData(null);
+                                  }}
+                                  className="h-10 font-mono font-bold pr-14"
+                                />
+                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">
+                                  RWF
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Quick Preset Chips */}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-[10px] font-semibold text-muted-foreground mr-1">
+                                Quick:
+                              </span>
+                              {["500", "1000", "2000", "5000"].map((amt) => (
+                                <button
+                                  key={amt}
+                                  type="button"
+                                  onClick={() => {
+                                    setFixedAmount(amt);
+                                    if (confirmedData) setConfirmedData(null);
+                                  }}
+                                  className={`rounded-lg px-2 py-1 text-[11px] font-bold border transition-colors ${
+                                    fixedAmount === amt
+                                      ? "bg-primary text-primary-foreground border-primary"
+                                      : "bg-muted/50 border-border text-foreground hover:bg-muted"
+                                  }`}
+                                >
+                                  {parseInt(amt).toLocaleString()} RWF
+                                </button>
+                              ))}
+                            </div>
+
+                            <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                              ⚠️ Note: Because this is a 100% offline static card, changing this
+                              price in the future will require printing a new stand or sticker.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      /* If Dynamic PRO Stand: Mode options */
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between pb-2 border-b border-border/50">
+                          <div>
+                            <span className="text-xs font-bold text-foreground">
+                              PRO Stand Bill Mode
+                            </span>
+                            <p className="text-[11px] text-muted-foreground">
+                              Select how customer payment amounts are determined on this stand.
+                            </p>
+                          </div>
+                          <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                            Print Once Guarantee Active
                           </span>
-                          {["500", "1000", "2000", "3500", "5000", "10000"].map((amt) => (
-                            <button
-                              key={amt}
-                              type="button"
-                              onClick={() => {
-                                setFixedAmount(amt);
-                                if (confirmedData) setConfirmedData(null);
-                              }}
-                              className={`rounded-lg px-2 py-1 text-[11px] font-bold border transition-colors ${
-                                fixedAmount === amt
-                                  ? "bg-primary text-primary-foreground border-primary"
-                                  : "bg-muted/50 border-border text-foreground hover:bg-muted"
-                              }`}
-                            >
-                              {parseInt(amt).toLocaleString()} RWF
-                            </button>
-                          ))}
+                        </div>
+
+                        {/* Bill Mode Options: Open vs Predefined */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHasFixedAmount(false);
+                              if (confirmedData) setConfirmedData(null);
+                            }}
+                            className={`p-3 rounded-xl border text-left transition-all ${
+                              !hasFixedAmount
+                                ? "border-amber-500/70 bg-amber-500/10 shadow-xs"
+                                : "border-border/60 bg-muted/20 hover:bg-muted/40"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="font-bold text-xs text-foreground">
+                                1. Open Customer Entry
+                              </span>
+                              {!hasFixedAmount && (
+                                <CheckCircle2 className="size-3.5 text-amber-500" />
+                              )}
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-normal">
+                              Customers enter amount or tap quick chips (+500, +1k, +5k) on their
+                              phone.
+                            </p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHasFixedAmount(true);
+                              if (confirmedData) setConfirmedData(null);
+                            }}
+                            className={`p-3 rounded-xl border text-left transition-all ${
+                              hasFixedAmount
+                                ? "border-amber-500/70 bg-amber-500/10 shadow-xs"
+                                : "border-border/60 bg-muted/20 hover:bg-muted/40"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="font-bold text-xs text-foreground">
+                                2. Pre-set Bill / Item
+                              </span>
+                              {hasFixedAmount && (
+                                <CheckCircle2 className="size-3.5 text-amber-500" />
+                              )}
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-normal">
+                              Set specific bill (e.g. Table 4). Update live anytime without
+                              reprinting.
+                            </p>
+                          </button>
+                        </div>
+
+                        {hasFixedAmount && (
+                          <div className="space-y-3 pt-2 animate-in fade-in-50">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div className="space-y-1.5">
+                                <Label
+                                  htmlFor="pro-fixed-amount"
+                                  className="text-xs font-bold text-foreground"
+                                >
+                                  Initial Bill Amount (RWF)
+                                </Label>
+                                <div className="relative">
+                                  <Input
+                                    id="pro-fixed-amount"
+                                    type="number"
+                                    inputMode="numeric"
+                                    placeholder="e.g. 15000"
+                                    value={fixedAmount}
+                                    onChange={(e) => {
+                                      setFixedAmount(e.target.value);
+                                      if (confirmedData) setConfirmedData(null);
+                                    }}
+                                    className="h-10 font-mono font-bold pr-14"
+                                  />
+                                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">
+                                    RWF
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="space-y-1.5">
+                                <Label
+                                  htmlFor="pro-item-name"
+                                  className="text-xs font-bold text-foreground"
+                                >
+                                  Bill or Table Label (Optional)
+                                </Label>
+                                <Input
+                                  id="pro-item-name"
+                                  type="text"
+                                  placeholder="e.g. Table 4 Bill, Lunch Special"
+                                  value={itemName}
+                                  onChange={(e) => {
+                                    setItemName(e.target.value);
+                                    if (confirmedData) setConfirmedData(null);
+                                  }}
+                                  className="h-10 text-xs"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Quick Preset Chips */}
+                            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                              <span className="text-[10px] font-semibold text-muted-foreground mr-1">
+                                Quick:
+                              </span>
+                              {["1000", "2000", "3500", "5000", "10000", "15000"].map((amt) => (
+                                <button
+                                  key={amt}
+                                  type="button"
+                                  onClick={() => {
+                                    setFixedAmount(amt);
+                                    if (confirmedData) setConfirmedData(null);
+                                  }}
+                                  className={`rounded-lg px-2 py-1 text-[11px] font-bold border transition-colors ${
+                                    fixedAmount === amt
+                                      ? "bg-amber-500 text-slate-950 border-amber-500"
+                                      : "bg-muted/50 border-border text-foreground hover:bg-muted"
+                                  }`}
+                                >
+                                  {parseInt(amt).toLocaleString()} RWF
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs space-y-1 text-amber-700 dark:text-amber-400">
+                          <div className="flex items-center gap-1.5 font-bold">
+                            <Zap className="size-3.5" />
+                            <span>Zero Reprinting &amp; Zero Duplicate Clutter Guarantee</span>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground leading-normal">
+                            Print your acrylic stand or write your NFC tag{" "}
+                            <strong>only once</strong>. Whenever you change this bill from your
+                            dashboard, customers scanning the stand or tapping the NFC tag see the
+                            new amount instantly in real-time.
+                          </p>
                         </div>
                       </div>
                     )}
@@ -3037,7 +3369,9 @@ function Index() {
                       )}
 
                       <p className="mt-3 text-[11px] font-medium text-print-muted-ink">
-                        📶 Works 100% Offline • Scan camera or dial code • No internet data needed
+                        {confirmedData.isDynamic
+                          ? "⚡ Smart Dynamic Stand • Tap NFC or scan to pay with live bill"
+                          : "📶 Works 100% Offline • Scan camera or dial code • No internet data needed"}
                       </p>
                     </div>
                     <div className="flex items-center justify-between border-t border-print-muted bg-print-muted/40 px-5 py-3">
