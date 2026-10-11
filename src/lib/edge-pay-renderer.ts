@@ -514,12 +514,38 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       font-size: 12px;
       line-height: 1.45;
     }
-    body.is-offline .offline-warning {
-      display: block;
+    .merchant-top-banner {
+      width: 100%;
+      max-width: 440px;
+      margin-bottom: 12px;
+      padding: 10px 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    .merchant-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .merchant-link:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
 <body data-payment-stand-id="${escapeHtml(record.public_id || record.id)}" data-trackable="${record.id !== "preview" && env.DB ? "true" : "false"}" data-fixed-amount="${hasFixedPrice ? initialAmount : ""}">
+  <div class="merchant-top-banner">
+    <span>🏪 Merchant of this shop?</span>
+    <a href="/" class="merchant-link">Open Ishyura Studio →</a>
+  </div>
   <div class="container">
     <div class="header-bar"></div>
     <div class="content">
@@ -603,9 +629,9 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
   </div>
 
   <div class="footer">
-    <span>Instant 1-Tap Pay by</span>
-    <a href="/" target="_blank">Ishyura.rw</a>
-    <span>• Zero Extra Fee</span>
+    <span>Need to generate payment stands?</span>
+    <a href="/">Create with Ishyura</a>
+    <span>• Zero Fee</span>
   </div>
 
   <div class="toast" id="toastMsg">USSD Code Copied!</div>

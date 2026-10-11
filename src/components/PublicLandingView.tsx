@@ -110,18 +110,18 @@ export function PublicLandingView({
                         airtel
                       </div>
                     </div>
-                    <Badge variant="outline" className="text-[10px] font-bold tracking-wider uppercase">
-                      Official Tent Card
+                    <Badge variant="secondary" className="text-[10px] font-bold tracking-wider uppercase">
+                      Sample Stand Preview
                     </Badge>
                   </div>
 
                   {/* Merchant Identity on Card */}
                   <div className="text-center space-y-1">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                      Pay Merchant / Ishyura
+                      Sample Stand Preview · Counter Card
                     </span>
                     <h3 className="text-lg font-black tracking-tight text-foreground">
-                      Kigali Fresh Market
+                      Your Store Name Here
                     </h3>
                   </div>
 
@@ -188,7 +188,7 @@ export function PublicLandingView({
                   {/* MoMo Pay Code Banner */}
                   <div className="rounded-xl bg-muted/80 p-2.5 text-center space-y-0.5 border border-border/60">
                     <p className="text-[10px] uppercase font-bold text-muted-foreground">
-                      Direct Telecom USSD Dial String
+                      Sample Telecom USSD Dial String
                     </p>
                     <code className="text-sm font-black tracking-wide text-foreground font-mono">
                       *182*8*1*042189#
@@ -204,6 +204,9 @@ export function PublicLandingView({
                     <span className="font-semibold text-foreground">A6 Tabletop Acrylic</span>
                   </div>
                 </div>
+                <p className="text-center text-[11px] text-muted-foreground mt-2.5">
+                  ✨ When you create your stand, it will feature your real merchant name and code.
+                </p>
               </div>
             </div>
           </div>
