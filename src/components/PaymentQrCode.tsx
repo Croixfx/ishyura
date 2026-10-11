@@ -1,5 +1,5 @@
 import { QRCodeSVG } from "qrcode.react";
-import { buildStandPayloads, publicIdFromInternalId } from "@/lib/payment";
+import { buildStandPayloads, publicIdFromInternalId } from "../lib/payment";
 
 interface PaymentQrCodeProps {
   standId: string;

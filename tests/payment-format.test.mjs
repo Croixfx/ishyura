@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
+const rootDir = process.cwd();
+const srcDir = path.resolve(rootDir, "src");
+
 const vite = await createServer({
   configFile: false,
-  root: process.cwd(),
-  resolve: { alias: { "@": `${process.cwd()}\\src` } },
+  root: rootDir,
+  resolve: {
+    alias: {
+      "@": srcDir,
+    },
+  },
   server: { middlewareMode: true },
   appType: "custom",
 });
