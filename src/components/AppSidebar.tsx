@@ -217,6 +217,25 @@ export function AppSidebar({
               )}
             </button>
 
+            {/* Payment Approvals (Entitlements) */}
+            <button
+              type="button"
+              onClick={() => handleTabClick("approvals")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                activeTab === "approvals"
+                  ? "bg-foreground text-background shadow-xs font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <ShieldCheck className="size-4 shrink-0 text-emerald-400 group-hover:scale-105" />
+                <span className="truncate">Payment Approvals</span>
+              </div>
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                Quota
+              </span>
+            </button>
+
             {/* 3. Single Generation QR Registry */}
             <button
               type="button"

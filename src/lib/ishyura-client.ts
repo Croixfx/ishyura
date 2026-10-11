@@ -56,6 +56,23 @@ export interface MerchantEntitlementsResponse {
   pro_expires_at: string | null;
 }
 
+export interface PaymentRequestRecord {
+  id: string;
+  merchant_id: string;
+  merchant_phone: string;
+  requested_entitlement: "offline_qr_generation" | "pdf_download" | "pro_monthly";
+  amount: number;
+  currency: string;
+  reference_code: string;
+  status: "pending" | "approved" | "rejected";
+  evidence_notes?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  rejection_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AdminUserRecord {
   id: string;
   email: string;
@@ -530,6 +547,104 @@ export class IshyuraClient {
     };
   }
 
+  static async createPaymentRequest(data: {
+    requested_entitlement: "offline_qr_generation" | "pdf_download" | "pro_monthly";
+    amount: number;
+    reference_code: string;
+    merchant_id?: string;
+    merchant_phone?: string;
+    evidence_notes?: string;
+  }): Promise<{ success: boolean; payment_request: PaymentRequestRecord }> {
+    const user = this.getSavedUser();
+    const token = this.getToken();
+    const mid = data.merchant_id || user?.id || user?.phone_number || "";
+    const phone = data.merchant_phone || user?.phone_number || "";
+
+    const res = await fetch(getApiEndpoint("payment-requests"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        ...data,
+        merchant_id: mid,
+        merchant_phone: phone,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to submit payment request.");
+    }
+
+    return await res.json();
+  }
+
+  static async listPaymentRequests(merchantId?: string): Promise<PaymentRequestRecord[]> {
+    const user = this.getSavedUser();
+    const token = this.getToken();
+    const mid = merchantId || user?.id || user?.phone_number || "";
+
+    try {
+      const res = await fetch(
+        getApiEndpoint(`payment-requests?merchant_id=${encodeURIComponent(mid)}`),
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        },
+      );
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Local fallback
+    }
+    return [];
+  }
+
+  static async adminListPaymentRequests(status?: string): Promise<PaymentRequestRecord[]> {
+    const token = this.getToken();
+    const query = status ? `?status=${encodeURIComponent(status)}` : "";
+    try {
+      const res = await fetch(getApiEndpoint(`admin/payment-requests${query}`), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Local fallback
+    }
+    return [];
+  }
+
+  static async adminReviewPaymentRequest(
+    requestId: string,
+    action: "approve" | "reject",
+    rejectionReason?: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const token = this.getToken();
+    const res = await fetch(getApiEndpoint("admin/payment-requests/review"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        request_id: requestId,
+        action,
+        rejection_reason: rejectionReason,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to review payment request.");
+    }
+
+    return await res.json();
+  }
+
   static async createQrCode(
     description: string,
     amount?: number | null,
@@ -587,14 +702,22 @@ export class IshyuraClient {
         const err = Object.assign(new Error(errData.detail || "This QR code already exists."), {
           duplicate: Boolean(errData.duplicate),
           existing_qr: errData.existing_qr as QRCodeRecord | undefined,
+          locked: Boolean(errData.locked),
+          error: errData.error,
+          price: errData.price,
+          currency: errData.currency,
+          entitlement_key: errData.entitlement_key,
         });
         throw err;
       }
     } catch (err: unknown) {
-      if (err && typeof err === "object" && "duplicate" in err && err.duplicate) {
-        throw err;
+      if (err && typeof err === "object") {
+        const o = err as { duplicate?: boolean; locked?: boolean };
+        if (o.duplicate || o.locked) {
+          throw err;
+        }
       }
-      // Local fallback for offline/demo mode if not a duplicate constraint
+      // Local fallback for offline/demo mode if not a duplicate or locked constraint
     }
 
     const newRecord: QRCodeRecord = {

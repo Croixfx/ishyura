@@ -259,6 +259,39 @@ const memDownloads: MemDownload[] = [
   },
 ];
 
+interface MemPaymentRequest {
+  id: string;
+  merchant_id: string;
+  merchant_phone: string;
+  requested_entitlement: "offline_qr_generation" | "pdf_download" | "pro_monthly";
+  amount: number;
+  currency: string;
+  reference_code: string;
+  status: "pending" | "approved" | "rejected";
+  evidence_notes?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  rejection_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const memPaymentRequests: MemPaymentRequest[] = [
+  {
+    id: "payreq-sample-1",
+    merchant_id: "m-sample-1",
+    merchant_phone: "0788123456",
+    requested_entitlement: "offline_qr_generation",
+    amount: 2000,
+    currency: "RWF",
+    reference_code: "PAY-839201",
+    status: "pending",
+    evidence_notes: "Paid via MTN MoMo to Ishyura Merchant",
+    created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
+    updated_at: new Date(Date.now() - 3600000 * 2).toISOString(),
+  },
+];
+
 const memOtps: Map<string, string> = new Map();
 
 export function corsHeaders(): HeadersInit {
@@ -1383,6 +1416,357 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         is_pro: isPro,
         pro_expires_at: pro.valid_until || null,
       });
+    }
+
+    // ----------------------------------------------------
+    // 2G. PAYMENT REQUESTS (Merchant Submission & Listing)
+    // ----------------------------------------------------
+    if (
+      (path === "/payment-requests" || path === "/api/payment-requests") &&
+      request.method === "POST"
+    ) {
+      const body = (await request.json().catch(() => ({}))) as {
+        merchant_id?: string;
+        merchant_phone?: string;
+        requested_entitlement?: "offline_qr_generation" | "pdf_download" | "pro_monthly";
+        amount?: number;
+        reference_code?: string;
+        evidence_notes?: string;
+      };
+
+      const merchantId = (body.merchant_id || "").trim();
+      const merchantPhone = (body.merchant_phone || "").trim();
+      const requestedEntitlement = body.requested_entitlement;
+      const amount = Number(body.amount);
+      const referenceCode = (body.reference_code || "").trim().toUpperCase();
+      const evidenceNotes = (body.evidence_notes || "").trim();
+
+      if (!merchantId || !requestedEntitlement || !amount || !referenceCode) {
+        return jsonResponse(
+          { detail: "Merchant ID, requested entitlement, amount, and reference code are required." },
+          400,
+        );
+      }
+
+      const id = `payreq_${crypto.randomUUID()}`;
+      const now = new Date().toISOString();
+
+      if (env.DB) {
+        try {
+          await ensurePaymentDomainSchema(env.DB);
+          const existing = await env.DB.prepare(
+            "SELECT id FROM payment_requests WHERE reference_code = ? LIMIT 1",
+          )
+            .bind(referenceCode)
+            .first<{ id: string }>();
+
+          if (existing) {
+            return jsonResponse(
+              {
+                error: "DUPLICATE_REFERENCE",
+                detail: `A payment request with reference code ${referenceCode} was already submitted.`,
+              },
+              409,
+            );
+          }
+
+          await env.DB.prepare(
+            "INSERT INTO payment_requests (id, merchant_id, merchant_phone, requested_entitlement, amount, currency, reference_code, status, evidence_notes, created_at, updated_at) " +
+              "VALUES (?, ?, ?, ?, ?, 'RWF', ?, 'pending', ?, ?, ?)",
+          )
+            .bind(
+              id,
+              merchantId,
+              merchantPhone,
+              requestedEntitlement,
+              amount,
+              referenceCode,
+              evidenceNotes || null,
+              now,
+              now,
+            )
+            .run();
+
+          return jsonResponse({
+            success: true,
+            payment_request: {
+              id,
+              merchant_id: merchantId,
+              merchant_phone: merchantPhone,
+              requested_entitlement: requestedEntitlement,
+              amount,
+              currency: "RWF",
+              reference_code: referenceCode,
+              status: "pending",
+              evidence_notes: evidenceNotes || null,
+              created_at: now,
+              updated_at: now,
+            },
+          });
+        } catch (dbErr) {
+          console.warn("D1 payment_requests insert error:", dbErr);
+        }
+      }
+
+      // In-memory fallback
+      const dup = memPaymentRequests.find(
+        (p) => p.reference_code.toUpperCase() === referenceCode.toUpperCase(),
+      );
+      if (dup) {
+        return jsonResponse(
+          {
+            error: "DUPLICATE_REFERENCE",
+            detail: `A payment request with reference code ${referenceCode} was already submitted.`,
+          },
+          409,
+        );
+      }
+
+      const newRecord: MemPaymentRequest = {
+        id,
+        merchant_id: merchantId,
+        merchant_phone: merchantPhone,
+        requested_entitlement: requestedEntitlement,
+        amount,
+        currency: "RWF",
+        reference_code: referenceCode,
+        status: "pending",
+        evidence_notes: evidenceNotes || null,
+        created_at: now,
+        updated_at: now,
+      };
+      memPaymentRequests.unshift(newRecord);
+      return jsonResponse({ success: true, payment_request: newRecord });
+    }
+
+    if (
+      (path === "/payment-requests" || path === "/api/payment-requests") &&
+      request.method === "GET"
+    ) {
+      const merchantId = (url.searchParams.get("merchant_id") || "").trim();
+      if (env.DB) {
+        try {
+          await ensurePaymentDomainSchema(env.DB);
+          const query = merchantId
+            ? "SELECT * FROM payment_requests WHERE merchant_id = ? ORDER BY created_at DESC"
+            : "SELECT * FROM payment_requests ORDER BY created_at DESC";
+          const stmt = merchantId
+            ? env.DB.prepare(query).bind(merchantId)
+            : env.DB.prepare(query);
+          const rows = await stmt.all<MemPaymentRequest>();
+          return jsonResponse(rows.results || []);
+        } catch (dbErr) {
+          console.warn("D1 payment_requests list error:", dbErr);
+        }
+      }
+
+      const list = merchantId
+        ? memPaymentRequests.filter((p) => p.merchant_id === merchantId)
+        : memPaymentRequests;
+      return jsonResponse(list);
+    }
+
+    // ----------------------------------------------------
+    // 2H. ADMIN PAYMENT APPROVALS
+    // ----------------------------------------------------
+    if (
+      (path === "/admin/payment-requests" || path === "/api/admin/payment-requests") &&
+      request.method === "GET"
+    ) {
+      if (!verifyAdminAuth(request, env)) {
+        return jsonResponse({ detail: "Admin authorization required." }, 403);
+      }
+
+      const statusFilter = url.searchParams.get("status");
+      if (env.DB) {
+        try {
+          await ensurePaymentDomainSchema(env.DB);
+          const query = statusFilter
+            ? "SELECT * FROM payment_requests WHERE status = ? ORDER BY created_at DESC"
+            : "SELECT * FROM payment_requests ORDER BY created_at DESC";
+          const stmt = statusFilter
+            ? env.DB.prepare(query).bind(statusFilter)
+            : env.DB.prepare(query);
+          const rows = await stmt.all<MemPaymentRequest>();
+          return jsonResponse(rows.results || []);
+        } catch (dbErr) {
+          console.warn("D1 admin payment_requests list error:", dbErr);
+        }
+      }
+
+      const list = statusFilter
+        ? memPaymentRequests.filter((p) => p.status === statusFilter)
+        : memPaymentRequests;
+      return jsonResponse(list);
+    }
+
+    if (
+      (path === "/admin/payment-requests/review" ||
+        path === "/api/admin/payment-requests/review") &&
+      request.method === "POST"
+    ) {
+      if (!verifyAdminAuth(request, env)) {
+        return jsonResponse({ detail: "Admin authorization required." }, 403);
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        request_id?: string;
+        action?: "approve" | "reject";
+        rejection_reason?: string;
+      };
+
+      const requestId = (body.request_id || "").trim();
+      const action = body.action;
+      const rejectionReason = (body.rejection_reason || "").trim();
+
+      if (!requestId || (action !== "approve" && action !== "reject")) {
+        return jsonResponse(
+          { detail: "Valid request_id and action (approve/reject) required." },
+          400,
+        );
+      }
+
+      const now = new Date().toISOString();
+      const reviewer = (request.headers.get("x-admin-key") || "admin").trim();
+
+      if (env.DB) {
+        try {
+          await ensurePaymentDomainSchema(env.DB);
+          const existing = await env.DB.prepare(
+            "SELECT * FROM payment_requests WHERE id = ? LIMIT 1",
+          )
+            .bind(requestId)
+            .first<MemPaymentRequest>();
+
+          if (!existing) {
+            return jsonResponse({ detail: "Payment request not found." }, 404);
+          }
+
+          if (existing.status !== "pending") {
+            return jsonResponse({ detail: `Payment request was already ${existing.status}.` }, 400);
+          }
+
+          if (action === "approve") {
+            // Atomic status update
+            await env.DB.prepare(
+              "UPDATE payment_requests SET status = 'approved', reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+            )
+              .bind(reviewer, now, now, requestId)
+              .run();
+
+            // Grant entitlement
+            const mid = existing.merchant_id;
+            const entKey =
+              existing.requested_entitlement === "pro_monthly"
+                ? "dynamic_pro_subscription"
+                : existing.requested_entitlement === "pdf_download"
+                  ? "pdf_export"
+                  : "offline_qr_generation";
+
+            if (entKey === "dynamic_pro_subscription") {
+              await env.DB.prepare(
+                "INSERT INTO merchant_entitlements (merchant_id, entitlement_key, granted_count, consumed_count, valid_until) " +
+                  "VALUES (?, 'dynamic_pro_subscription', 1, 0, datetime('now', '+30 days')) " +
+                  "ON CONFLICT(merchant_id, entitlement_key) DO UPDATE SET " +
+                  "valid_until = datetime(CASE WHEN valid_until IS NOT NULL AND valid_until > datetime('now') THEN valid_until ELSE datetime('now') END, '+30 days'), updated_at = datetime('now')",
+              )
+                .bind(mid)
+                .run();
+            } else {
+              await env.DB.prepare(
+                "INSERT INTO merchant_entitlements (merchant_id, entitlement_key, granted_count, consumed_count) " +
+                  "VALUES (?, ?, 2, 0) " +
+                  "ON CONFLICT(merchant_id, entitlement_key) DO UPDATE SET " +
+                  "granted_count = granted_count + 1, updated_at = datetime('now')",
+              )
+                .bind(mid, entKey)
+                .run();
+            }
+
+            // Log event
+            const eventId = `ev_${crypto.randomUUID()}`;
+            await env.DB.prepare(
+              "INSERT INTO entitlement_events (id, merchant_id, entitlement_key, event_type, delta, current_balance, metadata) " +
+                "VALUES (?, ?, ?, 'granted', 1, 1, ?)",
+            )
+              .bind(
+                eventId,
+                mid,
+                entKey,
+                JSON.stringify({
+                  payment_request_id: requestId,
+                  reference_code: existing.reference_code,
+                }),
+              )
+              .run();
+
+            return jsonResponse({
+              success: true,
+              message: `Payment approved! Entitlement granted for merchant ${mid}.`,
+            });
+          } else {
+            // Reject
+            await env.DB.prepare(
+              "UPDATE payment_requests SET status = 'rejected', rejection_reason = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+            )
+              .bind(
+                rejectionReason || "Payment evidence could not be verified",
+                reviewer,
+                now,
+                now,
+                requestId,
+              )
+              .run();
+
+            return jsonResponse({ success: true, message: `Payment request rejected.` });
+          }
+        } catch (dbErr) {
+          console.warn("D1 payment request review error:", dbErr);
+          return jsonResponse({ detail: "Database error during review." }, 500);
+        }
+      }
+
+      // In-memory fallback
+      const req = memPaymentRequests.find((p) => p.id === requestId);
+      if (!req) {
+        return jsonResponse({ detail: "Payment request not found." }, 404);
+      }
+      if (req.status !== "pending") {
+        return jsonResponse({ detail: `Payment request was already ${req.status}.` }, 400);
+      }
+
+      if (action === "approve") {
+        req.status = "approved";
+        req.reviewed_by = reviewer;
+        req.reviewed_at = now;
+        req.updated_at = now;
+
+        const mEnts = getMemEntitlements(req.merchant_id);
+        if (req.requested_entitlement === "pro_monthly") {
+          const pro = mEnts.get("dynamic_pro_subscription")!;
+          const currentExpiry =
+            pro.valid_until && new Date(pro.valid_until).getTime() > Date.now()
+              ? new Date(pro.valid_until)
+              : new Date();
+          currentExpiry.setDate(currentExpiry.getDate() + 30);
+          pro.valid_until = currentExpiry.toISOString();
+          pro.granted_count += 1;
+        } else {
+          const entKey =
+            req.requested_entitlement === "pdf_download" ? "pdf_export" : "offline_qr_generation";
+          const ent = mEnts.get(entKey)!;
+          ent.granted_count += 1;
+        }
+
+        return jsonResponse({ success: true, message: `Payment approved! Entitlement granted.` });
+      } else {
+        req.status = "rejected";
+        req.rejection_reason = rejectionReason || "Evidence unverified";
+        req.reviewed_by = reviewer;
+        req.reviewed_at = now;
+        req.updated_at = now;
+        return jsonResponse({ success: true, message: `Payment request rejected.` });
+      }
     }
 
     // ----------------------------------------------------

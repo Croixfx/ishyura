@@ -57,6 +57,7 @@ import {
   type AdminUserRecord,
   type QRCodeRecord,
   type UserProfile,
+  type PaymentRequestRecord,
 } from "@/lib/ishyura-client";
 import { extractMerchantOrAccountCode, buildRwandaUssdString } from "@/lib/momo-formatters";
 
@@ -77,6 +78,12 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
   const [merchants, setMerchants] = useState<MerchantRecord[]>([]);
   const [systemAdmins, setSystemAdmins] = useState<AdminUserRecord[]>([]);
   const [downloads, setDownloads] = useState<DownloadEventRecord[]>([]);
+  const [paymentRequests, setPaymentRequests] = useState<PaymentRequestRecord[]>([]);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [reviewToast, setReviewToast] = useState<string | null>(null);
+  const [approvalFilter, setApprovalFilter] = useState<"all" | "pending" | "approved" | "rejected">(
+    "pending",
+  );
 
   // Per-tab lazy loading tracking to avoid loading a lot of things upfront
   const [tabLoading, setTabLoading] = useState(false);
@@ -175,6 +182,11 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
             setDownloads(data);
             break;
           }
+          case "approvals": {
+            const data = await IshyuraClient.adminListPaymentRequests().catch(() => []);
+            setPaymentRequests(data);
+            break;
+          }
           default:
             break;
         }
@@ -253,6 +265,37 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
       }
     } catch (err) {
       console.error("Failed to update order status", err);
+    }
+  };
+
+  // Handle reviewing merchant payment requests
+  const handleReviewPayment = async (requestId: string, action: "approve" | "reject") => {
+    setReviewingId(requestId);
+    try {
+      await IshyuraClient.adminReviewPaymentRequest(requestId, action);
+      setPaymentRequests((prev) =>
+        prev.map((r) =>
+          r.id === requestId
+            ? {
+                ...r,
+                status: action === "approve" ? "approved" : "rejected",
+                reviewed_by: currentUser.phone_number || currentUser.email || "admin",
+                reviewed_at: new Date().toISOString(),
+              }
+            : r,
+        ),
+      );
+      setReviewToast(
+        action === "approve"
+          ? "Payment approved & entitlement granted immediately!"
+          : "Payment request rejected.",
+      );
+      setTimeout(() => setReviewToast(null), 4000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to review payment request";
+      alert(msg);
+    } finally {
+      setReviewingId(null);
     }
   };
 
@@ -496,6 +539,18 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
       (m.email || "").toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
+  const filteredPaymentRequests = paymentRequests.filter((r) => {
+    if (approvalFilter !== "all" && r.status !== approvalFilter) return false;
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return (
+      r.reference_code.toLowerCase().includes(q) ||
+      r.merchant_phone.toLowerCase().includes(q) ||
+      r.requested_entitlement.toLowerCase().includes(q) ||
+      (r.evidence_notes || "").toLowerCase().includes(q)
+    );
+  });
+
   // Tab metadata for clean header
   const getTabInfo = () => {
     switch (activeTab) {
@@ -514,6 +569,14 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
           icon: <Package className="size-4.5 text-emerald-500" />,
           count: orders.length,
           countLabel: "orders",
+        };
+      case "approvals":
+        return {
+          title: "Payment Approvals",
+          desc: "Review merchant telecom payment claims and grant product entitlements",
+          icon: <Sparkles className="size-4.5 text-primary" />,
+          count: paymentRequests.filter((r) => r.status === "pending").length,
+          countLabel: "pending",
         };
       case "qrs":
         return {
@@ -1233,6 +1296,163 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                           <td className="p-3 text-primary font-bold">{dl.dial_code}</td>
                           <td className="p-3 text-muted-foreground font-sans">
                             {new Date(dl.created_at).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 7: PAYMENT APPROVALS & ENTITLEMENTS */}
+        {activeTab === "approvals" && (
+          <div className="space-y-3">
+            {/* Quick Filter Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={approvalFilter === "pending" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setApprovalFilter("pending")}
+                  className="h-7 text-xs font-semibold rounded-lg px-2.5"
+                >
+                  Pending ({paymentRequests.filter((r) => r.status === "pending").length})
+                </Button>
+                <Button
+                  variant={approvalFilter === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setApprovalFilter("all")}
+                  className="h-7 text-xs font-semibold rounded-lg px-2.5"
+                >
+                  All ({paymentRequests.length})
+                </Button>
+                <Button
+                  variant={approvalFilter === "approved" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setApprovalFilter("approved")}
+                  className="h-7 text-xs font-semibold rounded-lg px-2.5"
+                >
+                  Approved ({paymentRequests.filter((r) => r.status === "approved").length})
+                </Button>
+                <Button
+                  variant={approvalFilter === "rejected" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setApprovalFilter("rejected")}
+                  className="h-7 text-xs font-semibold rounded-lg px-2.5"
+                >
+                  Rejected ({paymentRequests.filter((r) => r.status === "rejected").length})
+                </Button>
+              </div>
+            </div>
+
+            {reviewToast && (
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-600 dark:text-emerald-400 text-xs font-semibold rounded-xl flex items-center gap-2 animate-in fade-in duration-200">
+                <CheckCircle2 className="size-4 shrink-0" />
+                <span>{reviewToast}</span>
+              </div>
+            )}
+
+            {filteredPaymentRequests.length === 0 ? (
+              <div className="p-12 rounded-2xl border border-dashed border-border/80 text-center bg-card/20 space-y-2">
+                <Sparkles className="size-8 mx-auto text-muted-foreground/40" />
+                <p className="text-sm font-bold text-foreground">No payment requests found</p>
+                <p className="text-xs text-muted-foreground">
+                  When merchants submit MoMo/Airtel transaction reference codes for extra QR generations, PDFs, or PRO subscriptions, they appear here for verification.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-border/70 overflow-hidden bg-card/30">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-muted/50 border-b border-border/60 text-muted-foreground font-bold">
+                      <tr>
+                        <th className="p-3">Reference / Code</th>
+                        <th className="p-3">Merchant</th>
+                        <th className="p-3">Requested Entitlement</th>
+                        <th className="p-3">Amount</th>
+                        <th className="p-3">Telecom Proof / Notes</th>
+                        <th className="p-3">Submitted</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/40">
+                      {filteredPaymentRequests.map((r) => (
+                        <tr key={r.id} className="hover:bg-muted/20 transition-colors">
+                          <td className="p-3">
+                            <span className="font-mono font-bold text-foreground bg-muted/60 px-2 py-0.5 rounded border border-border/60">
+                              {r.reference_code}
+                            </span>
+                          </td>
+                          <td className="p-3 font-mono font-medium text-foreground">
+                            {r.merchant_phone || r.merchant_id}
+                          </td>
+                          <td className="p-3">
+                            <span className="font-semibold text-foreground">
+                              {r.requested_entitlement === "offline_qr_generation"
+                                ? "Extra Offline QR"
+                                : r.requested_entitlement === "pdf_download"
+                                  ? "PDF Stand Card"
+                                  : "Ishyura PRO (Monthly)"}
+                            </span>
+                          </td>
+                          <td className="p-3 font-mono font-bold text-foreground">
+                            {r.amount.toLocaleString()} {r.currency || "RWF"}
+                          </td>
+                          <td className="p-3 text-muted-foreground max-w-xs truncate" title={r.evidence_notes || ""}>
+                            {r.evidence_notes || "—"}
+                          </td>
+                          <td className="p-3 text-muted-foreground text-[11px]">
+                            {new Date(r.created_at).toLocaleString()}
+                          </td>
+                          <td className="p-3">
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] font-bold uppercase tracking-wider ${
+                                r.status === "approved"
+                                  ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/30"
+                                  : r.status === "rejected"
+                                    ? "bg-destructive/10 text-destructive border-destructive/30"
+                                    : "bg-amber-500/10 text-amber-600 border-amber-500/30"
+                              }`}
+                            >
+                              {r.status}
+                            </Badge>
+                          </td>
+                          <td className="p-3 text-right">
+                            {r.status === "pending" ? (
+                              <div className="inline-flex items-center gap-1.5">
+                                <Button
+                                  size="sm"
+                                  disabled={reviewingId === r.id}
+                                  onClick={() => handleReviewPayment(r.id, "approve")}
+                                  className="h-7 text-xs font-bold rounded-lg px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                >
+                                  {reviewingId === r.id ? (
+                                    <Loader2 className="size-3 animate-spin" />
+                                  ) : (
+                                    <CheckCircle2 className="size-3" />
+                                  )}
+                                  <span>Approve</span>
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={reviewingId === r.id}
+                                  onClick={() => handleReviewPayment(r.id, "reject")}
+                                  className="h-7 text-xs font-bold rounded-lg px-2 text-destructive border-destructive/30 hover:bg-destructive/10"
+                                >
+                                  Reject
+                                </Button>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-muted-foreground">
+                                {r.reviewed_by ? `By ${r.reviewed_by}` : "Processed"}
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))}

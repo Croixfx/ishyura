@@ -80,6 +80,38 @@ test("Monetization pricing constants match Rwanda merchant requirements", () => 
   assert.equal(MONETIZATION_PRICES.pro_monthly, 5000);
 });
 
+test("Product type label formatting returns human-readable titles", async () => {
+  const { formatProductTypeLabel } = await vite.ssrLoadModule("/src/lib/payment/index.ts");
+  assert.equal(formatProductTypeLabel("offline_generation"), "Additional Offline QR Stand");
+  assert.equal(formatProductTypeLabel("pdf_download"), "Printable PDF Download Output");
+  assert.equal(formatProductTypeLabel("pro_subscription"), "Ishyura PRO Monthly Subscription");
+});
+
+test("Simulated approval of offline generation entitlement restores merchant access", () => {
+  // Merchant exhausted initial generation
+  let granted = 1;
+  let consumed = 1;
+  assert.equal(canGenerateOffline(granted, consumed), false);
+
+  // Admin approves payment request -> grants +1
+  granted += 1;
+  assert.equal(canGenerateOffline(granted, consumed), true);
+
+  // Merchant consumes extra generation
+  consumed += 1;
+  assert.equal(canGenerateOffline(granted, consumed), false);
+});
+
+test("Simulated approval of PDF export entitlement restores download access", () => {
+  let granted = 1;
+  let consumed = 1;
+  assert.equal(canDownloadPdf(granted, consumed), false);
+
+  // Admin approves payment request -> grants +1
+  granted += 1;
+  assert.equal(canDownloadPdf(granted, consumed), true);
+});
+
 test.after(async () => {
   await vite.close();
 });

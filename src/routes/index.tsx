@@ -81,6 +81,7 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { extractMerchantOrAccountCode, buildRwandaUssdString } from "@/lib/momo-formatters";
 import { PublicLandingView } from "@/components/PublicLandingView";
 import { ProductSelector } from "@/components/ProductSelector";
+import { PaymentRequestDialog } from "@/components/PaymentRequestDialog";
 import { type MerchantEntitlementsResponse } from "@/lib/ishyura-client";
 
 interface IndexSearch {
@@ -229,6 +230,11 @@ function Index() {
   const [pendingAuthTargetProduct, setPendingAuthTargetProduct] = useState<
     "offline" | "online" | null
   >(null);
+  const [paymentRequestDialogOpen, setPaymentRequestDialogOpen] = useState(false);
+  const [paymentRequestType, setPaymentRequestType] = useState<
+    "offline_qr_generation" | "pdf_download" | "pro_monthly"
+  >("offline_qr_generation");
+  const [lockedNotice, setLockedNotice] = useState<string | null>(null);
   const [adminStats, setAdminStats] = useState<{ newInquiries: number; pendingOrders: number }>({
     newInquiries: 0,
     pendingOrders: 0,
@@ -761,6 +767,34 @@ function Index() {
       setCheckingDuplicate(false);
     }
 
+    // 3. Entitlement Gating Check
+    if (!isAdmin) {
+      if (isDynamic) {
+        const isPro = Boolean(entitlements?.is_pro || currentUser?.plan === "pro");
+        if (!isPro) {
+          setConfirmedData(null);
+          setPaymentRequestType("pro_monthly");
+          setLockedNotice(
+            "Ishyura Online smart stands require an active PRO subscription (5,000 RWF / month).",
+          );
+          setPaymentRequestDialogOpen(true);
+          return;
+        }
+      } else {
+        const availableOffline = entitlements?.offline_generations?.available ?? 1;
+        if (availableOffline <= 0) {
+          setConfirmedData(null);
+          setPaymentRequestType("offline_qr_generation");
+          setLockedNotice(
+            "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF).",
+          );
+          setPaymentRequestDialogOpen(true);
+          return;
+        }
+      }
+    }
+
+    setLockedNotice(null);
     setConfirmedData(cardData);
 
     // Auto-sync: Save directly to verified merchant account
@@ -792,14 +826,47 @@ function Index() {
               : null,
           );
         }
+        if (currentUser) {
+          IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
+            .then(setEntitlements)
+            .catch(() => {});
+        }
         return IshyuraClient.listQrCodes();
       })
       .then(setQrHistory)
       .catch((err: unknown) => {
         const errorObj =
           err && typeof err === "object"
-            ? (err as { duplicate?: boolean; existing_qr?: QRCodeRecord; message?: string })
+            ? (err as {
+                duplicate?: boolean;
+                existing_qr?: QRCodeRecord;
+                message?: string;
+                locked?: boolean;
+                error?: string;
+              })
             : null;
+
+        if (
+          errorObj?.locked ||
+          errorObj?.error === "ENTITLEMENT_REQUIRED" ||
+          errorObj?.error === "PRO_ENTITLEMENT_REQUIRED"
+        ) {
+          setConfirmedData(null);
+          if (isDynamic || errorObj?.error === "PRO_ENTITLEMENT_REQUIRED") {
+            setPaymentRequestType("pro_monthly");
+            setLockedNotice(
+              "Ishyura Online smart stands require an active PRO subscription (5,000 RWF / month).",
+            );
+          } else {
+            setPaymentRequestType("offline_qr_generation");
+            setLockedNotice(
+              "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF).",
+            );
+          }
+          setPaymentRequestDialogOpen(true);
+          return;
+        }
+
         if (errorObj?.duplicate) {
           setConfirmedData(null);
           setDuplicateWarning({
@@ -862,6 +929,17 @@ function Index() {
 
   const handleDownloadCustomerCard = async () => {
     if (!customerPrintCardRef.current || !selectedQrForCustomerPrint) return;
+
+    const availablePdfs = entitlements?.pdf_downloads?.available ?? 1;
+    if (!isAdmin && availablePdfs <= 0) {
+      setPaymentRequestType("pdf_download");
+      setLockedNotice(
+        "You have used your included high-resolution card export. Additional PDF outputs require payment (1,000 RWF).",
+      );
+      setPaymentRequestDialogOpen(true);
+      return;
+    }
+
     setDownloadingCustomerCard(true);
     try {
       const { toPng } = await import("html-to-image");
@@ -881,6 +959,12 @@ function Index() {
         phone_number: selectedQrForCustomerPrint.phone_number || undefined,
         file_format: "png",
       }).catch(() => {});
+
+      if (currentUser && !isAdmin) {
+        IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
+          .then(setEntitlements)
+          .catch(() => {});
+      }
     } catch (err) {
       console.error("Failed to download customer card PNG", err);
     } finally {
@@ -1010,6 +1094,17 @@ function Index() {
       setAuthDialogOpen(true);
       return;
     }
+
+    const availablePdfs = entitlements?.pdf_downloads?.available ?? 1;
+    if (!isAdmin && availablePdfs <= 0) {
+      setPaymentRequestType("pdf_download");
+      setLockedNotice(
+        "You have used your included high-resolution card export. Additional PDF outputs require payment (1,000 RWF).",
+      );
+      setPaymentRequestDialogOpen(true);
+      return;
+    }
+
     setDownloading(true);
     try {
       const { toPng } = await import("html-to-image");
@@ -1030,6 +1125,12 @@ function Index() {
         phone_number:
           currentUser?.phone_number || (sanitizedInput.length >= 8 ? sanitizedInput : undefined),
       }).catch((err) => console.warn("Failed to record download timestamp:", err));
+
+      if (currentUser && !isAdmin) {
+        IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
+          .then(setEntitlements)
+          .catch(() => {});
+      }
 
       // Post-download / print physical merchandise upsell prompt
       setTimeout(() => {
@@ -1725,6 +1826,21 @@ function Index() {
         preselectedProduct={selectedProductForOrder}
       />
 
+      <PaymentRequestDialog
+        open={paymentRequestDialogOpen}
+        onOpenChange={setPaymentRequestDialogOpen}
+        entitlementType={paymentRequestType}
+        merchantId={currentUser?.id || currentUser?.phone_number || "guest"}
+        merchantPhone={currentUser?.phone_number || sanitizedInput || ""}
+        onSuccess={() => {
+          if (currentUser) {
+            IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
+              .then(setEntitlements)
+              .catch(() => {});
+          }
+        }}
+      />
+
       {/* Edit Destination Modal for Dynamic QRs (No Reprinting) */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
         <DialogContent className="sm:max-w-md">
@@ -2132,7 +2248,8 @@ function Index() {
         activeTab === "qrs" ||
         activeTab === "merchants" ||
         activeTab === "admins" ||
-        activeTab === "logs") ? (
+        activeTab === "logs" ||
+        activeTab === "approvals") ? (
         <div className="p-4 sm:p-6 lg:p-8">
           <AdminWorkspace
             activeTab={activeTab}
@@ -3607,6 +3724,25 @@ function Index() {
                   <p className="text-center text-xs text-muted-foreground">
                     Print directly or save image to display on your shop counter.
                   </p>
+                </div>
+              ) : lockedNotice ? (
+                <div className="flex w-full max-w-sm flex-col items-center justify-center rounded-2xl border-2 border-dashed border-amber-500/40 bg-amber-500/5 px-6 py-10 text-center space-y-4">
+                  <div className="flex size-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                    <Lock className="size-7" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <h3 className="text-base font-bold text-foreground">Entitlement Required</h3>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      {lockedNotice}
+                    </p>
+                  </div>
+                  <Button
+                    onClick={() => setPaymentRequestDialogOpen(true)}
+                    className="w-full text-xs font-bold gap-1.5 shadow-sm"
+                  >
+                    <span>Request Unlock &amp; Submit Payment</span>
+                    <ArrowRight className="size-3.5" />
+                  </Button>
                 </div>
               ) : (
                 <div className="flex w-full max-w-sm flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border/80 bg-card/20 px-6 py-14 text-center">
