@@ -1824,6 +1824,7 @@ function Index() {
         network={confirmedData?.network || network}
         dialCode={confirmedData?.ussdString || draftUssdString}
         preselectedProduct={selectedProductForOrder}
+        selectedProductMode={selectedProductMode || (confirmedData?.isDynamic ? "online" : "offline")}
       />
 
       <PaymentRequestDialog
@@ -2536,7 +2537,7 @@ function Index() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Stand */}
             <div className="p-5 rounded-2xl border border-border/80 bg-card/60 flex flex-col justify-between space-y-4 shadow-sm hover:border-emerald-500/50 transition-all">
               <div className="space-y-3">
@@ -2564,6 +2565,36 @@ function Index() {
                   className="w-full text-xs font-bold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white"
                 >
                   Order Acrylic Stand
+                </Button>
+              </div>
+            </div>
+
+            {/* Smart NFC Stand */}
+            <div className="p-5 rounded-2xl border border-border/80 bg-card/60 flex flex-col justify-between space-y-4 shadow-sm hover:border-primary/50 transition-all">
+              <div className="space-y-3">
+                <div className="size-11 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold">
+                  <Radio className="size-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-foreground">Smart Stand (QR + Tap)</h3>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    Contactless NFC chip + high-resolution QR print. Zero charging needed. Contactless rewriting service (1,000 RWF).
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-2 pt-2 border-t border-border/40">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-lg font-black text-foreground">8,000 RWF</span>
+                  <span className="text-[10px] text-muted-foreground">NFC Contactless</span>
+                </div>
+                <Button
+                  onClick={() => {
+                    setSelectedProductForOrder("smart_nfc_stand");
+                    setOrderDialogOpen(true);
+                  }}
+                  className="w-full text-xs font-bold rounded-xl bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  Order NFC Stand
                 </Button>
               </div>
             </div>

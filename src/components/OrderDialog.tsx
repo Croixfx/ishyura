@@ -32,6 +32,7 @@ export interface OrderDialogProps {
   network?: string;
   dialCode?: string;
   preselectedProduct?: OrderItemType;
+  selectedProductMode?: "offline" | "online" | null;
 }
 
 interface ProductOption {
@@ -82,7 +83,7 @@ const PRODUCTS: ProductOption[] = [
       "High quality acrylic stand with your MoMo code",
       "Embedded fast contactless chip for phone tap",
       "Zero battery or charging needed",
-      "Instant dialer prompt on customer smartphones",
+      "Pre-programmed NFC chip (paid rewriting service 1,000 RWF)",
     ],
   },
   {
@@ -108,6 +109,7 @@ export function OrderDialog({
   network = "MTN MoMo",
   dialCode = "*182*8*1*...",
   preselectedProduct = "acrylic_stand",
+  selectedProductMode = null,
 }: OrderDialogProps) {
   const [selectedProduct, setSelectedProduct] = useState<OrderItemType>(preselectedProduct);
   const [quantity, setQuantity] = useState<number>(1);
@@ -237,6 +239,14 @@ export function OrderDialog({
                 <span className="text-muted-foreground">Product</span>
                 <span className="font-semibold text-foreground">{currentProduct.title}</span>
               </div>
+              {selectedProductMode && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Stand Mode</span>
+                  <span className="font-semibold text-foreground">
+                    {selectedProductMode === "online" ? "Ishyura Online" : "Ishyura Offline"}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Delivery to</span>
                 <span className="font-semibold text-foreground">{deliveryLocation}</span>
@@ -255,6 +265,21 @@ export function OrderDialog({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+            {selectedProductMode && (
+              <div className="flex items-center justify-between rounded-xl bg-muted/60 border border-border/70 px-3.5 py-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-background border border-border text-foreground">
+                    {selectedProductMode === "online" ? "Ishyura Online" : "Ishyura Offline"}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {selectedProductMode === "online"
+                      ? "Stand programmed with online payment page and analytics."
+                      : "Stand programmed with direct cellular USSD (*182# / *555#), zero internet needed."}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {error && (
               <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-xs text-destructive">
                 {error}
@@ -308,6 +333,18 @@ export function OrderDialog({
                   );
                 })}
               </div>
+
+              {selectedProduct === "smart_nfc_stand" && (
+                <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/25 text-xs text-sky-800 dark:text-sky-300 space-y-1">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <Radio className="size-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
+                    <span>NFC Programming &amp; Paid Rewriting Service</span>
+                  </p>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground dark:text-sky-200">
+                    We pre-program the embedded contactless chip with your {selectedProductMode === "online" ? "online payment page" : "cellular USSD dial string"}. If your shop details or phone numbers change in the future, physical NFC rewriting service is available for 1,000 RWF.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Quantity and dynamic total */}
