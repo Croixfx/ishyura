@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { PaymentQrCode } from "@/components/PaymentQrCode";
 import {
@@ -249,6 +249,20 @@ function Index() {
   const searchParams = Route.useSearch();
   const loaderData = Route.useLoaderData();
   const hasServerSession = Boolean(loaderData?.hasSession);
+
+  // User state & Soft Registration flow
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return IshyuraClient.getSavedUser();
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+  const [isAuthHydrated, setIsAuthHydrated] = useState(false);
+
   const [activeTab, setActiveTab] = useState<string>(searchParams.tab || "generator");
   const [selectedProductMode, setSelectedProductMode] = useState<"offline" | "online" | null>(
     searchParams.product || null,
@@ -349,18 +363,6 @@ function Index() {
   // Instant Customer Scan Preview Dialog
   const [scanPreviewUrl, setScanPreviewUrl] = useState<string | null>(null);
 
-  // User state & Soft Registration flow
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        return IshyuraClient.getSavedUser();
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  });
-  const [isAuthHydrated, setIsAuthHydrated] = useState(false);
   const [recordsLoading, setRecordsLoading] = useState(true);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [authPhoneInput, setAuthPhoneInput] = useState("");
