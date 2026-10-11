@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
 
 interface ScrollProgressiveSectionProps {
   id?: string;
@@ -14,17 +13,14 @@ interface ScrollProgressiveSectionProps {
 export function ScrollProgressiveSection({
   id,
   className = "",
-  skeletonHeight = "min-h-[360px]",
   children,
-  fallback,
-  threshold = 0.05,
-  rootMargin = "250px 0px",
+  threshold = 0.01,
+  rootMargin = "300px 0px",
 }: ScrollProgressiveSectionProps) {
-  const [isVisible, setIsVisible] = useState(false);
+  const [isVisible, setIsVisible] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // If IntersectionObserver is unavailable or SSR, reveal immediately
     if (typeof window === "undefined" || !("IntersectionObserver" in window)) {
       setIsVisible(true);
       return;
@@ -49,25 +45,18 @@ export function ScrollProgressiveSection({
   }, [threshold, rootMargin]);
 
   return (
-    <div id={id} ref={containerRef} className={className}>
-      {isVisible ? (
-        <div className="animate-in fade-in duration-500 fill-mode-both">{children}</div>
-      ) : (
-        fallback || (
-          <div className={`w-full ${skeletonHeight} p-6 sm:p-12 space-y-6 flex flex-col justify-center`}>
-            <div className="space-y-3 max-w-md mx-auto text-center">
-              <Skeleton className="h-4 w-32 mx-auto rounded-full" />
-              <Skeleton className="h-8 w-64 mx-auto rounded-xl" />
-              <Skeleton className="h-4 w-48 mx-auto rounded-md" />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto w-full pt-4">
-              <Skeleton className="h-48 rounded-2xl" />
-              <Skeleton className="h-48 rounded-2xl" />
-              <Skeleton className="h-48 rounded-2xl hidden md:block" />
-            </div>
-          </div>
-        )
-      )}
+    <div
+      id={id}
+      ref={containerRef}
+      className={`w-full transition-all duration-700 ease-out ${
+        isVisible ? "opacity-100 translate-y-0" : "opacity-95 translate-y-1"
+      } ${className}`}
+      style={{
+        contentVisibility: "auto",
+        containIntrinsicSize: "0 400px",
+      }}
+    >
+      {children}
     </div>
   );
 }

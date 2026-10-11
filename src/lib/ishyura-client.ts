@@ -242,6 +242,11 @@ export class IshyuraClient {
     }
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(USER_KEY, JSON.stringify(user));
+    try {
+      document.cookie = "ishyura_session=1; path=/; max-age=31536000; SameSite=Lax";
+    } catch {
+      // ignore cookie write errors
+    }
   }
 
   static getSavedUser(): UserProfile | null {
@@ -255,6 +260,13 @@ export class IshyuraClient {
         if (parsed.role !== "admin") {
           parsed.role = "admin";
           localStorage.setItem(USER_KEY, JSON.stringify(parsed));
+        }
+      }
+      if (typeof document !== "undefined" && !document.cookie.includes("ishyura_session=1")) {
+        try {
+          document.cookie = "ishyura_session=1; path=/; max-age=31536000; SameSite=Lax";
+        } catch {
+          // ignore
         }
       }
       return parsed;
@@ -271,6 +283,11 @@ export class IshyuraClient {
     if (typeof window === "undefined") return;
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    try {
+      document.cookie = "ishyura_session=; path=/; max-age=0; SameSite=Lax";
+    } catch {
+      // ignore
+    }
   }
 
   static async requestOtp(phoneNumber: string): Promise<{

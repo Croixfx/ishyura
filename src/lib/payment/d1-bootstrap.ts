@@ -245,8 +245,17 @@ export async function ensurePaymentDomainSchema(db: BootstrapDatabase): Promise<
   const knownReqColumns = new Set(reqColumns.results.map((c) => c.name));
   const reqColumnsToAdd: Record<string, string> = {
     reference_code: "TEXT",
+    request_reference: "TEXT",
+    submitted_reference: "TEXT",
     requested_entitlement: "TEXT",
+    product_type: "TEXT",
+    payment_method: "TEXT",
     evidence_notes: "TEXT",
+    proof_notes: "TEXT",
+    admin_notes: "TEXT",
+    rejection_reason: "TEXT",
+    reviewed_by: "TEXT",
+    reviewed_at: "TEXT",
   };
   for (const [name, definition] of Object.entries(reqColumnsToAdd)) {
     if (!knownReqColumns.has(name)) {

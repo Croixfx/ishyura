@@ -42,7 +42,7 @@ export function AppLayout({
   // 1. UNLOGGED VISITOR: Flawlessly scrollable layout with fixed header & dedicated scroll viewport
   if (!currentUser) {
     return (
-      <div className="fixed inset-0 w-full h-full bg-background text-foreground flex flex-col overflow-hidden">
+      <div className="min-h-screen w-full bg-background text-foreground flex flex-col">
         {/* Public Top Header */}
         <header className="sticky top-0 z-40 border-b border-border/60 bg-background/90 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
           <Link to="/" className="flex items-center gap-3">
@@ -64,56 +64,51 @@ export function AppLayout({
 
           {/* Desktop Navigation Links */}
           <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-muted-foreground">
-            <a
-              href="#products"
-              onClick={(e) => {
-                e.preventDefault();
+            <button
+              type="button"
+              onClick={() => {
                 document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="hover:text-foreground transition-colors"
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               Products
-            </a>
-            <a
-              href="#how-it-works"
-              onClick={(e) => {
-                e.preventDefault();
+            </button>
+            <button
+              type="button"
+              onClick={() => {
                 document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="hover:text-foreground transition-colors"
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               How It Works
-            </a>
-            <a
-              href="#hardware-section"
-              onClick={(e) => {
-                e.preventDefault();
+            </button>
+            <button
+              type="button"
+              onClick={() => {
                 document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="hover:text-foreground transition-colors"
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               Stands &amp; Hardware
-            </a>
-            <a
-              href="#pricing"
-              onClick={(e) => {
-                e.preventDefault();
+            </button>
+            <button
+              type="button"
+              onClick={() => {
                 document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="hover:text-foreground transition-colors"
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               Pricing
-            </a>
-            <a
-              href="#faq"
-              onClick={(e) => {
-                e.preventDefault();
+            </button>
+            <button
+              type="button"
+              onClick={() => {
                 document.getElementById("faq")?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="hover:text-foreground transition-colors"
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               FAQ
-            </a>
+            </button>
           </nav>
 
           <div className="flex items-center gap-2 sm:gap-3">
@@ -137,8 +132,8 @@ export function AppLayout({
           </div>
         </header>
 
-        {/* Dedicated scroll viewport ensuring smooth full-page scrolling without clipping or double scroll */}
-        <main className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-y-contain scroll-smooth">
+        {/* Natural page flow ensuring smooth full-page scrolling without clipping or double scroll */}
+        <main className="flex-1 w-full">
           {children}
         </main>
 

@@ -67,17 +67,16 @@ export function PublicLandingView({
                   <span>Create Free Merchant QR</span>
                   <ArrowRight className="size-4" />
                 </Button>
-                <a
-                  href="#hardware-section"
-                  onClick={(e) => {
-                    e.preventDefault();
+                <button
+                  type="button"
+                  onClick={() => {
                     document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" });
                   }}
-                  className="w-full sm:w-auto inline-flex items-center justify-center h-12 px-6 rounded-xl font-semibold text-sm border border-border/80 bg-card hover:bg-muted/60 transition-colors"
+                  className="w-full sm:w-auto inline-flex items-center justify-center h-12 px-6 rounded-xl font-semibold text-sm border border-border/80 bg-card hover:bg-muted/60 transition-colors cursor-pointer"
                 >
                   <Store className="size-4 mr-2 text-muted-foreground" />
                   <span>Explore Stands &amp; Hardware</span>
-                </a>
+                </button>
               </div>
 
               {/* Trust & Policy Highlights */}
@@ -786,56 +785,41 @@ export function PublicLandingView({
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-6 font-medium">
-            <a
-              href="#products"
-              onClick={(e) => {
-                e.preventDefault();
-                document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
-              }}
-              className="hover:text-foreground transition-colors"
+            <button
+              type="button"
+              onClick={() => document.getElementById("products")?.scrollIntoView({ behavior: "smooth" })}
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               Products
-            </a>
-            <a
-              href="#how-it-works"
-              onClick={(e) => {
-                e.preventDefault();
-                document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
-              }}
-              className="hover:text-foreground transition-colors"
+            </button>
+            <button
+              type="button"
+              onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               How It Works
-            </a>
-            <a
-              href="#hardware-section"
-              onClick={(e) => {
-                e.preventDefault();
-                document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" });
-              }}
-              className="hover:text-foreground transition-colors"
+            </button>
+            <button
+              type="button"
+              onClick={() => document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" })}
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               Hardware
-            </a>
-            <a
-              href="#pricing"
-              onClick={(e) => {
-                e.preventDefault();
-                document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
-              }}
-              className="hover:text-foreground transition-colors"
+            </button>
+            <button
+              type="button"
+              onClick={() => document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" })}
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               Pricing
-            </a>
-            <a
-              href="#faq"
-              onClick={(e) => {
-                e.preventDefault();
-                document.getElementById("faq")?.scrollIntoView({ behavior: "smooth" });
-              }}
-              className="hover:text-foreground transition-colors"
+            </button>
+            <button
+              type="button"
+              onClick={() => document.getElementById("faq")?.scrollIntoView({ behavior: "smooth" })}
+              className="hover:text-foreground transition-colors cursor-pointer"
             >
               FAQ
-            </a>
+            </button>
             {onOpenInquiry && (
               <button
                 type="button"

@@ -1318,10 +1318,14 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       if (env.DB) {
         try {
           await ensurePaymentDomainSchema(env.DB);
+          const phoneParam = (url.searchParams.get("phone") || url.searchParams.get("phone_number") || "").trim();
+          const cleanPhone = phoneParam || (merchantId.replace(/[^0-9+]/g, "").length >= 8 ? merchantId : "");
+          const e164 = cleanPhone ? formatToE164(cleanPhone) : "";
+
           const rows = await env.DB.prepare(
-            "SELECT * FROM merchant_entitlements WHERE merchant_id = ? OR merchant_id = ?",
+            "SELECT * FROM merchant_entitlements WHERE merchant_id = ? OR merchant_id = ? OR merchant_id = ?",
           )
-            .bind(merchantId, merchantId)
+            .bind(merchantId, cleanPhone || merchantId, e164 || merchantId)
             .all<{
               id: string;
               entitlement_type?: string;
@@ -1360,9 +1364,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
           // Count actual existing offline QR codes in D1 to prevent any discrepancy
           const pastCountRow = await env.DB.prepare(
-            "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
+            "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR owner_id = ? OR phone_number = ? OR phone_number = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
           )
-            .bind(merchantId, merchantId)
+            .bind(merchantId, cleanPhone || merchantId, merchantId, cleanPhone || merchantId, e164 || merchantId)
             .first<{ count: number }>();
           const actualOfflineCount = pastCountRow?.count || 0;
           if (actualOfflineCount > offlineConsumed) {
@@ -1450,9 +1454,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         try {
           await ensurePaymentDomainSchema(env.DB);
           const existing = await env.DB.prepare(
-            "SELECT id FROM payment_requests WHERE reference_code = ? LIMIT 1",
+            "SELECT id FROM payment_requests WHERE reference_code = ? OR request_reference = ? OR submitted_reference = ? LIMIT 1",
           )
-            .bind(referenceCode)
+            .bind(referenceCode, referenceCode, referenceCode)
             .first<{ id: string }>();
 
           if (existing) {
@@ -1465,38 +1469,71 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             );
           }
 
-          await env.DB.prepare(
-            "INSERT INTO payment_requests (id, merchant_id, merchant_phone, requested_entitlement, amount, currency, reference_code, status, evidence_notes, created_at, updated_at) " +
-              "VALUES (?, ?, ?, ?, ?, 'RWF', ?, 'pending', ?, ?, ?)",
-          )
-            .bind(
-              id,
-              merchantId,
-              merchantPhone,
-              requestedEntitlement,
-              amount,
-              referenceCode,
-              evidenceNotes || null,
-              now,
-              now,
+          // Insert supporting both migration-0003 and dynamic D1 columns
+          try {
+            await env.DB.prepare(
+              "INSERT INTO payment_requests (" +
+                "id, request_reference, reference_code, submitted_reference, " +
+                "merchant_id, merchant_phone, product_type, requested_entitlement, " +
+                "amount, currency, payment_method, proof_notes, evidence_notes, " +
+                "status, created_at, updated_at" +
+              ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'RWF', 'rwanda_momo', ?, ?, 'pending', ?, ?)",
             )
-            .run();
+              .bind(
+                id,
+                referenceCode,
+                referenceCode,
+                referenceCode,
+                merchantId,
+                merchantPhone,
+                requestedEntitlement,
+                requestedEntitlement,
+                amount,
+                evidenceNotes || null,
+                evidenceNotes || null,
+                now,
+                now,
+              )
+              .run();
+          } catch {
+            // Fallback for minimal column schema
+            await env.DB.prepare(
+              "INSERT INTO payment_requests (" +
+                "id, merchant_id, merchant_phone, requested_entitlement, amount, currency, reference_code, status, evidence_notes, created_at, updated_at" +
+              ") VALUES (?, ?, ?, ?, ?, 'RWF', ?, 'pending', ?, ?, ?)",
+            )
+              .bind(
+                id,
+                merchantId,
+                merchantPhone,
+                requestedEntitlement,
+                amount,
+                referenceCode,
+                evidenceNotes || null,
+                now,
+                now,
+              )
+              .run();
+          }
+
+          const record: MemPaymentRequest = {
+            id,
+            merchant_id: merchantId,
+            merchant_phone: merchantPhone,
+            requested_entitlement: requestedEntitlement,
+            amount,
+            currency: "RWF",
+            reference_code: referenceCode,
+            status: "pending",
+            evidence_notes: evidenceNotes || null,
+            created_at: now,
+            updated_at: now,
+          };
+          memPaymentRequests.unshift(record);
 
           return jsonResponse({
             success: true,
-            payment_request: {
-              id,
-              merchant_id: merchantId,
-              merchant_phone: merchantPhone,
-              requested_entitlement: requestedEntitlement,
-              amount,
-              currency: "RWF",
-              reference_code: referenceCode,
-              status: "pending",
-              evidence_notes: evidenceNotes || null,
-              created_at: now,
-              updated_at: now,
-            },
+            payment_request: record,
           });
         } catch (dbErr) {
           console.warn("D1 payment_requests insert error:", dbErr);
@@ -1542,21 +1579,47 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       if (env.DB) {
         try {
           await ensurePaymentDomainSchema(env.DB);
+          const cleanPhone = merchantId.replace(/[^0-9+]/g, "").length >= 8 ? merchantId : "";
+          const e164 = cleanPhone ? formatToE164(cleanPhone) : "";
+
           const query = merchantId
-            ? "SELECT * FROM payment_requests WHERE merchant_id = ? ORDER BY created_at DESC"
+            ? "SELECT * FROM payment_requests WHERE merchant_id = ? OR merchant_phone = ? OR merchant_phone = ? ORDER BY created_at DESC"
             : "SELECT * FROM payment_requests ORDER BY created_at DESC";
           const stmt = merchantId
-            ? env.DB.prepare(query).bind(merchantId)
+            ? env.DB.prepare(query).bind(merchantId, merchantId, e164 || merchantId)
             : env.DB.prepare(query);
-          const rows = await stmt.all<MemPaymentRequest>();
-          return jsonResponse(rows.results || []);
+          const rows = await stmt.all<Record<string, unknown>>();
+          const mapped = (rows.results || []).map((r) => ({
+            id: String(r.id || ""),
+            merchant_id: String(r.merchant_id || ""),
+            merchant_phone: String(r.merchant_phone || ""),
+            requested_entitlement: String(r.requested_entitlement || r.product_type || "offline_qr_generation"),
+            amount: Number(r.amount || 0),
+            currency: String(r.currency || "RWF"),
+            reference_code: String(r.reference_code || r.request_reference || r.submitted_reference || ""),
+            status: (String(r.status || "pending").toLowerCase() as "pending" | "approved" | "rejected"),
+            evidence_notes: r.evidence_notes ? String(r.evidence_notes) : (r.proof_notes ? String(r.proof_notes) : null),
+            admin_notes: r.admin_notes ? String(r.admin_notes) : null,
+            reviewed_by: r.reviewed_by ? String(r.reviewed_by) : null,
+            reviewed_at: r.reviewed_at ? String(r.reviewed_at) : null,
+            rejection_reason: r.admin_notes ? String(r.admin_notes) : (r.rejection_reason ? String(r.rejection_reason) : null),
+            created_at: String(r.created_at || now),
+            updated_at: String(r.updated_at || now),
+          }));
+          return jsonResponse(mapped);
         } catch (dbErr) {
           console.warn("D1 payment_requests list error:", dbErr);
         }
       }
 
+      const digits = merchantId.replace(/[^0-9]/g, "");
       const list = merchantId
-        ? memPaymentRequests.filter((p) => p.merchant_id === merchantId)
+        ? memPaymentRequests.filter(
+            (p) =>
+              p.merchant_id === merchantId ||
+              p.merchant_phone === merchantId ||
+              (digits.length >= 8 && p.merchant_phone?.replace(/[^0-9]/g, "").includes(digits)),
+          )
         : memPaymentRequests;
       return jsonResponse(list);
     }
@@ -1582,8 +1645,25 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           const stmt = statusFilter
             ? env.DB.prepare(query).bind(statusFilter)
             : env.DB.prepare(query);
-          const rows = await stmt.all<MemPaymentRequest>();
-          return jsonResponse(rows.results || []);
+          const rows = await stmt.all<Record<string, unknown>>();
+          const mapped = (rows.results || []).map((r) => ({
+            id: String(r.id || ""),
+            merchant_id: String(r.merchant_id || ""),
+            merchant_phone: String(r.merchant_phone || ""),
+            requested_entitlement: String(r.requested_entitlement || r.product_type || "offline_qr_generation"),
+            amount: Number(r.amount || 0),
+            currency: String(r.currency || "RWF"),
+            reference_code: String(r.reference_code || r.request_reference || r.submitted_reference || ""),
+            status: (String(r.status || "pending").toLowerCase() as "pending" | "approved" | "rejected"),
+            evidence_notes: r.evidence_notes ? String(r.evidence_notes) : (r.proof_notes ? String(r.proof_notes) : null),
+            admin_notes: r.admin_notes ? String(r.admin_notes) : null,
+            reviewed_by: r.reviewed_by ? String(r.reviewed_by) : null,
+            reviewed_at: r.reviewed_at ? String(r.reviewed_at) : null,
+            rejection_reason: r.admin_notes ? String(r.admin_notes) : (r.rejection_reason ? String(r.rejection_reason) : null),
+            created_at: String(r.created_at || now),
+            updated_at: String(r.updated_at || now),
+          }));
+          return jsonResponse(mapped);
         } catch (dbErr) {
           console.warn("D1 admin payment_requests list error:", dbErr);
         }
@@ -2068,58 +2148,83 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           // Enforce Entitlements before generating a new QR:
           if (!isAdmin) {
             if (isDynamic) {
+              const e164 = phone ? formatToE164(phone) : "";
               const proRow = await env.DB.prepare(
-                "SELECT expires_at, valid_until FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'pro_subscription' OR entitlement_key = 'dynamic_pro_subscription') LIMIT 1",
+                "SELECT expires_at, valid_until FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'pro_subscription' OR entitlement_key = 'dynamic_pro_subscription') LIMIT 1",
               )
-                .bind(ownerId, phone)
+                .bind(ownerId, phone, e164 || phone)
                 .first<{ expires_at?: string | null; valid_until?: string | null }>();
               const expiry = proRow?.expires_at || proRow?.valid_until;
               const proActive = Boolean(
                 expiry && new Date(expiry).getTime() > Date.now(),
               );
               if (!proActive) {
+                const pendingPro = await env.DB.prepare(
+                  "SELECT reference_code FROM payment_requests WHERE (merchant_id = ? OR merchant_id = ? OR merchant_phone = ? OR merchant_phone = ?) AND status = 'pending' AND (requested_entitlement = 'pro_monthly' OR requested_entitlement = 'pro_subscription' OR product_type = 'pro_subscription') ORDER BY created_at DESC LIMIT 1",
+                )
+                  .bind(ownerId, phone, phone, e164 || phone)
+                  .first<{ reference_code?: string }>();
+
+                const detail = pendingPro?.reference_code
+                  ? `Your PRO subscription payment submission (Ref: ${pendingPro.reference_code}) is currently awaiting administrator review. Once approved, you can generate dynamic smart stands immediately.`
+                  : "Dynamic Smart Stand features require an active Ishyura PRO subscription.";
+
                 return jsonResponse(
                   {
                     error: "PRO_ENTITLEMENT_REQUIRED",
                     locked: true,
+                    pending_approval: Boolean(pendingPro?.reference_code),
+                    pending_reference: pendingPro?.reference_code,
                     price: MONETIZATION_PRICES.pro_monthly,
                     currency: "RWF",
                     entitlement_key: "dynamic_pro_subscription",
-                    detail:
-                      "Dynamic Smart Stand features require an active Ishyura PRO subscription.",
+                    detail,
                   },
                   402,
                 );
               }
             } else {
+              const e164 = phone ? formatToE164(phone) : "";
               // 1. Count actual existing offline QR codes for this merchant
               const existingCountRow = await env.DB.prepare(
-                "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR phone_number = ? OR owner_id = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
+                "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR owner_id = ? OR phone_number = ? OR phone_number = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
               )
-                .bind(ownerId, phone, phone)
+                .bind(ownerId, phone, phone, e164 || phone, ownerId)
                 .first<{ count: number }>();
               const existingOfflineCount = existingCountRow?.count || 0;
 
               // 2. Query merchant entitlements
               const entRow = await env.DB.prepare(
-                "SELECT granted_count, consumed_count FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') LIMIT 1",
+                "SELECT granted_count, consumed_count FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') LIMIT 1",
               )
-                .bind(ownerId, phone)
+                .bind(ownerId, phone, e164 || phone)
                 .first<{ granted_count?: number; consumed_count?: number }>();
 
               // Free included offline generation is 1. Admin approved payment increases granted_count.
               const granted = Math.max(1, entRow?.granted_count ?? 1);
 
               if (existingOfflineCount >= granted) {
+                // Check if there is a pending payment request
+                const pendingReq = await env.DB.prepare(
+                  "SELECT reference_code FROM payment_requests WHERE (merchant_id = ? OR merchant_id = ? OR merchant_phone = ? OR merchant_phone = ?) AND status = 'pending' AND (requested_entitlement = 'offline_qr_generation' OR product_type = 'offline_qr_generation') ORDER BY created_at DESC LIMIT 1",
+                )
+                  .bind(ownerId, phone, phone, e164 || phone)
+                  .first<{ reference_code?: string }>();
+
+                const detail = pendingReq?.reference_code
+                  ? `Your payment submission (Ref: ${pendingReq.reference_code}) is currently awaiting administrator review. Once approved, you can generate your next QR card immediately.`
+                  : "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.";
+
                 return jsonResponse(
                   {
                     error: "ENTITLEMENT_REQUIRED",
                     locked: true,
+                    pending_approval: Boolean(pendingReq?.reference_code),
+                    pending_reference: pendingReq?.reference_code,
                     price: MONETIZATION_PRICES.extra_offline_generation,
                     currency: "RWF",
                     entitlement_key: "offline_qr_generation",
-                    detail:
-                      "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+                    detail,
                   },
                   402,
                 );

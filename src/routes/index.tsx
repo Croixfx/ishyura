@@ -40,6 +40,10 @@ import {
   Edit3,
   ExternalLink,
   Trash2,
+  Clock,
+  RotateCw,
+  Copy,
+  Check,
 } from "lucide-react";
 
 import { InquiryDialog } from "@/components/InquiryDialog";
@@ -74,6 +78,7 @@ import {
   QRCodeRecord,
   isAdminUser,
   getDynamicPayUrl,
+  type PaymentRequestRecord,
 } from "@/lib/ishyura-client";
 import { PWAInstallButton } from "@/components/PWAInstallButton";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
@@ -85,6 +90,17 @@ import { PaymentRequestDialog } from "@/components/PaymentRequestDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AppShellSkeleton } from "@/components/AppShellSkeleton";
 import { type MerchantEntitlementsResponse } from "@/lib/ishyura-client";
+import { createServerFn } from "@tanstack/react-start";
+
+const checkSessionServerFn = createServerFn({ method: "GET" }).handler(async () => {
+  try {
+    const { getCookie } = await import("@tanstack/react-start/server");
+    const session = getCookie("ishyura_session");
+    return { hasSession: Boolean(session) };
+  } catch {
+    return { hasSession: false };
+  }
+});
 
 interface IndexSearch {
   tab?: string;
@@ -100,6 +116,13 @@ export const Route = createFileRoute("/")({
           ? (search.product as "offline" | "online")
           : undefined,
     };
+  },
+  loader: async () => {
+    try {
+      return await checkSessionServerFn();
+    } catch {
+      return { hasSession: false };
+    }
   },
   head: () => ({
     meta: [
@@ -224,6 +247,8 @@ interface ConfirmedCardData {
 
 function Index() {
   const searchParams = Route.useSearch();
+  const loaderData = Route.useLoaderData();
+  const hasServerSession = Boolean(loaderData?.hasSession);
   const [activeTab, setActiveTab] = useState<string>(searchParams.tab || "generator");
   const [selectedProductMode, setSelectedProductMode] = useState<"offline" | "online" | null>(
     searchParams.product || null,
@@ -237,6 +262,56 @@ function Index() {
     "offline_qr_generation" | "pdf_download" | "pro_monthly"
   >("offline_qr_generation");
   const [lockedNotice, setLockedNotice] = useState<string | null>(null);
+  const [paymentRequests, setPaymentRequests] = useState<PaymentRequestRecord[]>([]);
+  const [paymentRequestsLoading, setPaymentRequestsLoading] = useState(false);
+  const [copiedRef, setCopiedRef] = useState<string | null>(null);
+  const [recordsSubTab, setRecordsSubTab] = useState<"cards" | "payments">("cards");
+
+  const getEntitlementTitle = (type?: string) => {
+    switch (type) {
+      case "offline_qr_generation":
+      case "offline_generation":
+        return "Additional Offline QR Stand";
+      case "pro_monthly":
+      case "pro_subscription":
+        return "Ishyura Online (PRO Monthly)";
+      case "pdf_download":
+      case "pdf_export":
+        return "High-Resolution PDF Card Export";
+      default:
+        return type || "Merchant Entitlement";
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    try {
+      navigator.clipboard?.writeText(text);
+      setCopiedRef(text);
+      setTimeout(() => setCopiedRef(null), 2500);
+    } catch {
+      // ignore
+    }
+  };
+
+  const fetchPaymentRequests = useCallback(async (merchantId?: string) => {
+    const mid = merchantId || currentUser?.id || currentUser?.phone_number;
+    if (!mid) return;
+    setPaymentRequestsLoading(true);
+    try {
+      const data = await IshyuraClient.listPaymentRequests(mid);
+      setPaymentRequests(data);
+    } catch (e) {
+      console.warn("Failed to load payment requests:", e);
+    } finally {
+      setPaymentRequestsLoading(false);
+    }
+  }, [currentUser]);
+
+  const pendingRequests = useMemo(
+    () => paymentRequests.filter((r) => r.status === "pending"),
+    [paymentRequests],
+  );
+
   const [adminStats, setAdminStats] = useState<{ newInquiries: number; pendingOrders: number }>({
     newInquiries: 0,
     pendingOrders: 0,
@@ -347,16 +422,18 @@ function Index() {
     }
   }, [qrHistory]);
 
-  // Fetch merchant entitlements when user logs in or changes
+  // Fetch merchant entitlements and submitted payment requests when user logs in or changes
   useEffect(() => {
     if (currentUser) {
       IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
         .then((res) => setEntitlements(res))
         .catch(() => {});
+      fetchPaymentRequests(currentUser.id || currentUser.phone_number);
     } else {
       setEntitlements(null);
+      setPaymentRequests([]);
     }
-  }, [currentUser]);
+  }, [currentUser, fetchPaymentRequests]);
 
   // Handle post-authentication product routing
   useEffect(() => {
@@ -795,14 +872,26 @@ function Index() {
         if (!isPro) {
           setConfirmedData(null);
           setPaymentRequestType("pro_monthly");
-          setLockedNotice(
-            "Ishyura Online smart stands require an active PRO subscription (5,000 RWF / month).",
+          const pendingPro = pendingRequests.find(
+            (r) =>
+              r.requested_entitlement === "pro_monthly" ||
+              r.requested_entitlement === "pro_subscription",
           );
-          setPaymentRequestDialogOpen(true);
+          if (pendingPro) {
+            setLockedNotice(
+              `Your PRO subscription payment submission (Ref: ${pendingPro.reference_code}) is currently awaiting administrator review. Once approved, you can generate dynamic smart stands immediately.`,
+            );
+          } else {
+            setLockedNotice(
+              "Ishyura Online smart stands require an active PRO subscription (5,000 RWF / month).",
+            );
+            setPaymentRequestDialogOpen(true);
+          }
           return;
         }
       } else {
         const existingOfflineCount = qrHistory.filter((q) => !q.is_dynamic).length;
+        const grantedOffline = entitlements?.offline_generations?.granted ?? 1;
         const availableOffline =
           entitlements?.offline_generations?.available !== undefined
             ? entitlements.offline_generations.available
@@ -810,13 +899,24 @@ function Index() {
               ? 0
               : 1;
 
-        if (availableOffline <= 0) {
+        if (availableOffline <= 0 || (existingOfflineCount >= 1 && grantedOffline <= existingOfflineCount)) {
           setConfirmedData(null);
           setPaymentRequestType("offline_qr_generation");
-          setLockedNotice(
-            "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+          const pendingOffline = pendingRequests.find(
+            (r) =>
+              r.requested_entitlement === "offline_qr_generation" ||
+              r.requested_entitlement === "offline_generation",
           );
-          setPaymentRequestDialogOpen(true);
+          if (pendingOffline) {
+            setLockedNotice(
+              `Your payment submission (Ref: ${pendingOffline.reference_code}) for additional offline QR generation is currently awaiting administrator review. Once approved, you can generate your next card immediately.`,
+            );
+          } else {
+            setLockedNotice(
+              "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+            );
+            setPaymentRequestDialogOpen(true);
+          }
           return;
         }
       }
@@ -1478,8 +1578,9 @@ function Index() {
         : 1;
 
   const hasStoredSession =
-    typeof window !== "undefined" &&
-    Boolean(IshyuraClient.getToken() || IshyuraClient.getSavedUser());
+    hasServerSession ||
+    (typeof window !== "undefined" &&
+      Boolean(IshyuraClient.getToken() || IshyuraClient.getSavedUser()));
   const isAuthLoading = !isAuthHydrated && hasStoredSession;
 
   return (
@@ -1893,6 +1994,7 @@ function Index() {
             IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
               .then(setEntitlements)
               .catch(() => {});
+            fetchPaymentRequests(currentUser.id || currentUser.phone_number);
           }
         }}
       />
@@ -2337,6 +2439,196 @@ function Index() {
             </Button>
           </div>
 
+          {/* Sub-Tabs: Saved Cards vs Payment Requests & Status */}
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/60 pb-3">
+            <button
+              type="button"
+              onClick={() => setRecordsSubTab("cards")}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                recordsSubTab === "cards"
+                  ? "bg-primary text-primary-foreground shadow-xs"
+                  : "bg-muted/60 text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <QrCode className="size-3.5" />
+              <span>Saved QR Tent Cards</span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                recordsSubTab === "cards" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+              }`}>
+                {qrHistory.length}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setRecordsSubTab("payments")}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                recordsSubTab === "payments"
+                  ? "bg-primary text-primary-foreground shadow-xs"
+                  : "bg-muted/60 text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Clock className="size-3.5" />
+              <span>Payment Submissions &amp; Status</span>
+              {pendingRequests.length > 0 ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-black bg-amber-500 text-white animate-pulse">
+                  {pendingRequests.length} Pending
+                </span>
+              ) : (
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  recordsSubTab === "payments" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                }`}>
+                  {paymentRequests.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {recordsSubTab === "payments" ? (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl border border-border/80 bg-card/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                <div>
+                  <h3 className="text-xs font-bold text-foreground">Submitted Payment Verification</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    View the review status of payments submitted for extra offline generations or PRO features.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={paymentRequestsLoading}
+                  onClick={() => {
+                    if (currentUser) {
+                      fetchPaymentRequests(currentUser.id || currentUser.phone_number);
+                      IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number).then(setEntitlements);
+                    }
+                  }}
+                  className="w-full sm:w-auto h-8 text-xs font-semibold rounded-xl border-border/80 hover:bg-muted"
+                >
+                  <RotateCw className={`size-3.5 mr-1.5 ${paymentRequestsLoading ? "animate-spin" : ""}`} />
+                  <span>Refresh Status</span>
+                </Button>
+              </div>
+
+              {paymentRequestsLoading ? (
+                <div className="space-y-3">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="p-5 rounded-2xl border border-border/60 bg-card/40 space-y-3 animate-pulse">
+                      <div className="h-4 w-48 bg-muted rounded" />
+                      <div className="h-6 w-32 bg-muted rounded-full" />
+                    </div>
+                  ))}
+                </div>
+              ) : paymentRequests.length === 0 ? (
+                <div className="p-12 rounded-3xl border border-dashed border-border/80 text-center bg-card/30 space-y-3">
+                  <Clock className="size-10 text-muted-foreground/40 mx-auto" />
+                  <p className="text-sm font-bold text-foreground">No payment submissions yet</p>
+                  <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
+                    When you top up for additional offline generations or PRO subscriptions, your reference numbers and administrator approval status will show here.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={() => setActiveTab("generator")}
+                    className="text-xs font-bold rounded-xl mt-2"
+                  >
+                    Go to Generator
+                  </Button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3.5">
+                  {paymentRequests.map((req) => (
+                    <div
+                      key={req.id}
+                      className="p-5 rounded-2xl border border-border/80 bg-card/80 space-y-3.5 shadow-xs hover:border-border transition-all"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2">
+                          <code className="text-sm font-black text-foreground bg-muted/60 px-2 py-0.5 rounded-lg border border-border/60 font-mono tracking-wide">
+                            {req.reference_code}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(req.reference_code)}
+                            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md"
+                            title="Copy reference code"
+                          >
+                            {copiedRef === req.reference_code ? (
+                              <Check className="size-3.5 text-emerald-500" />
+                            ) : (
+                              <Copy className="size-3.5" />
+                            )}
+                          </button>
+                        </div>
+
+                        {req.status === "pending" ? (
+                          <Badge className="w-fit text-[11px] font-bold border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/15 gap-1.5 py-1 px-3">
+                            <span className="size-2 rounded-full bg-amber-500 animate-ping" />
+                            <span>Pending Admin Approval</span>
+                          </Badge>
+                        ) : req.status === "approved" ? (
+                          <Badge className="w-fit text-[11px] font-bold border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/15 gap-1.5 py-1 px-3">
+                            <CheckCircle2 className="size-3 text-emerald-600 dark:text-emerald-400" />
+                            <span>Approved &amp; Granted</span>
+                          </Badge>
+                        ) : (
+                          <Badge className="w-fit text-[11px] font-bold border-rose-500/40 text-rose-700 dark:text-rose-300 bg-rose-500/15 gap-1.5 py-1 px-3">
+                            <AlertCircle className="size-3 text-rose-600 dark:text-rose-400" />
+                            <span>Payment Declined</span>
+                          </Badge>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1 border-t border-border/50">
+                        <div>
+                          <p className="text-[11px] text-muted-foreground">Product / Item:</p>
+                          <p className="font-bold text-foreground mt-0.5">
+                            {getEntitlementTitle(req.requested_entitlement)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] text-muted-foreground">Amount Submitted:</p>
+                          <p className="font-bold text-foreground mt-0.5">
+                            {req.amount.toLocaleString()} {req.currency || "RWF"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] text-muted-foreground">Submission Date:</p>
+                          <p className="font-medium text-foreground mt-0.5">
+                            {new Date(req.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+
+                      {req.evidence_notes && (
+                        <div className="p-3 rounded-xl bg-muted/40 border border-border/40 text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground mr-1.5">Submitted Notes / Transaction ID:</span>
+                          <span>{req.evidence_notes}</span>
+                        </div>
+                      )}
+
+                      {req.status === "rejected" && req.rejection_reason && (
+                        <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-800 dark:text-rose-200">
+                          <span className="font-bold mr-1.5">Administrator Note:</span>
+                          <span>{req.rejection_reason}</span>
+                        </div>
+                      )}
+
+                      {req.status === "approved" && (
+                        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-800 dark:text-emerald-200 flex items-center justify-between">
+                          <span>Verified by administrator. Your entitlement has been granted.</span>
+                          {req.reviewed_at && (
+                            <span className="text-[11px] opacity-80">
+                              Approved on {new Date(req.reviewed_at).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
           {/* Toast Message for Customer Actions */}
           {customerToastMsg && (
             <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in-50">
@@ -2610,7 +2902,9 @@ function Index() {
               ))}
             </div>
           )}
-        </div>
+        </>
+      )}
+    </div>
       ) : activeTab === "store" ? (
         <div className="mx-auto max-w-4xl px-4 pt-6 pb-20 sm:px-6 space-y-6">
           <div className="border-b border-border/60 pb-5">
@@ -2856,6 +3150,39 @@ function Index() {
                   card.
                 </p>
               </div>
+
+              {/* Informational Banner when merchant has a payment pending admin review */}
+              {pendingRequests.length > 0 && (
+                <div className="mt-4 p-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in-50">
+                  <div className="flex items-start gap-3">
+                    <Clock className="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 animate-pulse" />
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-foreground">
+                          Payment Submission Pending Review
+                        </span>
+                        <code className="text-[11px] font-mono font-bold bg-background/80 px-2 py-0.5 rounded border border-border/60">
+                          {pendingRequests[0].reference_code}
+                        </code>
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Submitted for {getEntitlementTitle(pendingRequests[0].requested_entitlement)} ({pendingRequests[0].amount.toLocaleString()} {pendingRequests[0].currency}). Administrator approval is in progress.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setRecordsSubTab("payments");
+                      setActiveTab("records");
+                    }}
+                    className="shrink-0 text-xs font-bold rounded-xl h-8 border-border/80"
+                  >
+                    View Status
+                  </Button>
+                </div>
+              )}
 
               {/* Form & Verification Block */}
               <form
@@ -3856,22 +4183,73 @@ function Index() {
                 </div>
               ) : lockedNotice ? (
                 <div className="flex w-full max-w-sm flex-col items-center justify-center rounded-2xl border-2 border-dashed border-amber-500/40 bg-amber-500/5 px-6 py-10 text-center space-y-4">
-                  <div className="flex size-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 border border-amber-500/20">
-                    <Lock className="size-7" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <h3 className="text-base font-bold text-foreground">Entitlement Required</h3>
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      {lockedNotice}
-                    </p>
-                  </div>
-                  <Button
-                    onClick={() => setPaymentRequestDialogOpen(true)}
-                    className="w-full text-xs font-bold gap-1.5 shadow-sm"
-                  >
-                    <span>Request Unlock &amp; Submit Payment</span>
-                    <ArrowRight className="size-3.5" />
-                  </Button>
+                  {pendingRequests.length > 0 ? (
+                    <>
+                      <div className="flex size-14 items-center justify-center rounded-2xl bg-amber-500/15 text-amber-600 border border-amber-500/30">
+                        <Clock className="size-7 animate-pulse text-amber-600" />
+                      </div>
+                      <div className="space-y-2">
+                        <Badge className="text-[11px] font-bold border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/15 gap-1.5 py-1 px-3">
+                          <span className="size-2 rounded-full bg-amber-500 animate-ping" />
+                          <span>Payment Pending Review</span>
+                        </Badge>
+                        <h3 className="text-base font-bold text-foreground">Verification in Progress</h3>
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          Your payment submission with reference{" "}
+                          <strong className="font-mono text-foreground">{pendingRequests[0].reference_code}</strong>{" "}
+                          is currently awaiting administrator verification. Once verified, this feature unlocks automatically.
+                        </p>
+                      </div>
+                      <div className="w-full space-y-2 pt-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setRecordsSubTab("payments");
+                            setActiveTab("records");
+                          }}
+                          className="w-full text-xs font-bold gap-1.5 rounded-xl border-border/80"
+                        >
+                          <History className="size-3.5" />
+                          <span>View Status in Payment Records</span>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={paymentRequestsLoading}
+                          onClick={() => {
+                            if (currentUser) {
+                              fetchPaymentRequests(currentUser.id || currentUser.phone_number);
+                              IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number).then(setEntitlements);
+                            }
+                          }}
+                          className="w-full text-xs font-semibold gap-1 text-muted-foreground hover:text-foreground"
+                        >
+                          <RotateCw className={`size-3 ${paymentRequestsLoading ? "animate-spin" : ""}`} />
+                          <span>Refresh Approval Status</span>
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex size-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                        <Lock className="size-7" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <h3 className="text-base font-bold text-foreground">Entitlement Required</h3>
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          {lockedNotice}
+                        </p>
+                      </div>
+                      <Button
+                        onClick={() => setPaymentRequestDialogOpen(true)}
+                        className="w-full text-xs font-bold gap-1.5 shadow-sm rounded-xl"
+                      >
+                        <span>Request Unlock &amp; Submit Payment</span>
+                        <ArrowRight className="size-3.5" />
+                      </Button>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="flex w-full max-w-sm flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border/80 bg-card/20 px-6 py-14 text-center">
