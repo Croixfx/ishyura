@@ -1,12 +1,26 @@
 import { useEffect, useState } from "react";
 
-interface BeforeInstallPromptEvent extends Event {
+export interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 }
 
+// Global capture for beforeinstallprompt in case it fires before React mount
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e: Event) => {
+    e.preventDefault();
+    (window as unknown as { __pwaPrompt?: BeforeInstallPromptEvent }).__pwaPrompt =
+      e as BeforeInstallPromptEvent;
+  });
+}
+
 export function usePWAInstall() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(() => {
+    if (typeof window !== "undefined") {
+      return (window as unknown as { __pwaPrompt?: BeforeInstallPromptEvent }).__pwaPrompt || null;
+    }
+    return null;
+  });
   const [isInstalled, setIsInstalled] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
 
@@ -27,12 +41,17 @@ export function usePWAInstall() {
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
+      const p = e as BeforeInstallPromptEvent;
+      (window as unknown as { __pwaPrompt?: BeforeInstallPromptEvent }).__pwaPrompt = p;
+      setDeferredPrompt(p);
     };
 
     const handleAppInstalled = () => {
       setIsInstalled(true);
       setDeferredPrompt(null);
+      if (typeof window !== "undefined") {
+        delete (window as unknown as { __pwaPrompt?: unknown }).__pwaPrompt;
+      }
     };
 
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
@@ -45,19 +64,37 @@ export function usePWAInstall() {
   }, []);
 
   const install = async () => {
-    if (!deferredPrompt) return false;
-    await deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === "accepted") {
-      setIsInstalled(true);
-      setDeferredPrompt(null);
-      return true;
+    const promptToUse =
+      deferredPrompt ||
+      (typeof window !== "undefined"
+        ? (window as unknown as { __pwaPrompt?: BeforeInstallPromptEvent }).__pwaPrompt
+        : null);
+
+    if (!promptToUse) return false;
+
+    try {
+      await promptToUse.prompt();
+      const { outcome } = await promptToUse.userChoice;
+      if (outcome === "accepted") {
+        setIsInstalled(true);
+        setDeferredPrompt(null);
+        if (typeof window !== "undefined") {
+          delete (window as unknown as { __pwaPrompt?: unknown }).__pwaPrompt;
+        }
+        return true;
+      }
+    } catch (err) {
+      console.warn("PWA prompt error:", err);
     }
     return false;
   };
 
   return {
-    isInstallable: !!deferredPrompt,
+    isInstallable: !!(
+      deferredPrompt ||
+      (typeof window !== "undefined" &&
+        (window as unknown as { __pwaPrompt?: BeforeInstallPromptEvent }).__pwaPrompt)
+    ),
     isInstalled,
     isIOS,
     install,

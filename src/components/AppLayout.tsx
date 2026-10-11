@@ -56,19 +56,54 @@ export function AppLayout({
 
           {/* Desktop Navigation Links */}
           <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-muted-foreground">
-            <a href="#products" className="hover:text-foreground transition-colors">
+            <a
+              href="#products"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               Products
             </a>
-            <a href="#how-it-works" className="hover:text-foreground transition-colors">
+            <a
+              href="#how-it-works"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               How It Works
             </a>
-            <a href="#hardware-section" className="hover:text-foreground transition-colors">
+            <a
+              href="#hardware-section"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               Stands &amp; Hardware
             </a>
-            <a href="#pricing" className="hover:text-foreground transition-colors">
+            <a
+              href="#pricing"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               Pricing
             </a>
-            <a href="#faq" className="hover:text-foreground transition-colors">
+            <a
+              href="#faq"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("faq")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               FAQ
             </a>
           </nav>

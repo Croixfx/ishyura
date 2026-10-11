@@ -2242,6 +2242,7 @@ function Index() {
             setAuthDialogOpen(true);
           }}
           onOpenStore={() => setActiveTab("store")}
+          onOpenInquiry={() => setInquiryDialogOpen(true)}
         />
       ) : isAdmin &&
       (activeTab === "inquiries" ||

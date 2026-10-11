@@ -68,6 +68,10 @@ export function PublicLandingView({
                 </Button>
                 <a
                   href="#hardware-section"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" });
+                  }}
                   className="w-full sm:w-auto inline-flex items-center justify-center h-12 px-6 rounded-xl font-semibold text-sm border border-border/80 bg-card hover:bg-muted/60 transition-colors"
                 >
                   <Store className="size-4 mr-2 text-muted-foreground" />
@@ -781,19 +785,54 @@ export function PublicLandingView({
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-6 font-medium">
-            <a href="#products" className="hover:text-foreground transition-colors">
+            <a
+              href="#products"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               Products
             </a>
-            <a href="#how-it-works" className="hover:text-foreground transition-colors">
+            <a
+              href="#how-it-works"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               How It Works
             </a>
-            <a href="#hardware-section" className="hover:text-foreground transition-colors">
+            <a
+              href="#hardware-section"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               Hardware
             </a>
-            <a href="#pricing" className="hover:text-foreground transition-colors">
+            <a
+              href="#pricing"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               Pricing
             </a>
-            <a href="#faq" className="hover:text-foreground transition-colors">
+            <a
+              href="#faq"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById("faq")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="hover:text-foreground transition-colors"
+            >
               FAQ
             </a>
             {onOpenInquiry && (
