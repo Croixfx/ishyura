@@ -31,10 +31,10 @@ export function AppLayout({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [inquiryOpen, setInquiryOpen] = useState(false);
 
-  // 1. UNLOGGED VISITOR: Natural document layout with clean top header & navigation
+  // 1. UNLOGGED VISITOR: Flawlessly scrollable layout with fixed header & dedicated scroll viewport
   if (!currentUser) {
     return (
-      <div className="min-h-screen w-full bg-background text-foreground flex flex-col">
+      <div className="fixed inset-0 w-full h-full bg-background text-foreground flex flex-col overflow-hidden">
         {/* Public Top Header */}
         <header className="sticky top-0 z-40 border-b border-border/60 bg-background/90 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
           <Link to="/" className="flex items-center gap-3">
@@ -94,8 +94,10 @@ export function AppLayout({
           </div>
         </header>
 
-        {/* Welcome Page Content with native window scroll */}
-        <main className="flex-1 w-full">{children}</main>
+        {/* Dedicated scroll viewport ensuring smooth full-page scrolling without clipping or double scroll */}
+        <main className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-y-contain scroll-smooth">
+          {children}
+        </main>
 
         <InquiryDialog open={inquiryOpen} onOpenChange={setInquiryOpen} defaultPhone={undefined} />
       </div>

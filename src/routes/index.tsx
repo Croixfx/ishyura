@@ -2259,7 +2259,7 @@ function Index() {
           />
         </div>
       ) : currentUser && activeTab === "records" ? (
-        <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 space-y-6">
+        <div className="mx-auto max-w-4xl px-4 pt-6 pb-20 sm:px-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/60 pb-5">
             <div>
               <h1 className="text-xl font-black tracking-tight text-foreground sm:text-2xl">
@@ -2526,7 +2526,7 @@ function Index() {
           )}
         </div>
       ) : activeTab === "store" ? (
-        <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 space-y-6">
+        <div className="mx-auto max-w-4xl px-4 pt-6 pb-20 sm:px-6 space-y-6">
           <div className="border-b border-border/60 pb-5">
             <h1 className="text-xl font-black tracking-tight text-foreground sm:text-2xl">
               Stands, Stickers &amp; Counter Hardware
@@ -2677,7 +2677,7 @@ function Index() {
           }}
         />
       ) : (
-        <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-4 pb-8 pt-6 sm:px-6 lg:px-8">
+        <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-4 pt-6 pb-20 sm:px-6 lg:px-8">
           {/* Top Bar for Selected Product Mode */}
           <div className="mb-6 p-4 rounded-2xl border border-border/80 bg-card/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
             <div className="flex items-center gap-3">

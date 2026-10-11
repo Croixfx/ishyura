@@ -763,7 +763,7 @@ export function PublicLandingView({
       </section>
 
       {/* 8. Polished Footer */}
-      <footer className="border-t border-border/60 bg-muted/20 py-12 px-4 sm:px-6 lg:px-8 text-xs text-muted-foreground">
+      <footer className="border-t border-border/60 bg-muted/20 pt-12 pb-20 sm:pb-14 px-4 sm:px-6 lg:px-8 text-xs text-muted-foreground">
         <div className="mx-auto max-w-5xl flex flex-col sm:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-3">
             <div className="size-8 rounded-xl bg-foreground text-background flex items-center justify-center font-black text-xs">

@@ -27,7 +27,7 @@ export function ProductSelector({
   const isPro = Boolean(entitlements?.is_pro);
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-10 sm:py-16 sm:px-6 space-y-10">
+    <div className="mx-auto max-w-4xl px-4 pt-8 sm:pt-14 pb-20 sm:px-6 space-y-10">
       {/* Header */}
       <div className="text-center space-y-3 max-w-2xl mx-auto">
         <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">

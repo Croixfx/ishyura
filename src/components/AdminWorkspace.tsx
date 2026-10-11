@@ -624,7 +624,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
   const tabInfo = getTabInfo();
 
   return (
-    <div className="w-full flex-1 flex flex-col space-y-4">
+    <div className="w-full flex-1 flex flex-col space-y-4 pb-20">
       {/* 1. Sleek, space-saving Header: No huge KPI blocks consuming vertical space */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-border/50 pb-3">
         <div className="flex items-center gap-3">
