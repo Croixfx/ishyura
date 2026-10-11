@@ -74,3 +74,69 @@ export interface StandPayloads {
   qrValue: string;
   nfc: NfcPayload;
 }
+
+export type ProductMode = "offline" | "online";
+
+export type EntitlementType =
+  | "offline_generation"
+  | "pdf_download"
+  | "pro_subscription";
+
+export type EntitlementStatus = "active" | "expired" | "revoked";
+
+export type PaymentRequestStatus = "pending" | "approved" | "rejected";
+
+export type PaymentRequestProductType =
+  | "offline_generation"
+  | "pdf_download"
+  | "pro_subscription"
+  | "physical_stand";
+
+export interface MerchantEntitlementRecord {
+  id: string;
+  merchant_id: string;
+  entitlement_type: EntitlementType;
+  granted_count: number;
+  consumed_count: number;
+  status: EntitlementStatus;
+  expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaymentRequestRecord {
+  id: string;
+  request_reference: string;
+  merchant_id: string;
+  merchant_phone: string;
+  product_type: PaymentRequestProductType;
+  amount: number;
+  currency: "RWF";
+  payment_method: string;
+  submitted_reference?: string | null;
+  proof_notes?: string | null;
+  status: PaymentRequestStatus;
+  admin_notes?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EntitlementEventRecord {
+  id: string;
+  merchant_id: string;
+  request_id?: string | null;
+  event_type: string;
+  entitlement_type: string;
+  quantity: number;
+  details?: string | null;
+  created_at: string;
+}
+
+export const MONETIZATION_PRICES = {
+  extra_offline_generation: 2000, // 2,000 RWF per additional direct USSD QR
+  pdf_download: 1000,             // 1,000 RWF per high-res PDF print card export
+  pro_monthly: 5000,              // 5,000 RWF / month for Dynamic PRO Smart Stands & live bills
+} as const;
+

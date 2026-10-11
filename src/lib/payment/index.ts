@@ -1,6 +1,11 @@
 export {
   PAYMENT_INSTRUCTION_VERSION,
+  MONETIZATION_PRICES,
   type DestinationStatus,
+  type EntitlementEventRecord,
+  type EntitlementStatus,
+  type EntitlementType,
+  type MerchantEntitlementRecord,
   type NfcPayload,
   type NfcUriKind,
   type PaymentDestinationRecord,
@@ -8,11 +13,23 @@ export {
   type PaymentMethod,
   type PaymentMode,
   type PaymentProvider,
+  type PaymentRequestProductType,
+  type PaymentRequestRecord,
+  type PaymentRequestStatus,
   type PaymentStandIdentity,
+  type ProductMode,
   type QrEncoding,
   type StandPayloads,
   type StandStatus,
 } from "./types";
+
+export {
+  canDownloadPdf,
+  canGenerateOffline,
+  formatProductTypeLabel,
+  generateRequestReference,
+  isProActive,
+} from "./entitlements";
 
 export {
   UssdGenerator,
@@ -36,3 +53,4 @@ export {
 } from "./identity";
 
 export { buildStandPayloads, type BuildStandPayloadsInput } from "./payload";
+
