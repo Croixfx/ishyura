@@ -219,6 +219,44 @@ export async function ensurePaymentDomainSchema(db: BootstrapDatabase): Promise<
     await db.prepare(stmt).run();
   }
 
+  // Ensure additive column compatibility across migrations
+  const entColumns = await db
+    .prepare("PRAGMA table_info(merchant_entitlements)")
+    .all<{ name: string }>()
+    .catch(() => ({ results: [] as { name: string }[] }));
+  const knownEntColumns = new Set(entColumns.results.map((c) => c.name));
+  const entColumnsToAdd: Record<string, string> = {
+    entitlement_key: "TEXT",
+    valid_until: "TEXT",
+  };
+  for (const [name, definition] of Object.entries(entColumnsToAdd)) {
+    if (!knownEntColumns.has(name)) {
+      await db
+        .prepare(`ALTER TABLE merchant_entitlements ADD COLUMN ${name} ${definition}`)
+        .run()
+        .catch(() => {});
+    }
+  }
+
+  const reqColumns = await db
+    .prepare("PRAGMA table_info(payment_requests)")
+    .all<{ name: string }>()
+    .catch(() => ({ results: [] as { name: string }[] }));
+  const knownReqColumns = new Set(reqColumns.results.map((c) => c.name));
+  const reqColumnsToAdd: Record<string, string> = {
+    reference_code: "TEXT",
+    requested_entitlement: "TEXT",
+    evidence_notes: "TEXT",
+  };
+  for (const [name, definition] of Object.entries(reqColumnsToAdd)) {
+    if (!knownReqColumns.has(name)) {
+      await db
+        .prepare(`ALTER TABLE payment_requests ADD COLUMN ${name} ${definition}`)
+        .run()
+        .catch(() => {});
+    }
+  }
+
   // Safe backfill for existing merchants: grant 1 initial offline generation and 1 initial pdf download
   const backfillGenerations = `INSERT OR IGNORE INTO merchant_entitlements (
       id, merchant_id, entitlement_type, granted_count, consumed_count, status, created_at, updated_at

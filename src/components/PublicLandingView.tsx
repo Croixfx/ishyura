@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MONETIZATION_PRICES } from "@/lib/payment";
+import { ScrollProgressiveSection } from "@/components/ui/ScrollProgressiveSection";
 
 interface PublicLandingViewProps {
   onGetStarted: (targetProduct?: "offline" | "online") => void;
@@ -218,7 +219,7 @@ export function PublicLandingView({
       </section>
 
       {/* 2. Product Offerings: Ishyura Offline vs. Ishyura Online */}
-      <section id="products" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
+      <ScrollProgressiveSection id="products" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
         <div className="mx-auto max-w-5xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -368,10 +369,10 @@ export function PublicLandingView({
             </div>
           </div>
         </div>
-      </section>
+      </ScrollProgressiveSection>
 
       {/* 3. How Payment Initiation Works */}
-      <section id="how-it-works" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60">
+      <ScrollProgressiveSection id="how-it-works" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60">
         <div className="mx-auto max-w-5xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -418,10 +419,10 @@ export function PublicLandingView({
             </div>
           </div>
         </div>
-      </section>
+      </ScrollProgressiveSection>
 
       {/* 4. Physical Stands & Counter Hardware */}
-      <section id="hardware-section" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
+      <ScrollProgressiveSection id="hardware-section" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
         <div className="mx-auto max-w-5xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -512,10 +513,10 @@ export function PublicLandingView({
             </p>
           </div>
         </div>
-      </section>
+      </ScrollProgressiveSection>
 
       {/* 5. Clear, Transparent Pricing */}
-      <section id="pricing" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60">
+      <ScrollProgressiveSection id="pricing" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60">
         <div className="mx-auto max-w-5xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -676,10 +677,10 @@ export function PublicLandingView({
             </div>
           </div>
         </div>
-      </section>
+      </ScrollProgressiveSection>
 
       {/* 6. Frequently Asked Questions (FAQ) */}
-      <section id="faq" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
+      <ScrollProgressiveSection id="faq" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
         <div className="mx-auto max-w-4xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -745,10 +746,10 @@ export function PublicLandingView({
             </div>
           </div>
         </div>
-      </section>
+      </ScrollProgressiveSection>
 
       {/* 7. Bottom Call to Action */}
-      <section className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 text-center space-y-6">
+      <ScrollProgressiveSection className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 text-center space-y-6">
         <div className="max-w-2xl mx-auto space-y-3">
           <h2 className="text-2xl sm:text-4xl font-black text-foreground tracking-tight">
             Ready to Modernize Your Counter?
@@ -767,7 +768,7 @@ export function PublicLandingView({
             <ArrowRight className="size-4" />
           </Button>
         </div>
-      </section>
+      </ScrollProgressiveSection>
 
       {/* 8. Polished Footer */}
       <footer className="border-t border-border/60 bg-muted/20 pt-12 pb-20 sm:pb-14 px-4 sm:px-6 lg:px-8 text-xs text-muted-foreground">

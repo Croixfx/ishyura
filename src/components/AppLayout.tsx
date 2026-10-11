@@ -6,6 +6,7 @@ import { InquiryDialog } from "@/components/InquiryDialog";
 import { PWAInstallButton } from "@/components/PWAInstallButton";
 import { type UserProfile, isAdminUser } from "@/lib/ishyura-client";
 import { Button } from "@/components/ui/button";
+import { AppShellSkeleton } from "@/components/AppShellSkeleton";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -16,6 +17,7 @@ interface AppLayoutProps {
   onSelectTab?: (tab: string) => void;
   inquiryCount?: number;
   orderCount?: number;
+  isAuthLoading?: boolean;
 }
 
 export function AppLayout({
@@ -27,9 +29,15 @@ export function AppLayout({
   onSelectTab,
   inquiryCount = 0,
   orderCount = 0,
+  isAuthLoading = false,
 }: AppLayoutProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [inquiryOpen, setInquiryOpen] = useState(false);
+
+  // 0. AUTH HYDRATION SKELETON: Display clean app shell skeleton during initial load/refresh
+  if (isAuthLoading) {
+    return <AppShellSkeleton />;
+  }
 
   // 1. UNLOGGED VISITOR: Flawlessly scrollable layout with fixed header & dedicated scroll viewport
   if (!currentUser) {

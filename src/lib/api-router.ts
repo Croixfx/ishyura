@@ -1319,14 +1319,17 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         try {
           await ensurePaymentDomainSchema(env.DB);
           const rows = await env.DB.prepare(
-            "SELECT entitlement_key, granted_count, consumed_count, valid_until FROM merchant_entitlements WHERE merchant_id = ?",
+            "SELECT * FROM merchant_entitlements WHERE merchant_id = ? OR merchant_id = ?",
           )
-            .bind(merchantId)
+            .bind(merchantId, merchantId)
             .all<{
-              entitlement_key: string;
+              id: string;
+              entitlement_type?: string;
+              entitlement_key?: string;
               granted_count: number;
               consumed_count: number;
-              valid_until: string | null;
+              expires_at?: string | null;
+              valid_until?: string | null;
             }>();
 
           let offlineGranted = 1;
@@ -1338,40 +1341,32 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
           if (rows.results && rows.results.length > 0) {
             for (const r of rows.results) {
-              if (r.entitlement_key === "offline_qr_generation") {
-                offlineGranted = r.granted_count;
-                offlineConsumed = r.consumed_count;
-              } else if (r.entitlement_key === "pdf_export" || r.entitlement_key === "pdf_download") {
-                pdfGranted = r.granted_count;
-                pdfConsumed = r.consumed_count;
-              } else if (r.entitlement_key === "dynamic_pro_subscription") {
-                if (r.valid_until && new Date(r.valid_until).getTime() > Date.now()) {
+              const typeKey = (r.entitlement_type || r.entitlement_key || "").trim();
+              const expiry = r.expires_at || r.valid_until;
+              if (typeKey === "offline_qr_generation" || typeKey === "offline_generation") {
+                offlineGranted = Math.max(offlineGranted, r.granted_count);
+                offlineConsumed = Math.max(offlineConsumed, r.consumed_count);
+              } else if (typeKey === "pdf_export" || typeKey === "pdf_download") {
+                pdfGranted = Math.max(pdfGranted, r.granted_count);
+                pdfConsumed = Math.max(pdfConsumed, r.consumed_count);
+              } else if (typeKey === "dynamic_pro_subscription" || typeKey === "pro_subscription") {
+                if (expiry && new Date(expiry).getTime() > Date.now()) {
                   isPro = true;
-                  proExpiresAt = r.valid_until;
+                  proExpiresAt = expiry;
                 }
               }
             }
-          } else {
-            // Check if existing merchant has past QR records to preserve
-            const pastCountRow = await env.DB.prepare(
-              "SELECT count(*) as count FROM qr_codes WHERE owner_id = ? OR phone_number = ?",
-            )
-              .bind(merchantId, merchantId)
-              .first<{ count: number }>();
-            const pastCount = pastCountRow?.count || 0;
-            if (pastCount > 0) {
-              offlineGranted = Math.max(1, pastCount);
-              offlineConsumed = pastCount;
-              pdfGranted = Math.max(1, pastCount);
-              pdfConsumed = pastCount;
-            }
+          }
 
-            // Insert initial record for this merchant
-            await env.DB.prepare(
-              "INSERT OR IGNORE INTO merchant_entitlements (merchant_id, entitlement_key, granted_count, consumed_count) VALUES (?, 'offline_qr_generation', ?, ?), (?, 'pdf_export', ?, ?)",
-            )
-              .bind(merchantId, offlineGranted, offlineConsumed, merchantId, pdfGranted, pdfConsumed)
-              .run();
+          // Count actual existing offline QR codes in D1 to prevent any discrepancy
+          const pastCountRow = await env.DB.prepare(
+            "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
+          )
+            .bind(merchantId, merchantId)
+            .first<{ count: number }>();
+          const actualOfflineCount = pastCountRow?.count || 0;
+          if (actualOfflineCount > offlineConsumed) {
+            offlineConsumed = actualOfflineCount;
           }
 
           return jsonResponse({
@@ -1636,7 +1631,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             "SELECT * FROM payment_requests WHERE id = ? LIMIT 1",
           )
             .bind(requestId)
-            .first<MemPaymentRequest>();
+            .first<MemPaymentRequest & { product_type?: string }>();
 
           if (!existing) {
             return jsonResponse({ detail: "Payment request not found." }, 404);
@@ -1656,49 +1651,88 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
             // Grant entitlement
             const mid = existing.merchant_id;
-            const entKey =
-              existing.requested_entitlement === "pro_monthly"
-                ? "dynamic_pro_subscription"
-                : existing.requested_entitlement === "pdf_download"
-                  ? "pdf_export"
-                  : "offline_qr_generation";
+            const rawReqType =
+              existing.requested_entitlement || existing.product_type || "";
+            const isProReq =
+              rawReqType === "pro_monthly" ||
+              rawReqType === "pro_subscription" ||
+              rawReqType === "dynamic_pro_subscription";
+            const isPdfReq =
+              rawReqType === "pdf_download" || rawReqType === "pdf_export";
 
-            if (entKey === "dynamic_pro_subscription") {
-              await env.DB.prepare(
-                "INSERT INTO merchant_entitlements (merchant_id, entitlement_key, granted_count, consumed_count, valid_until) " +
-                  "VALUES (?, 'dynamic_pro_subscription', 1, 0, datetime('now', '+30 days')) " +
-                  "ON CONFLICT(merchant_id, entitlement_key) DO UPDATE SET " +
-                  "valid_until = datetime(CASE WHEN valid_until IS NOT NULL AND valid_until > datetime('now') THEN valid_until ELSE datetime('now') END, '+30 days'), updated_at = datetime('now')",
+            if (isProReq) {
+              const existingRow = await env.DB.prepare(
+                "SELECT id, expires_at, valid_until FROM merchant_entitlements WHERE merchant_id = ? AND (entitlement_type = 'pro_subscription' OR entitlement_key = 'dynamic_pro_subscription') LIMIT 1",
               )
                 .bind(mid)
-                .run();
+                .first<{ id: string; expires_at?: string; valid_until?: string }>();
+
+              const currentExp = existingRow?.expires_at || existingRow?.valid_until;
+              const baseDate =
+                currentExp && new Date(currentExp).getTime() > Date.now()
+                  ? new Date(currentExp)
+                  : new Date();
+              baseDate.setDate(baseDate.getDate() + 30);
+              const newExpiresAt = baseDate.toISOString();
+
+              if (existingRow) {
+                await env.DB.prepare(
+                  "UPDATE merchant_entitlements SET expires_at = ?, valid_until = ?, status = 'active', updated_at = ? WHERE id = ?",
+                )
+                  .bind(newExpiresAt, newExpiresAt, now, existingRow.id)
+                  .run();
+              } else {
+                const newEntId = `ent_${crypto.randomUUID()}`;
+                await env.DB.prepare(
+                  "INSERT INTO merchant_entitlements (id, merchant_id, entitlement_type, entitlement_key, granted_count, consumed_count, status, expires_at, valid_until, created_at, updated_at) " +
+                    "VALUES (?, ?, 'pro_subscription', 'dynamic_pro_subscription', 1, 0, 'active', ?, ?, ?, ?)",
+                )
+                  .bind(newEntId, mid, newExpiresAt, newExpiresAt, now, now)
+                  .run();
+              }
             } else {
-              await env.DB.prepare(
-                "INSERT INTO merchant_entitlements (merchant_id, entitlement_key, granted_count, consumed_count) " +
-                  "VALUES (?, ?, 2, 0) " +
-                  "ON CONFLICT(merchant_id, entitlement_key) DO UPDATE SET " +
-                  "granted_count = granted_count + 1, updated_at = datetime('now')",
+              const entType = isPdfReq ? "pdf_download" : "offline_generation";
+              const entKey = isPdfReq ? "pdf_export" : "offline_qr_generation";
+              const existingRow = await env.DB.prepare(
+                "SELECT id, granted_count, consumed_count FROM merchant_entitlements WHERE merchant_id = ? AND (entitlement_type = ? OR entitlement_key = ?) LIMIT 1",
               )
-                .bind(mid, entKey)
-                .run();
+                .bind(mid, entType, entKey)
+                .first<{ id: string; granted_count?: number; consumed_count?: number }>();
+
+              if (existingRow) {
+                await env.DB.prepare(
+                  "UPDATE merchant_entitlements SET granted_count = granted_count + 1, status = 'active', updated_at = ? WHERE id = ?",
+                )
+                  .bind(now, existingRow.id)
+                  .run();
+              } else {
+                const newEntId = `ent_${crypto.randomUUID()}`;
+                await env.DB.prepare(
+                  "INSERT INTO merchant_entitlements (id, merchant_id, entitlement_type, entitlement_key, granted_count, consumed_count, status, created_at, updated_at) " +
+                    "VALUES (?, ?, ?, ?, 2, 1, 'active', ?, ?)",
+                )
+                  .bind(newEntId, mid, entType, entKey, now, now)
+                  .run();
+              }
             }
 
             // Log event
             const eventId = `ev_${crypto.randomUUID()}`;
             await env.DB.prepare(
-              "INSERT INTO entitlement_events (id, merchant_id, entitlement_key, event_type, delta, current_balance, metadata) " +
-                "VALUES (?, ?, ?, 'granted', 1, 1, ?)",
+              "INSERT INTO entitlement_events (id, merchant_id, entitlement_type, event_type, quantity, details) " +
+                "VALUES (?, ?, ?, 'admin_approved_grant', 1, ?)",
             )
               .bind(
                 eventId,
                 mid,
-                entKey,
+                isProReq ? "pro_subscription" : isPdfReq ? "pdf_download" : "offline_generation",
                 JSON.stringify({
                   payment_request_id: requestId,
                   reference_code: existing.reference_code,
                 }),
               )
-              .run();
+              .run()
+              .catch(() => {});
 
             return jsonResponse({
               success: true,
@@ -1706,17 +1740,25 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             });
           } else {
             // Reject
-            await env.DB.prepare(
-              "UPDATE payment_requests SET status = 'rejected', rejection_reason = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
-            )
-              .bind(
-                rejectionReason || "Payment evidence could not be verified",
-                reviewer,
-                now,
-                now,
-                requestId,
+            try {
+              await env.DB.prepare(
+                "UPDATE payment_requests SET status = 'rejected', admin_notes = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
               )
-              .run();
+                .bind(
+                  rejectionReason || "Payment evidence could not be verified",
+                  reviewer,
+                  now,
+                  now,
+                  requestId,
+                )
+                .run();
+            } catch {
+              await env.DB.prepare(
+                "UPDATE payment_requests SET status = 'rejected', reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+              )
+                .bind(reviewer, now, now, requestId)
+                .run();
+            }
 
             return jsonResponse({ success: true, message: `Payment request rejected.` });
           }
@@ -2027,12 +2069,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           if (!isAdmin) {
             if (isDynamic) {
               const proRow = await env.DB.prepare(
-                "SELECT valid_until FROM merchant_entitlements WHERE merchant_id = ? AND entitlement_key = 'dynamic_pro_subscription' LIMIT 1",
+                "SELECT expires_at, valid_until FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'pro_subscription' OR entitlement_key = 'dynamic_pro_subscription') LIMIT 1",
               )
-                .bind(ownerId)
-                .first<{ valid_until: string | null }>();
+                .bind(ownerId, phone)
+                .first<{ expires_at?: string | null; valid_until?: string | null }>();
+              const expiry = proRow?.expires_at || proRow?.valid_until;
               const proActive = Boolean(
-                proRow?.valid_until && new Date(proRow.valid_until).getTime() > Date.now(),
+                expiry && new Date(expiry).getTime() > Date.now(),
               );
               if (!proActive) {
                 return jsonResponse(
@@ -2049,15 +2092,25 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 );
               }
             } else {
-              const entRow = await env.DB.prepare(
-                "SELECT granted_count, consumed_count FROM merchant_entitlements WHERE merchant_id = ? AND entitlement_key = 'offline_qr_generation' LIMIT 1",
+              // 1. Count actual existing offline QR codes for this merchant
+              const existingCountRow = await env.DB.prepare(
+                "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR phone_number = ? OR owner_id = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
               )
-                .bind(ownerId)
-                .first<{ granted_count: number; consumed_count: number }>();
+                .bind(ownerId, phone, phone)
+                .first<{ count: number }>();
+              const existingOfflineCount = existingCountRow?.count || 0;
 
-              const granted = entRow?.granted_count ?? 1;
-              const consumed = entRow?.consumed_count ?? 0;
-              if (granted - consumed <= 0) {
+              // 2. Query merchant entitlements
+              const entRow = await env.DB.prepare(
+                "SELECT granted_count, consumed_count FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') LIMIT 1",
+              )
+                .bind(ownerId, phone)
+                .first<{ granted_count?: number; consumed_count?: number }>();
+
+              // Free included offline generation is 1. Admin approved payment increases granted_count.
+              const granted = Math.max(1, entRow?.granted_count ?? 1);
+
+              if (existingOfflineCount >= granted) {
                 return jsonResponse(
                   {
                     error: "ENTITLEMENT_REQUIRED",
@@ -2066,7 +2119,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                     currency: "RWF",
                     entitlement_key: "offline_qr_generation",
                     detail:
-                      "You have used your included offline QR generation. An additional generation entitlement is required.",
+                      "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
                   },
                   402,
                 );
@@ -2129,20 +2182,34 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           // Record consumption for offline generations
           if (!isAdmin && !isDynamic) {
             try {
-              await env.DB.prepare(
-                "INSERT INTO merchant_entitlements (merchant_id, entitlement_key, granted_count, consumed_count) VALUES (?, 'offline_qr_generation', 1, 1) " +
-                  "ON CONFLICT(merchant_id, entitlement_key) DO UPDATE SET consumed_count = consumed_count + 1, updated_at = datetime('now')",
+              const existingEnt = await env.DB.prepare(
+                "SELECT id, consumed_count FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') LIMIT 1",
               )
-                .bind(ownerId)
-                .run();
+                .bind(ownerId, phone)
+                .first<{ id: string; consumed_count?: number }>();
+
+              if (existingEnt) {
+                await env.DB.prepare(
+                  "UPDATE merchant_entitlements SET consumed_count = consumed_count + 1, updated_at = datetime('now') WHERE id = ?",
+                )
+                  .bind(existingEnt.id)
+                  .run();
+              } else {
+                const newEntId = `ent_${crypto.randomUUID()}`;
+                await env.DB.prepare(
+                  "INSERT INTO merchant_entitlements (id, merchant_id, entitlement_type, entitlement_key, granted_count, consumed_count, status, created_at, updated_at) VALUES (?, ?, 'offline_generation', 'offline_qr_generation', 1, 1, 'active', datetime('now'), datetime('now'))",
+                )
+                  .bind(newEntId, ownerId)
+                  .run();
+              }
 
               const eventId = `ev_${crypto.randomUUID()}`;
               await env.DB.prepare(
-                "INSERT INTO entitlement_events (id, merchant_id, entitlement_key, event_type, delta, current_balance, metadata) " +
-                  "VALUES (?, ?, 'offline_qr_generation', 'consumed', 1, 0, ?)",
+                "INSERT INTO entitlement_events (id, merchant_id, entitlement_type, event_type, quantity, details) VALUES (?, ?, 'offline_generation', 'consume_generation', 1, ?)",
               )
                 .bind(eventId, ownerId, JSON.stringify({ stand_id: id, dial_code: dialCode }))
-                .run();
+                .run()
+                .catch(() => {});
             } catch (entErr) {
               console.warn("D1 entitlement update error:", entErr);
             }
@@ -2252,8 +2319,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               );
             }
           } else {
-            const off = mEnts.get("offline_qr_generation")!;
-            if (off.granted_count - off.consumed_count <= 0) {
+            const existingMemCount = memQrCodes.filter(
+              (q) => (q.owner_id === ownerId || q.phone_number === phone) && !q.is_dynamic,
+            ).length;
+            const off = mEnts.get("offline_qr_generation") || { granted_count: 1, consumed_count: 0 };
+            const granted = Math.max(1, off.granted_count);
+            if (existingMemCount >= granted) {
               return jsonResponse(
                 {
                   error: "ENTITLEMENT_REQUIRED",
@@ -2262,12 +2333,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                   currency: "RWF",
                   entitlement_key: "offline_qr_generation",
                   detail:
-                    "You have used your included offline QR generation. An additional generation entitlement is required.",
+                    "You have used your included free offline QR generation. An additional generation entitlement is required.",
                 },
                 402,
               );
             }
-            off.consumed_count += 1;
+            off.consumed_count = existingMemCount + 1;
           }
         }
 
@@ -2593,6 +2664,29 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           )
             .bind(id, businessName, network, dialCode, phone, fileFormat)
             .run();
+
+          // Increment pdf_export consumed_count for this merchant if known
+          if (phone && phone !== "guest") {
+            const entRow = await env.DB.prepare(
+              "SELECT id, consumed_count FROM merchant_entitlements WHERE merchant_id = ? AND (entitlement_type = 'pdf_export' OR entitlement_key = 'pdf_export') LIMIT 1",
+            )
+              .bind(phone)
+              .first<{ id: string; consumed_count?: number }>();
+
+            if (entRow?.id) {
+              await env.DB.prepare(
+                "UPDATE merchant_entitlements SET consumed_count = consumed_count + 1, updated_at = datetime('now') WHERE id = ?",
+              )
+                .bind(entRow.id)
+                .run();
+            } else {
+              await env.DB.prepare(
+                "INSERT INTO merchant_entitlements (id, merchant_id, entitlement_type, entitlement_key, granted_count, consumed_count, status, created_at, updated_at) VALUES (?, ?, 'pdf_export', 'pdf_export', 1, 1, 'active', datetime('now'), datetime('now'))",
+              )
+                .bind(crypto.randomUUID(), phone)
+                .run();
+            }
+          }
         } catch (e) {
           console.warn("D1 download event track warning:", e);
         }
@@ -2606,6 +2700,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           file_format: fileFormat,
           created_at: new Date().toISOString(),
         });
+        if (phone && phone !== "guest") {
+          const mEnts = getMemEntitlements(phone);
+          const pdf = mEnts.get("pdf_export") || { granted_count: 1, consumed_count: 0 };
+          pdf.consumed_count += 1;
+          mEnts.set("pdf_export", pdf);
+        }
       }
 
       return jsonResponse({ success: true, id, recorded_at: new Date().toISOString() });

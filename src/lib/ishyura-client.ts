@@ -712,12 +712,17 @@ export class IshyuraClient {
       }
     } catch (err: unknown) {
       if (err && typeof err === "object") {
-        const o = err as { duplicate?: boolean; locked?: boolean };
-        if (o.duplicate || o.locked) {
+        const o = err as { duplicate?: boolean; locked?: boolean; error?: string };
+        if (o.duplicate || o.locked || o.error) {
           throw err;
         }
       }
-      // Local fallback for offline/demo mode if not a duplicate or locked constraint
+      // Only fallback to local queue if device is genuinely offline
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        // Local offline queue permitted
+      } else {
+        throw err;
+      }
     }
 
     const newRecord: QRCodeRecord = {

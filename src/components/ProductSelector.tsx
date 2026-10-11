@@ -15,15 +15,20 @@ import { type MerchantEntitlementsResponse } from "@/lib/ishyura-client";
 interface ProductSelectorProps {
   merchantName?: string | null;
   entitlements?: MerchantEntitlementsResponse | null;
+  availableOffline?: number;
   onSelectProduct: (product: "offline" | "online") => void;
 }
 
 export function ProductSelector({
   merchantName,
   entitlements,
+  availableOffline,
   onSelectProduct,
 }: ProductSelectorProps) {
-  const offlineAvailable = entitlements?.offline_generations?.available ?? 1;
+  const offlineAvailable =
+    availableOffline !== undefined
+      ? availableOffline
+      : entitlements?.offline_generations?.available ?? 1;
   const isPro = Boolean(entitlements?.is_pro);
 
   return (
@@ -45,9 +50,9 @@ export function ProductSelector({
         {entitlements && (
           <div className="inline-flex flex-wrap items-center justify-center gap-3 pt-2 text-xs text-muted-foreground bg-muted/30 border border-border/60 px-4 py-2 rounded-xl">
             <div className="flex items-center gap-1.5">
-              <span className="size-2 rounded-full bg-emerald-500" />
+              <span className={`size-2 rounded-full ${offlineAvailable > 0 ? "bg-emerald-500" : "bg-amber-500"}`} />
               <span>
-                Offline Quota: <strong>{offlineAvailable}</strong> available
+                Offline Quota: <strong>{offlineAvailable > 0 ? `${offlineAvailable} available` : "0 left (2,000 RWF / extra)"}</strong>
               </span>
             </div>
             <span className="text-border">·</span>
@@ -93,7 +98,11 @@ export function ProductSelector({
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="size-4 text-foreground shrink-0" />
-                <span>1 included initial QR &amp; PDF download</span>
+                <span>
+                  {offlineAvailable > 0
+                    ? "1 included initial QR & PDF download"
+                    : "Additional QR (2,000 RWF via Admin Approval)"}
+                </span>
               </div>
             </div>
           </div>

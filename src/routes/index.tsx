@@ -82,6 +82,8 @@ import { extractMerchantOrAccountCode, buildRwandaUssdString } from "@/lib/momo-
 import { PublicLandingView } from "@/components/PublicLandingView";
 import { ProductSelector } from "@/components/ProductSelector";
 import { PaymentRequestDialog } from "@/components/PaymentRequestDialog";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AppShellSkeleton } from "@/components/AppShellSkeleton";
 import { type MerchantEntitlementsResponse } from "@/lib/ishyura-client";
 
 interface IndexSearch {
@@ -273,7 +275,18 @@ function Index() {
   const [scanPreviewUrl, setScanPreviewUrl] = useState<string | null>(null);
 
   // User state & Soft Registration flow
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return IshyuraClient.getSavedUser();
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+  const [isAuthHydrated, setIsAuthHydrated] = useState(false);
+  const [recordsLoading, setRecordsLoading] = useState(true);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [authPhoneInput, setAuthPhoneInput] = useState("");
   const [otpSent, setOtpSent] = useState(false);
@@ -468,10 +481,18 @@ function Index() {
           .catch(() => {});
       } else {
         IshyuraClient.listQrCodes()
-          .then(setQrHistory)
-          .catch(() => {});
+          .then((list) => {
+            setQrHistory(list);
+            setRecordsLoading(false);
+          })
+          .catch(() => {
+            setRecordsLoading(false);
+          });
       }
+    } else {
+      setRecordsLoading(false);
     }
+    setIsAuthHydrated(true);
   }, [searchParams.tab]);
 
   useEffect(() => {
@@ -781,12 +802,19 @@ function Index() {
           return;
         }
       } else {
-        const availableOffline = entitlements?.offline_generations?.available ?? 1;
+        const existingOfflineCount = qrHistory.filter((q) => !q.is_dynamic).length;
+        const availableOffline =
+          entitlements?.offline_generations?.available !== undefined
+            ? entitlements.offline_generations.available
+            : existingOfflineCount >= 1
+              ? 0
+              : 1;
+
         if (availableOffline <= 0) {
           setConfirmedData(null);
           setPaymentRequestType("offline_qr_generation");
           setLockedNotice(
-            "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF).",
+            "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
           );
           setPaymentRequestDialogOpen(true);
           return;
@@ -795,10 +823,9 @@ function Index() {
     }
 
     setLockedNotice(null);
-    setConfirmedData(cardData);
+    setSavingQr(true);
 
     // Auto-sync: Save directly to verified merchant account
-    setSavingQr(true);
     IshyuraClient.createQrCode(
       `${cardData.businessName} (${cardData.network} - ${cardData.sanitizedInput})`,
       numAmount,
@@ -814,18 +841,13 @@ function Index() {
     )
       .then((saved) => {
         setSavedSuccess(true);
-        if (isDynamic && saved.id) {
-          setConfirmedData((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  id: saved.id,
-                  dynamicUrl: getDynamicPayUrl(saved.id),
-                  qrTelUri: getDynamicPayUrl(saved.id),
-                }
-              : null,
-          );
-        }
+        setSavingQr(false);
+        setConfirmedData({
+          ...cardData,
+          id: saved.id,
+          dynamicUrl: isDynamic && saved.id ? getDynamicPayUrl(saved.id) : undefined,
+          qrTelUri: isDynamic && saved.id ? getDynamicPayUrl(saved.id) : cardData.ussdString,
+        });
         if (currentUser) {
           IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
             .then(setEntitlements)
@@ -835,6 +857,8 @@ function Index() {
       })
       .then(setQrHistory)
       .catch((err: unknown) => {
+        setSavingQr(false);
+        setConfirmedData(null);
         const errorObj =
           err && typeof err === "object"
             ? (err as {
@@ -875,45 +899,62 @@ function Index() {
             dialCode: errorObj.existing_qr?.dial_code || cardData.ussdString,
             message: errorObj.message || "This QR code already exists.",
           });
-        } else {
-          // Offline network fallback: preserve confirmed data, add to local QR history & sync queue
-          const offlineRecord: QRCodeRecord = {
-            id:
-              cardData.id || `offline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            owner_id: currentUser?.id || "offline_owner",
-            phone_number: currentUser?.phone_number || cardData.sanitizedInput,
-            business_name: cardData.businessName,
-            network: cardData.network,
-            payment_type: cardData.paymentType,
-            dial_code: cardData.ussdString,
-            description: `${cardData.businessName} (${cardData.network} - ${cardData.sanitizedInput})`,
-            amount: cardData.amount,
-            item_name: cardData.itemName,
-            is_dynamic: cardData.isDynamic ? 1 : 0,
-            created_at: new Date().toISOString(),
-          };
-          setQrHistory((prev) => [offlineRecord, ...prev.filter((q) => q.id !== offlineRecord.id)]);
-          try {
-            const pending = JSON.parse(
-              localStorage.getItem("ishyura_pending_offline_sync") || "[]",
+        } else if (typeof navigator !== "undefined" && !navigator.onLine) {
+          // Offline network fallback: ONLY if client is completely offline without connectivity
+          // and has remaining offline quota
+          if (availableOfflineQuota > 0) {
+            const offlineRecord: QRCodeRecord = {
+              id:
+                cardData.id || `offline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              owner_id: currentUser?.id || "offline_owner",
+              phone_number: currentUser?.phone_number || cardData.sanitizedInput,
+              business_name: cardData.businessName,
+              network: cardData.network,
+              payment_type: cardData.paymentType,
+              dial_code: cardData.ussdString,
+              description: `${cardData.businessName} (${cardData.network} - ${cardData.sanitizedInput})`,
+              amount: cardData.amount,
+              item_name: cardData.itemName,
+              is_dynamic: cardData.isDynamic ? 1 : 0,
+              created_at: new Date().toISOString(),
+            };
+            setConfirmedData(cardData);
+            setQrHistory((prev) => [offlineRecord, ...prev.filter((q) => q.id !== offlineRecord.id)]);
+            try {
+              const pending = JSON.parse(
+                localStorage.getItem("ishyura_pending_offline_sync") || "[]",
+              );
+              pending.push({
+                name: offlineRecord.description,
+                amount: numAmount,
+                meta: {
+                  business_name: cardData.businessName,
+                  network: cardData.network,
+                  payment_type: cardData.paymentType,
+                  dial_code: cardData.ussdString,
+                  is_dynamic: isDynamic,
+                  item_name: cleanItem || undefined,
+                },
+              });
+              localStorage.setItem("ishyura_pending_offline_sync", JSON.stringify(pending));
+            } catch {
+              // Ignore offline pending queue write errors
+            }
+            setSavedSuccess(true);
+          } else {
+            setConfirmedData(null);
+            setPaymentRequestType("offline_qr_generation");
+            setLockedNotice(
+              "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
             );
-            pending.push({
-              name: offlineRecord.description,
-              amount: numAmount,
-              meta: {
-                business_name: cardData.businessName,
-                network: cardData.network,
-                payment_type: cardData.paymentType,
-                dial_code: cardData.ussdString,
-                is_dynamic: isDynamic,
-                item_name: cleanItem || undefined,
-              },
-            });
-            localStorage.setItem("ishyura_pending_offline_sync", JSON.stringify(pending));
-          } catch {
-            // Ignore offline pending queue write errors
+            setPaymentRequestDialogOpen(true);
           }
-          setSavedSuccess(true);
+        } else {
+          // Online error: strictly block preview and notify
+          setConfirmedData(null);
+          setLockedNotice(
+            errorObj?.message || "Failed to generate QR code. Verification or entitlement required.",
+          );
         }
       })
       .finally(() => {
@@ -1428,6 +1469,19 @@ function Index() {
     }
   };
 
+  const existingOfflineCount = qrHistory.filter((q) => !q.is_dynamic).length;
+  const availableOfflineQuota =
+    entitlements?.offline_generations?.available !== undefined
+      ? entitlements.offline_generations.available
+      : existingOfflineCount >= 1
+        ? 0
+        : 1;
+
+  const hasStoredSession =
+    typeof window !== "undefined" &&
+    Boolean(IshyuraClient.getToken() || IshyuraClient.getSavedUser());
+  const isAuthLoading = !isAuthHydrated && hasStoredSession;
+
   return (
     <AppLayout
       currentUser={currentUser}
@@ -1443,6 +1497,7 @@ function Index() {
       onSelectTab={setActiveTab}
       inquiryCount={adminStats.newInquiries}
       orderCount={adminStats.pendingOrders}
+      isAuthLoading={isAuthLoading}
     >
       {/* Offline Status & Bad Network Assistance Indicator */}
       <OfflineIndicator />
@@ -2232,7 +2287,9 @@ function Index() {
       </Dialog>
 
       {/* Tab-driven View Switching */}
-      {!currentUser && activeTab !== "store" ? (
+      {isAuthLoading ? (
+        <div className="w-full flex-1" />
+      ) : !currentUser && activeTab !== "store" ? (
         <PublicLandingView
           onGetStarted={(target) => {
             if (target) {
@@ -2301,7 +2358,35 @@ function Index() {
             </div>
           </div>
 
-          {qrHistory.length === 0 ? (
+          {recordsLoading ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {[1, 2, 3, 4].map((n) => (
+                <div
+                  key={n}
+                  className="p-5 rounded-2xl border border-border/60 bg-card/40 space-y-4 animate-pulse"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-2 flex-1">
+                      <Skeleton className="h-5 w-40 rounded-lg" />
+                      <Skeleton className="h-3.5 w-24 rounded" />
+                    </div>
+                    <Skeleton className="h-6 w-16 rounded-full" />
+                  </div>
+                  <div className="p-3 rounded-xl bg-muted/20 flex items-center justify-between">
+                    <Skeleton className="h-4 w-28 rounded" />
+                    <Skeleton className="h-4 w-16 rounded" />
+                  </div>
+                  <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                    <Skeleton className="h-8 w-24 rounded-xl" />
+                    <div className="flex gap-2">
+                      <Skeleton className="h-8 w-8 rounded-xl" />
+                      <Skeleton className="h-8 w-8 rounded-xl" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : qrHistory.length === 0 ? (
             <div className="p-12 rounded-3xl border border-dashed border-border/80 text-center bg-card/30 space-y-3">
               <History className="size-10 text-muted-foreground/40 mx-auto" />
               <p className="text-sm font-bold text-foreground">No payment cards on record</p>
@@ -2672,6 +2757,7 @@ function Index() {
         <ProductSelector
           merchantName={currentUser?.name || currentUser?.phone_number}
           entitlements={entitlements}
+          availableOffline={availableOfflineQuota}
           onSelectProduct={(mode) => {
             setSelectedProductMode(mode);
             setIsDynamic(mode === "online");
@@ -2710,8 +2796,14 @@ function Index() {
 
             <div className="flex items-center gap-3 shrink-0">
               {selectedProductMode === "offline" && (
-                <Badge variant="outline" className="text-xs font-semibold py-1 px-2.5">
-                  Quota: {entitlements?.offline_generations?.available ?? 1} available
+                <Badge
+                  variant={availableOfflineQuota > 0 ? "outline" : "secondary"}
+                  className="text-xs font-semibold py-1 px-2.5"
+                >
+                  Quota:{" "}
+                  {availableOfflineQuota > 0
+                    ? `${availableOfflineQuota} available`
+                    : "0 left (2,000 RWF / extra)"}
                 </Badge>
               )}
               {selectedProductMode === "online" && (
@@ -2890,8 +2982,13 @@ function Index() {
                             Ishyura Offline Mode (Direct USSD)
                           </span>
                         </div>
-                        <Badge variant="outline" className="text-[10px]">
-                          {entitlements?.offline_generations?.available ?? 1} included generation available
+                        <Badge
+                          variant={availableOfflineQuota > 0 ? "outline" : "secondary"}
+                          className="text-[10px]"
+                        >
+                          {availableOfflineQuota > 0
+                            ? `${availableOfflineQuota} included generation available`
+                            : "0 included left · 2,000 RWF / extra QR"}
                         </Badge>
                       </div>
                       <p className="text-[11px] text-muted-foreground leading-relaxed">

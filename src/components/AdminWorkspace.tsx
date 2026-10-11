@@ -3,6 +3,7 @@ import { PaymentQrCode } from "@/components/PaymentQrCode";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -671,11 +672,36 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
 
       {/* 2. TAB CONTENT: Maximized space on the right for displaying important information */}
       <div className="flex-1 w-full min-h-0">
-        {/* Loading Spinner for Active Tab */}
+        {/* Progressive Skeleton Loader for Active Tab */}
         {tabLoading && !loadedTabs[activeTab] ? (
-          <div className="p-16 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-            <Loader2 className="size-7 animate-spin text-primary" />
-            <p className="text-xs font-medium">Loading {tabInfo.title.toLowerCase()}...</p>
+          <div className="p-4 sm:p-6 space-y-4 animate-in fade-in duration-300">
+            <div className="flex items-center justify-between pb-2 border-b border-border/40">
+              <div className="space-y-1.5">
+                <Skeleton className="h-5 w-40 rounded-lg" />
+                <Skeleton className="h-3 w-56 rounded-md" />
+              </div>
+              <Skeleton className="h-8 w-24 rounded-xl" />
+            </div>
+            <div className="space-y-3">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <div
+                  key={i}
+                  className="p-4 rounded-2xl border border-border/60 bg-card/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs"
+                >
+                  <div className="space-y-2 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Skeleton className="h-4 w-32 rounded" />
+                      <Skeleton className="h-4 w-16 rounded-full" />
+                    </div>
+                    <Skeleton className="h-3 w-3/4 rounded" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="h-8 w-20 rounded-xl" />
+                    <Skeleton className="h-8 w-20 rounded-xl" />
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
 
