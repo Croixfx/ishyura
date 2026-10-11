@@ -31,44 +31,71 @@ export function AppLayout({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [inquiryOpen, setInquiryOpen] = useState(false);
 
-  // 1. UNLOGGED VISITOR: Old clean design without left tab
+  // 1. UNLOGGED VISITOR: Natural document layout with clean top header & navigation
   if (!currentUser) {
     return (
-      <div className="fixed inset-0 w-full h-full bg-background text-foreground flex flex-col overflow-hidden">
-        {/* Old Design Top Header (No Left Tab) */}
-        <header className="sticky top-0 z-30 border-b border-border/60 bg-background/95 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
+      <div className="min-h-screen w-full bg-background text-foreground flex flex-col">
+        {/* Public Top Header */}
+        <header className="sticky top-0 z-40 border-b border-border/60 bg-background/90 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
           <Link to="/" className="flex items-center gap-3">
-            <div className="size-9 rounded-xl bg-gradient-to-br from-emerald-500 to-sky-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 font-bold text-sm">
+            <div className="size-9 rounded-xl bg-foreground text-background flex items-center justify-center font-black text-sm shadow-xs">
               <QrCode className="size-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-black text-base tracking-tight">Ishyura</span>
-                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-muted text-foreground border border-border">
                   Rwanda
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground hidden sm:block">
-                Instant Payment QR Codes (MTN MoMo, Airtel & Equity eKash)
+                Counter Payment QR &amp; Smart Stands
               </p>
             </div>
           </Link>
 
-          <div className="flex items-center gap-2.5">
+          {/* Desktop Navigation Links */}
+          <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-muted-foreground">
+            <a href="#products" className="hover:text-foreground transition-colors">
+              Products
+            </a>
+            <a href="#how-it-works" className="hover:text-foreground transition-colors">
+              How It Works
+            </a>
+            <a href="#hardware-section" className="hover:text-foreground transition-colors">
+              Stands &amp; Hardware
+            </a>
+            <a href="#pricing" className="hover:text-foreground transition-colors">
+              Pricing
+            </a>
+            <a href="#faq" className="hover:text-foreground transition-colors">
+              FAQ
+            </a>
+          </nav>
+
+          <div className="flex items-center gap-2 sm:gap-3">
             <PWAInstallButton />
             <Button
               size="sm"
+              variant="outline"
               onClick={onOpenAuthDialog}
-              className="text-xs font-bold gap-2 h-8.5 rounded-xl px-4 shadow-xs bg-primary text-primary-foreground hover:bg-primary/90"
+              className="text-xs font-bold h-8.5 rounded-xl px-3 sm:px-4 border-border/80 hover:bg-muted"
             >
-              <LogIn className="size-3.5" />
-              <span>Sign In</span>
+              <LogIn className="size-3.5 sm:mr-1.5" />
+              <span className="hidden sm:inline">Sign In</span>
+            </Button>
+            <Button
+              size="sm"
+              onClick={onOpenAuthDialog}
+              className="text-xs font-bold h-8.5 rounded-xl px-4 bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
+            >
+              Get Started
             </Button>
           </div>
         </header>
 
-        {/* Welcome Page Content */}
-        <main className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden">{children}</main>
+        {/* Welcome Page Content with native window scroll */}
+        <main className="flex-1 w-full">{children}</main>
 
         <InquiryDialog open={inquiryOpen} onOpenChange={setInquiryOpen} defaultPhone={undefined} />
       </div>
