@@ -60,6 +60,11 @@ export interface QRCodeRecord {
   amount?: number | null;
   item_name?: string | null;
   is_dynamic?: boolean | number;
+  public_id?: string | null;
+  destination_id?: string | null;
+  config_version?: number | null;
+  payment_mode?: "FIXED_AMOUNT" | "CUSTOMER_AMOUNT" | null;
+  status?: "active" | "revoked" | null;
   description: string;
   created_at: string;
   updated_in_place?: boolean;

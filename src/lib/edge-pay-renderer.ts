@@ -3,12 +3,9 @@
 // Pure HTML/CSS with zero bloated client bundle overhead.
 // Fully automated carrier detection — NEVER asks the user to choose between SIM cards!
 
-import { type AppEnv, corsHeaders } from "./api-router";
-import {
-  extractMerchantOrAccountCode,
-  getAllNetworkDialStrings,
-  detectCarrierFromRequest,
-} from "./momo-formatters";
+import { ensureD1Tables, type AppEnv, corsHeaders } from "./api-router";
+import { buildRwandaUssdString, extractMerchantOrAccountCode } from "./momo-formatters";
+import { mapNetworkToProvider } from "./payment/ussd";
 
 export interface PayRecord {
   id: string;
@@ -20,6 +17,11 @@ export interface PayRecord {
   amount?: number | null;
   item_name?: string | null;
   is_dynamic?: boolean | number;
+  owner_id?: string | null;
+  public_id?: string | null;
+  config_version?: number | null;
+  status?: string | null;
+  destination_status?: string | null;
 }
 
 export function formatRwf(amount: number): string {
@@ -42,20 +44,19 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
   let record: PayRecord | null = null;
 
   if (id && env.DB) {
-    try {
-      record = await env.DB.prepare(
-        "SELECT id, business_name, network, payment_type, dial_code, phone_number, amount, item_name, is_dynamic FROM qr_codes WHERE id = ? OR phone_number = ? LIMIT 1",
-      )
-        .bind(id, id)
-        .first<PayRecord>();
-    } catch (e) {
-      console.warn("EdgePay lookup error:", e);
-    }
+    await ensureD1Tables(env.DB);
+    record = await env.DB.prepare(
+      "SELECT q.id, q.owner_id, s.public_id, s.config_version, s.status, q.business_name, q.network, q.payment_type, q.dial_code, q.phone_number, q.amount, q.item_name, q.is_dynamic, d.status AS destination_status " +
+        "FROM qr_codes q JOIN payment_stands s ON s.id = q.id " +
+        "LEFT JOIN payment_destinations d ON d.id = s.payment_destination_id " +
+        "WHERE q.id = ? OR s.public_id = ? LIMIT 1",
+    )
+      .bind(id, id)
+      .first<PayRecord>();
   }
 
-  // Fallback demo merchant if ID not found or testing
+  // Explicit query-parameter preview used by the merchant UI.
   if (!record) {
-    // If query params are provided directly on URL, allow live preview without DB lookup
     const qName = url.searchParams.get("name");
     const qNet = url.searchParams.get("net");
     const qCode = url.searchParams.get("code");
@@ -65,7 +66,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
 
     if (qName || qCode) {
       record = {
-        id: id || "preview",
+        id: "preview",
         business_name: qName || "Demo Shop",
         network: qNet || "MTN MoMo",
         payment_type: qType || "momo_code",
@@ -74,17 +75,46 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
         item_name: qItem || null,
         is_dynamic: 1,
       };
-    } else {
-      record = {
-        id: id || "demo",
-        business_name: "Ishyura Verified Merchant",
-        network: "MTN MoMo",
-        payment_type: "momo_code",
-        dial_code: "*182*8*1*123456#",
-        amount: 2500,
-        item_name: "Quick Checkout",
-        is_dynamic: 1,
-      };
+    }
+  }
+
+  if (!record) {
+    return new Response("Payment stand not found.", {
+      status: 404,
+      headers: { "Content-Type": "text/plain; charset=utf-8", ...corsHeaders() },
+    });
+  }
+  if (record.status === "revoked" || record.destination_status === "revoked") {
+    return new Response("This payment destination is no longer active.", {
+      status: 410,
+      headers: { "Content-Type": "text/plain; charset=utf-8", ...corsHeaders() },
+    });
+  }
+  if (record.id !== "preview" && !record.is_dynamic) {
+    return new Response("Online payment is not enabled for this stand.", {
+      status: 409,
+      headers: { "Content-Type": "text/plain; charset=utf-8", ...corsHeaders() },
+    });
+  }
+
+  if (request.method === "GET" && env.DB && record.id !== "preview") {
+    try {
+      await env.DB.prepare(
+        "INSERT INTO payment_events (id, stand_id, merchant_id, public_id, event_type, path, provider, user_agent, config_version) " +
+          "VALUES (?, ?, ?, ?, 'access', 'online', ?, ?, ?)",
+      )
+        .bind(
+          crypto.randomUUID(),
+          record.id,
+          record.owner_id || null,
+          record.public_id || null,
+          mapNetworkToProvider(record.network),
+          (request.headers.get("user-agent") || "").slice(0, 512),
+          record.config_version || 1,
+        )
+        .run();
+    } catch (error) {
+      console.warn("Payment access analytics could not be recorded:", error);
     }
   }
 
@@ -100,18 +130,12 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
   const cleanCode = extractMerchantOrAccountCode(record.dial_code);
   const paymentType = record.payment_type || "momo_code";
 
-  // Base USSD without trailing '#' so we can append *<AMOUNT># dynamically
-  let baseUssd = `*182*8*1*${cleanCode}`;
-  if (isEquity) {
-    baseUssd = `*555*2*${cleanCode}`;
-  } else if (paymentType === "phone") {
-    baseUssd = `*182*1*1*${cleanCode}`;
-  }
+  const baseUssd = buildRwandaUssdString(record.network, paymentType, cleanCode).replace(/#$/, "");
 
   const hasFixedPrice =
     typeof record.amount === "number" && !isNaN(record.amount) && record.amount > 0;
   const initialAmount = hasFixedPrice ? Math.round(record.amount!) : null;
-  const initialUssd = initialAmount ? `${baseUssd}*${initialAmount}#` : `${baseUssd}#`;
+  const initialUssd = buildRwandaUssdString(record.network, paymentType, cleanCode, initialAmount);
   const initialTelUri = `tel:${encodeURIComponent(initialUssd)}`;
   const formattedAmount = hasFixedPrice ? formatRwf(record.amount!) : "";
 
@@ -479,12 +503,29 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     .toast.show {
       transform: translateX(-50%) translateY(0);
     }
+    .offline-warning {
+      display: none;
+      margin: 0 0 16px;
+      padding: 10px 12px;
+      border: 1px solid #f59e0b;
+      border-radius: 10px;
+      background: rgba(245, 158, 11, 0.12);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    body.is-offline .offline-warning {
+      display: block;
+    }
   </style>
 </head>
-<body>
+<body data-payment-stand-id="${escapeHtml(record.public_id || record.id)}" data-trackable="${record.id !== "preview" && env.DB ? "true" : "false"}" data-fixed-amount="${hasFixedPrice ? initialAmount : ""}">
   <div class="container">
     <div class="header-bar"></div>
     <div class="content">
+      <div class="offline-warning" id="offlineWarning" role="status">
+        You are offline and using saved payment details. Confirm the recipient and amount before dialing; saved details may be out of date.
+      </div>
       <div class="verified-badge">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="20 6 9 17 4 12"></polyline>
@@ -538,7 +579,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       }
 
       <!-- Direct Dial Action (Placed directly below amount for immediate thumb reach) -->
-      <a href="${initialTelUri}" class="pay-btn" id="dialBtn" onclick="triggerDial()">
+      <a href="${initialTelUri}" class="pay-btn" id="dialBtn" onclick="return triggerDial(event)">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
         </svg>
@@ -578,6 +619,17 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       return Number(val).toLocaleString() + " RWF";
     }
 
+    function updateOfflineWarning() {
+      document.body.classList.toggle(
+        "is-offline",
+        document.body.dataset.cachedFallback === "true" || !navigator.onLine,
+      );
+    }
+
+    updateOfflineWarning();
+    window.addEventListener("online", updateOfflineWarning);
+    window.addEventListener("offline", updateOfflineWarning);
+
     function dismissKeyboard() {
       var input = document.getElementById("amountInput");
       if (input) {
@@ -591,13 +643,13 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
 
     function updateAmount(val) {
       var raw = String(val || "").replace(/[^0-9]/g, "");
-      var num = raw ? parseInt(raw, 10) : 0;
+      var num = raw ? Number(raw) : 0;
       var dialBtn = document.getElementById("dialBtn");
       var ussdPreview = document.getElementById("ussdPreview");
       var btnLabel = document.getElementById("btnLabel");
       var hintText = document.getElementById("hintText");
 
-      if (num > 0) {
+      if (Number.isSafeInteger(num) && num > 0) {
         currentUssd = baseUssd + "*" + num + "#";
         btnLabel.innerText = "Dial & Pay " + formatRwf(num);
       } else {
@@ -651,8 +703,39 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       }
     }
 
-    function triggerDial() {
+    function triggerDial(event) {
+      var fixedAmount = Number(document.body.dataset.fixedAmount || 0);
+      var input = document.getElementById("amountInput");
+      var enteredAmount = input ? Number(String(input.value || "").replace(/[^0-9]/g, "")) : 0;
+      var amount = fixedAmount || enteredAmount;
+      if (!Number.isSafeInteger(amount) || amount <= 0) {
+        event.preventDefault();
+        showToast("Enter a valid amount first.");
+        return false;
+      }
+
+      if (document.body.dataset.trackable === "true") {
+        var body = JSON.stringify({
+          stand_id: document.body.dataset.paymentStandId,
+          amount: amount
+        });
+        var payload = new Blob(
+          [body],
+          { type: "application/json" }
+        );
+        if (!navigator.sendBeacon || !navigator.sendBeacon("/api/payment-events", payload)) {
+          fetch("/api/payment-events", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: body,
+            keepalive: true
+          }).catch(function(error) {
+            console.warn("Payment initiation analytics could not be sent.", error);
+          });
+        }
+      }
       if (navigator.vibrate) navigator.vibrate([40, 50, 40]);
+      return true;
     }
   </script>
 </body>
@@ -662,7 +745,7 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
     status: 200,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "public, max-age=60, s-maxage=300",
+      "Cache-Control": "no-store",
       ...corsHeaders(),
     },
   });

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
-import { QRCodeSVG } from "qrcode.react";
+import { PaymentQrCode } from "@/components/PaymentQrCode";
 import {
   Download,
   Loader2,
@@ -1931,21 +1931,15 @@ function Index() {
 
                   {/* QR Code */}
                   <div className="mt-3 p-3 bg-white rounded-2xl border border-slate-200 shadow-md">
-                    <QRCodeSVG
-                      value={
-                        selectedQrForCustomerPrint.is_dynamic
-                          ? `${window.location.origin}/p/${selectedQrForCustomerPrint.id}`
-                          : `tel:${encodeURIComponent(
-                              buildRwandaUssdString(
-                                selectedQrForCustomerPrint.network || "MTN MoMo",
-                                selectedQrForCustomerPrint.payment_type || "momo_code",
-                                selectedQrForCustomerPrint.dial_code || "*182#",
-                                selectedQrForCustomerPrint.amount,
-                              ),
-                            )}`
-                      }
-                      size={180}
-                      level="H"
+                    <PaymentQrCode
+                      standId={selectedQrForCustomerPrint.id}
+                      publicId={selectedQrForCustomerPrint.public_id}
+                      configVersion={selectedQrForCustomerPrint.config_version}
+                      network={selectedQrForCustomerPrint.network || "MTN MoMo"}
+                      paymentType={selectedQrForCustomerPrint.payment_type || "momo_code"}
+                      destination={selectedQrForCustomerPrint.dial_code || "*182#"}
+                      amount={selectedQrForCustomerPrint.amount}
+                      isDynamic={selectedQrForCustomerPrint.is_dynamic}
                     />
                   </div>
 
@@ -3361,12 +3355,14 @@ function Index() {
                               : "transition-all duration-300"
                           }
                         >
-                          <QRCodeSVG
-                            value={confirmedData.qrTelUri}
-                            size={180}
-                            level="M"
-                            fgColor="#0f172a"
-                            bgColor="#ffffff"
+                          <PaymentQrCode
+                            standId={confirmedData.id || "preview"}
+                            network={confirmedData.network}
+                            paymentType={confirmedData.paymentType}
+                            destination={confirmedData.ussdString}
+                            amount={confirmedData.amount}
+                            isDynamic={confirmedData.isDynamic}
+                            compact
                           />
                         </div>
 
@@ -3408,7 +3404,7 @@ function Index() {
                             }
                           >
                             {confirmedData.isDynamic
-                              ? "Web Link (Needs Data)"
+                              ? "Online + direct USSD choices"
                               : "100% Offline (Zero Data Needed)"}
                           </span>
                         </div>
@@ -3445,7 +3441,7 @@ function Index() {
 
                       <p className="mt-3 text-[11px] font-medium text-print-muted-ink">
                         {confirmedData.isDynamic
-                          ? "⚡ Smart Dynamic Stand • Tap NFC or scan to pay with live bill"
+                          ? "⚡ One stand • online amount entry or direct USSD with no internet"
                           : "📶 Works 100% Offline • Scan camera or dial code • No internet data needed"}
                       </p>
                     </div>

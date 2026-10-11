@@ -20,6 +20,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "autoUpdate",
+      outDir: "dist/client",
       includeAssets: [
         "favicon.ico",
         "favicon.svg",
@@ -62,6 +63,21 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff,woff2}"],
         runtimeCaching: [
+          {
+            urlPattern: /^https?:\/\/[^/]+\/p\/[^/]+/i,
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "ishyura-payment-pages",
+              networkTimeoutSeconds: 3,
+              expiration: {
+                maxEntries: 100,
+                maxAgeSeconds: 60 * 60 * 24,
+              },
+              cacheableResponse: {
+                statuses: [200],
+              },
+            },
+          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
             handler: "CacheFirst",

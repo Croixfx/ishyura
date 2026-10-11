@@ -8,6 +8,9 @@ import {
 } from "./sms-service";
 import { handleEdgePayPage } from "./edge-pay-renderer";
 import { extractMerchantOrAccountCode } from "./momo-formatters";
+import { ensurePaymentDomainSchema } from "./payment/d1-bootstrap";
+import { inferPaymentMode, publicIdFromInternalId } from "./payment/identity";
+import { mapNetworkToProvider } from "./payment/ussd";
 
 export interface D1PreparedStatement {
   bind(...params: unknown[]): D1PreparedStatement;
@@ -48,6 +51,11 @@ interface MemQrCode {
   amount: number | null;
   item_name?: string | null;
   is_dynamic?: boolean | number;
+  public_id?: string | null;
+  destination_id?: string | null;
+  payment_mode?: string | null;
+  config_version?: number | null;
+  status?: string | null;
   created_at: string;
 }
 
@@ -271,7 +279,112 @@ function verifyAdminAuth(request: Request, env?: AppEnv): boolean {
 
 let d1Initialized = false;
 
-async function ensureD1Tables(db: D1Database): Promise<void> {
+interface PaymentDestinationSyncInput {
+  standId: string;
+  merchantId: string;
+  businessName: string;
+  network: string;
+  paymentType: string;
+  dialCode: string;
+  phoneNumber?: string | null;
+  amount?: number | null;
+  isDynamic?: boolean | number;
+  configVersion?: number;
+  status?: string | null;
+}
+
+async function syncPaymentDomainRecord(
+  db: D1Database,
+  input: PaymentDestinationSyncInput,
+): Promise<{
+  public_id: string;
+  destination_id: string;
+  config_version: number;
+  payment_mode: string;
+  status: string;
+}> {
+  const publicId = publicIdFromInternalId(input.standId);
+  const destinationId = `dst_${input.standId}`;
+  const currentStand = await db
+    .prepare("SELECT config_version, status FROM payment_stands WHERE id = ?")
+    .bind(input.standId)
+    .first<{ config_version: number; status: string }>();
+  const configVersion = input.configVersion ?? (currentStand?.config_version || 0) + 1;
+  const standStatus = currentStand?.status || input.status || "active";
+  const paymentMode = inferPaymentMode(input.amount);
+  const recipientCode = extractMerchantOrAccountCode(input.dialCode, input.phoneNumber);
+  const paymentMethod = input.paymentType === "phone" ? "phone" : "merchant_code";
+  const destinationMerchantId = input.merchantId || input.phoneNumber || "unknown";
+  const currentDestination = await db
+    .prepare(
+      "SELECT merchant_id, display_name, network, payment_method, recipient_code, version FROM payment_destinations WHERE id = ?",
+    )
+    .bind(destinationId)
+    .first<{
+      merchant_id: string;
+      display_name: string | null;
+      network: string;
+      payment_method: string;
+      recipient_code: string;
+      version: number;
+    }>();
+  const destinationChanged =
+    !currentDestination ||
+    currentDestination.merchant_id !== destinationMerchantId ||
+    currentDestination.display_name !== input.businessName ||
+    currentDestination.network !== input.network ||
+    currentDestination.payment_method !== paymentMethod ||
+    currentDestination.recipient_code !== recipientCode;
+  const destinationVersion = currentDestination
+    ? (currentDestination.version || 1) + (destinationChanged ? 1 : 0)
+    : 1;
+
+  await db
+    .prepare(
+      "INSERT INTO payment_stands (id, merchant_id, payment_destination_id, public_id, stand_type, payment_mode, config_version, status, qr_encoding) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET merchant_id = excluded.merchant_id, payment_destination_id = excluded.payment_destination_id, public_id = excluded.public_id, stand_type = excluded.stand_type, payment_mode = excluded.payment_mode, config_version = excluded.config_version, qr_encoding = excluded.qr_encoding, updated_at = datetime('now')",
+    )
+    .bind(
+      input.standId,
+      input.merchantId || input.phoneNumber || "unknown",
+      destinationId,
+      publicId,
+      input.isDynamic ? "pro" : "standard",
+      paymentMode,
+      configVersion,
+      standStatus,
+      input.isDynamic ? "https_pay" : "tel_ussd",
+    )
+    .run();
+
+  await db
+    .prepare(
+      "INSERT INTO payment_destinations (id, merchant_id, display_name, network, payment_method, recipient_code, currency, status, version) " +
+        "VALUES (?, ?, ?, ?, ?, ?, 'RWF', 'active', ?) " +
+        "ON CONFLICT(id) DO UPDATE SET merchant_id = excluded.merchant_id, display_name = excluded.display_name, network = excluded.network, payment_method = excluded.payment_method, recipient_code = excluded.recipient_code, version = excluded.version, updated_at = datetime('now')",
+    )
+    .bind(
+      destinationId,
+      destinationMerchantId,
+      input.businessName,
+      input.network,
+      paymentMethod,
+      recipientCode,
+      destinationVersion,
+    )
+    .run();
+
+  return {
+    public_id: publicId,
+    destination_id: destinationId,
+    config_version: configVersion,
+    payment_mode: paymentMode,
+    status: standStatus,
+  };
+}
+
+export async function ensureD1Tables(db: D1Database): Promise<void> {
   if (d1Initialized) return;
   try {
     const statements = [
@@ -367,6 +480,7 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
     if (typeof db.exec === "function") {
       try {
         await db.exec(statements.join("\n"));
+        await ensurePaymentDomainSchema(db);
         d1Initialized = true;
         return;
       } catch (execErr) {
@@ -402,9 +516,11 @@ async function ensureD1Tables(db: D1Database): Promise<void> {
       }
     }
 
+    await ensurePaymentDomainSchema(db);
     d1Initialized = true;
   } catch (err) {
-    console.warn("D1 table init notice:", err);
+    console.error("D1 table initialization failed:", err);
+    throw err;
   }
 }
 
@@ -483,6 +599,93 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
   }
 
   try {
+    if (path === "/payment-events" && request.method === "POST") {
+      if (!env.DB) {
+        return jsonResponse(
+          { detail: "Payment analytics are unavailable without the database." },
+          503,
+        );
+      }
+
+      let body: { stand_id?: unknown; amount?: unknown };
+      try {
+        body = (await request.json()) as { stand_id?: unknown; amount?: unknown };
+      } catch {
+        return jsonResponse({ detail: "A valid JSON event payload is required." }, 400);
+      }
+
+      const standId = typeof body.stand_id === "string" ? body.stand_id.trim() : "";
+      if (!standId) {
+        return jsonResponse({ detail: "Stand identifier is required." }, 400);
+      }
+
+      if (
+        body.amount !== undefined &&
+        (typeof body.amount !== "number" || !Number.isSafeInteger(body.amount) || body.amount <= 0)
+      ) {
+        return jsonResponse({ detail: "Amount must be a positive whole number of RWF." }, 400);
+      }
+
+      const stand = await env.DB.prepare(
+        "SELECT q.id, q.owner_id, s.public_id, q.amount, q.network, q.is_dynamic, s.config_version, s.status, d.status AS destination_status " +
+          "FROM qr_codes q JOIN payment_stands s ON s.id = q.id " +
+          "LEFT JOIN payment_destinations d ON d.id = s.payment_destination_id " +
+          "WHERE q.id = ? OR s.public_id = ? LIMIT 1",
+      )
+        .bind(standId, standId)
+        .first<{
+          id: string;
+          owner_id: string | null;
+          public_id: string | null;
+          amount: number | null;
+          network: string;
+          is_dynamic: number | boolean;
+          config_version: number | null;
+          status: string | null;
+          destination_status: string | null;
+        }>();
+
+      if (!stand) {
+        return jsonResponse({ detail: "Payment stand was not found." }, 404);
+      }
+      if (stand.status === "revoked" || stand.destination_status === "revoked") {
+        return jsonResponse({ detail: "This payment destination is no longer active." }, 410);
+      }
+      if (!stand.is_dynamic) {
+        return jsonResponse({ detail: "Online payment is not enabled for this stand." }, 409);
+      }
+
+      const fixedAmount =
+        typeof stand.amount === "number" && stand.amount > 0 ? Math.round(stand.amount) : null;
+      const amount = fixedAmount ?? body.amount;
+      if (fixedAmount !== null && body.amount !== undefined && body.amount !== fixedAmount) {
+        return jsonResponse({ detail: "Amount does not match this fixed-price stand." }, 400);
+      }
+      if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount <= 0) {
+        return jsonResponse({ detail: "Enter a valid amount before starting payment." }, 400);
+      }
+
+      const eventId = crypto.randomUUID();
+      const userAgent = (request.headers.get("user-agent") || "").slice(0, 512);
+      await env.DB.prepare(
+        "INSERT INTO payment_events (id, stand_id, merchant_id, public_id, event_type, path, amount, provider, user_agent, config_version) " +
+          "VALUES (?, ?, ?, ?, 'payment_initiation', 'online', ?, ?, ?, ?)",
+      )
+        .bind(
+          eventId,
+          stand.id,
+          stand.owner_id,
+          stand.public_id,
+          amount,
+          mapNetworkToProvider(stand.network),
+          userAgent,
+          stand.config_version || 1,
+        )
+        .run();
+
+      return jsonResponse({ success: true, id: eventId }, 201);
+    }
+
     // ----------------------------------------------------
     // 1. AUTH: Request OTP
     // ----------------------------------------------------
@@ -976,7 +1179,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       if (env.DB) {
         try {
           const row = await env.DB.prepare(
-            "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, is_dynamic, item_name, created_at FROM qr_codes WHERE dial_code = ? OR REPLACE(REPLACE(dial_code, ' ', ''), '-', '') = ? LIMIT 1",
+            "SELECT * FROM qr_codes WHERE dial_code = ? OR REPLACE(REPLACE(dial_code, ' ', ''), '-', '') = ? LIMIT 1",
           )
             .bind(dialCodeParam, cleanTarget)
             .first<MemQrCode>();
@@ -1055,6 +1258,11 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           typeof quickBody.amount === "number" && !isNaN(quickBody.amount)
             ? quickBody.amount
             : null;
+        if (quickBody.amount !== undefined && quickBody.amount !== null) {
+          if (newAmount === null || !Number.isSafeInteger(newAmount) || newAmount <= 0) {
+            return jsonResponse({ detail: "Amount must be a positive whole number of RWF." }, 400);
+          }
+        }
         const newItem = quickBody.item_name !== undefined ? quickBody.item_name : undefined;
 
         if (env.DB) {
@@ -1070,11 +1278,24 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           await env.DB.prepare("UPDATE qr_codes SET amount = ?, item_name = ? WHERE id = ?")
             .bind(newAmount, finalItem, quickBody.id)
             .run();
+          const domainRecord = await syncPaymentDomainRecord(env.DB, {
+            standId: current.id,
+            merchantId: current.owner_id || current.phone_number,
+            businessName: current.business_name,
+            network: current.network,
+            paymentType: current.payment_type,
+            dialCode: current.dial_code,
+            phoneNumber: current.phone_number,
+            amount: newAmount,
+            isDynamic: current.is_dynamic,
+            status: current.status,
+          });
 
           return jsonResponse({
             ...current,
             amount: newAmount,
             item_name: finalItem,
+            ...domainRecord,
             message: "Live counter bill updated instantly without reprinting!",
           });
         }
@@ -1084,6 +1305,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           return jsonResponse({ detail: "QR code not found." }, 404);
         }
         memItem.amount = newAmount;
+        memItem.config_version = (memItem.config_version || 1) + 1;
+        memItem.payment_mode = inferPaymentMode(newAmount);
         if (newItem !== undefined) memItem.item_name = newItem;
         return jsonResponse({
           ...memItem,
@@ -1192,6 +1415,19 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                     console.warn("D1 in-place update fallback notice:", updateErr);
                   }
 
+                  const domainRecord = await syncPaymentDomainRecord(env.DB, {
+                    standId: existing.id,
+                    merchantId: ownerId,
+                    businessName: updatedName,
+                    network: updatedNet,
+                    paymentType: updatedType,
+                    dialCode: updatedDial,
+                    phoneNumber: phone,
+                    amount: updatedAmount,
+                    isDynamic: updatedDynamic,
+                    status: existing.status,
+                  });
+
                   return jsonResponse({
                     id: existing.id,
                     owner_id: existing.owner_id,
@@ -1204,6 +1440,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                     amount: updatedAmount,
                     item_name: updatedItem,
                     is_dynamic: updatedDynamic,
+                    ...domainRecord,
                     created_at: existing.created_at,
                     updated_in_place: true,
                     message:
@@ -1272,6 +1509,18 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               .run();
           }
 
+          const domainRecord = await syncPaymentDomainRecord(env.DB, {
+            standId: id,
+            merchantId: ownerId,
+            businessName,
+            network,
+            paymentType,
+            dialCode,
+            phoneNumber: phone,
+            amount: numAmount,
+            isDynamic,
+          });
+
           return jsonResponse({
             id,
             owner_id: ownerId,
@@ -1284,6 +1533,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             amount: numAmount,
             is_dynamic: isDynamic,
             item_name: itemName,
+            ...domainRecord,
             created_at: new Date().toISOString(),
             admin_reissued: isAdmin,
           });
@@ -1323,6 +1573,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               if (numAmount !== null) existing.amount = numAmount;
               if (itemName !== null) existing.item_name = itemName;
               if (isDynamic) existing.is_dynamic = 1;
+              existing.config_version = (existing.config_version || 1) + 1;
+              existing.payment_mode = inferPaymentMode(existing.amount);
               existing.description = `${existing.business_name} (${existing.network} - ${existing.dial_code})`;
 
               return jsonResponse({
@@ -1363,6 +1615,11 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           amount: numAmount,
           is_dynamic: isDynamic,
           item_name: itemName,
+          public_id: publicIdFromInternalId(id),
+          destination_id: `dst_${id}`,
+          payment_mode: inferPaymentMode(numAmount),
+          config_version: 1,
+          status: "active",
           created_at: new Date().toISOString(),
         };
         memQrCodes.unshift(newQr);
@@ -1448,6 +1705,19 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               .run();
           }
 
+          const domainRecord = await syncPaymentDomainRecord(env.DB, {
+            standId: body.id,
+            merchantId: current.owner_id || current.phone_number,
+            businessName: updatedName,
+            network: updatedNet,
+            paymentType: updatedType,
+            dialCode: updatedDial,
+            phoneNumber: updatedPhone,
+            amount: updatedAmount,
+            isDynamic: updatedDynamic,
+            status: current.status,
+          });
+
           return jsonResponse({
             id: body.id,
             business_name: updatedName,
@@ -1458,6 +1728,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             amount: updatedAmount,
             item_name: updatedItem,
             is_dynamic: updatedDynamic,
+            ...domainRecord,
             description: updatedDesc,
             message: "QR destination updated successfully without reprinting!",
           });
@@ -1475,6 +1746,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         if (body.amount !== undefined) item.amount = body.amount;
         if (body.item_name !== undefined) item.item_name = body.item_name;
         if (body.is_dynamic !== undefined) item.is_dynamic = body.is_dynamic ? 1 : 0;
+        item.config_version = (item.config_version || 1) + 1;
+        item.payment_mode = inferPaymentMode(item.amount);
         item.description = `${item.business_name} (${item.network} - ${item.dial_code})`;
 
         return jsonResponse({
@@ -1491,14 +1764,17 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           try {
             if (ownerParam || phoneParam) {
               const rows = await env.DB.prepare(
-                "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, is_dynamic, item_name, created_at FROM qr_codes WHERE owner_id = ? OR phone_number = ? ORDER BY created_at DESC LIMIT 100",
+                "SELECT q.*, s.public_id, s.payment_destination_id AS destination_id, s.payment_mode, s.config_version, s.status, s.stand_type " +
+                  "FROM qr_codes q LEFT JOIN payment_stands s ON s.id = q.id " +
+                  "WHERE q.owner_id = ? OR q.phone_number = ? ORDER BY q.created_at DESC LIMIT 100",
               )
                 .bind(ownerParam || phoneParam, phoneParam || ownerParam)
                 .all();
               return jsonResponse(rows.results || []);
             }
             const rows = await env.DB.prepare(
-              "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, is_dynamic, item_name, created_at FROM qr_codes ORDER BY created_at DESC LIMIT 50",
+              "SELECT q.*, s.public_id, s.payment_destination_id AS destination_id, s.payment_mode, s.config_version, s.status, s.stand_type " +
+                "FROM qr_codes q LEFT JOIN payment_stands s ON s.id = q.id ORDER BY q.created_at DESC LIMIT 50",
             ).all();
             return jsonResponse(rows.results || []);
           } catch {
@@ -1958,7 +2234,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         if (env.DB) {
           try {
             const rows = await env.DB.prepare(
-              "SELECT id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, is_dynamic, item_name, created_at FROM qr_codes ORDER BY created_at DESC LIMIT 300",
+              "SELECT q.*, s.public_id, s.payment_destination_id AS destination_id, s.payment_mode, s.config_version, s.status, s.stand_type " +
+                "FROM qr_codes q LEFT JOIN payment_stands s ON s.id = q.id ORDER BY q.created_at DESC LIMIT 300",
             ).all();
             return jsonResponse(rows.results || []);
           } catch (dbErr) {
@@ -2026,6 +2303,26 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           }
         }
 
+        const domainRecord = env.DB
+          ? await syncPaymentDomainRecord(env.DB, {
+              standId: id,
+              merchantId: phone,
+              businessName,
+              network,
+              paymentType,
+              dialCode,
+              phoneNumber: phone,
+              amount: numAmount,
+              isDynamic,
+            })
+          : {
+              public_id: publicIdFromInternalId(id),
+              destination_id: `dst_${id}`,
+              config_version: 1,
+              payment_mode: inferPaymentMode(numAmount),
+              status: "active",
+            };
+
         const newQr: MemQrCode = {
           id,
           owner_id: phone,
@@ -2038,6 +2335,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           amount: numAmount,
           is_dynamic: isDynamic,
           item_name: itemName,
+          ...domainRecord,
           created_at: new Date().toISOString(),
         };
         memQrCodes.unshift(newQr);
@@ -2120,6 +2418,19 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               .run();
           }
 
+          const domainRecord = await syncPaymentDomainRecord(env.DB, {
+            standId: body.id,
+            merchantId: current.owner_id || current.phone_number,
+            businessName: updatedName,
+            network: updatedNet,
+            paymentType: updatedType,
+            dialCode: updatedDial,
+            phoneNumber: updatedPhone,
+            amount: updatedAmount,
+            isDynamic: updatedDynamic,
+            status: current.status,
+          });
+
           return jsonResponse({
             id: body.id,
             business_name: updatedName,
@@ -2130,6 +2441,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             amount: updatedAmount,
             item_name: updatedItem,
             is_dynamic: updatedDynamic,
+            ...domainRecord,
             description: updatedDesc,
             message: "QR code successfully updated by Admin.",
           });
@@ -2147,6 +2459,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         if (body.amount !== undefined) item.amount = body.amount;
         if (body.item_name !== undefined) item.item_name = body.item_name;
         if (body.is_dynamic !== undefined) item.is_dynamic = body.is_dynamic ? 1 : 0;
+        item.config_version = (item.config_version || 1) + 1;
+        item.payment_mode = inferPaymentMode(item.amount);
         item.description = `${item.business_name} (${item.network} - ${item.dial_code})`;
 
         return jsonResponse({

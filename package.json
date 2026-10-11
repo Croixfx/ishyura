@@ -7,6 +7,8 @@
     "dev": "vite dev",
     "build": "vite build",
     "build:dev": "vite build --mode development",
+    "prebuild": "npm run test:payment",
+    "test:payment": "node --experimental-strip-types --test tests/payment-format.test.mjs",
     "preview": "vite preview",
     "d1:migrate": "wrangler d1 migrations apply ishyura-db --remote",
     "d1:migrate:local": "wrangler d1 migrations apply ishyura-db --local",

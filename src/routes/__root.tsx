@@ -11,6 +11,12 @@ import type { ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 
+if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((error: unknown) => {
+    console.error("Service worker registration failed:", error);
+  });
+}
+
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">

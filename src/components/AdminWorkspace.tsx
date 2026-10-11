@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { QRCodeSVG } from "qrcode.react";
+import { PaymentQrCode } from "@/components/PaymentQrCode";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -1637,21 +1637,15 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
 
                   {/* QR Code */}
                   <div className="mt-3 p-3 bg-white rounded-2xl border border-slate-200 shadow-md">
-                    <QRCodeSVG
-                      value={
-                        selectedQrForPrint.is_dynamic
-                          ? `${window.location.origin}/p/${selectedQrForPrint.id}`
-                          : `tel:${encodeURIComponent(
-                              buildRwandaUssdString(
-                                selectedQrForPrint.network || "MTN MoMo",
-                                selectedQrForPrint.payment_type || "momo_code",
-                                selectedQrForPrint.dial_code || "*182#",
-                                selectedQrForPrint.amount,
-                              ),
-                            )}`
-                      }
-                      size={180}
-                      level="H"
+                    <PaymentQrCode
+                      standId={selectedQrForPrint.id}
+                      publicId={selectedQrForPrint.public_id}
+                      configVersion={selectedQrForPrint.config_version}
+                      network={selectedQrForPrint.network || "MTN MoMo"}
+                      paymentType={selectedQrForPrint.payment_type || "momo_code"}
+                      destination={selectedQrForPrint.dial_code || "*182#"}
+                      amount={selectedQrForPrint.amount}
+                      isDynamic={selectedQrForPrint.is_dynamic}
                     />
                   </div>
 
