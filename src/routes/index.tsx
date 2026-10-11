@@ -5,6 +5,7 @@ import { PaymentQrCode } from "@/components/PaymentQrCode";
 import {
   Download,
   Loader2,
+  QrCode,
   Moon,
   Sun,
   Zap,
@@ -78,15 +79,23 @@ import { PWAInstallButton } from "@/components/PWAInstallButton";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { extractMerchantOrAccountCode, buildRwandaUssdString } from "@/lib/momo-formatters";
+import { PublicLandingView } from "@/components/PublicLandingView";
+import { ProductSelector } from "@/components/ProductSelector";
+import { type MerchantEntitlementsResponse } from "@/lib/ishyura-client";
 
 interface IndexSearch {
   tab?: string;
+  product?: "offline" | "online";
 }
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>): IndexSearch => {
     return {
       tab: (search.tab as string) || undefined,
+      product:
+        search.product === "offline" || search.product === "online"
+          ? (search.product as "offline" | "online")
+          : undefined,
     };
   },
   head: () => ({
@@ -213,6 +222,13 @@ interface ConfirmedCardData {
 function Index() {
   const searchParams = Route.useSearch();
   const [activeTab, setActiveTab] = useState<string>(searchParams.tab || "generator");
+  const [selectedProductMode, setSelectedProductMode] = useState<"offline" | "online" | null>(
+    searchParams.product || null,
+  );
+  const [entitlements, setEntitlements] = useState<MerchantEntitlementsResponse | null>(null);
+  const [pendingAuthTargetProduct, setPendingAuthTargetProduct] = useState<
+    "offline" | "online" | null
+  >(null);
   const [adminStats, setAdminStats] = useState<{ newInquiries: number; pendingOrders: number }>({
     newInquiries: 0,
     pendingOrders: 0,
@@ -311,6 +327,26 @@ function Index() {
       }
     }
   }, [qrHistory]);
+
+  // Fetch merchant entitlements when user logs in or changes
+  useEffect(() => {
+    if (currentUser) {
+      IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
+        .then((res) => setEntitlements(res))
+        .catch(() => {});
+    } else {
+      setEntitlements(null);
+    }
+  }, [currentUser]);
+
+  // Handle post-authentication product routing
+  useEffect(() => {
+    if (currentUser && pendingAuthTargetProduct) {
+      setSelectedProductMode(pendingAuthTargetProduct);
+      setIsDynamic(pendingAuthTargetProduct === "online");
+      setPendingAuthTargetProduct(null);
+    }
+  }, [currentUser, pendingAuthTargetProduct]);
 
   // Sync offline-generated cards when network reconnects
   useEffect(() => {
@@ -1283,6 +1319,8 @@ function Index() {
     if (!newUser) {
       setConfirmedData(null);
       setDuplicateWarning(null);
+      setSelectedProductMode(null);
+      setEntitlements(null);
       setActiveTab("generator");
     } else if (isAdminUser(newUser)) {
       setActiveTab("inquiries");
@@ -2077,7 +2115,18 @@ function Index() {
       </Dialog>
 
       {/* Tab-driven View Switching */}
-      {isAdmin &&
+      {!currentUser && activeTab !== "store" ? (
+        <PublicLandingView
+          onGetStarted={(target) => {
+            if (target) {
+              setPendingAuthTargetProduct(target);
+            }
+            setAuthError(null);
+            setAuthDialogOpen(true);
+          }}
+          onOpenStore={() => setActiveTab("store")}
+        />
+      ) : isAdmin &&
       (activeTab === "inquiries" ||
         activeTab === "orders" ||
         activeTab === "qrs" ||
@@ -2470,8 +2519,71 @@ function Index() {
             </div>
           </div>
         </div>
+      ) : !selectedProductMode ? (
+        <ProductSelector
+          merchantName={currentUser?.name || currentUser?.phone_number}
+          entitlements={entitlements}
+          onSelectProduct={(mode) => {
+            setSelectedProductMode(mode);
+            setIsDynamic(mode === "online");
+          }}
+        />
       ) : (
         <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-4 pb-8 pt-6 sm:px-6 lg:px-8">
+          {/* Top Bar for Selected Product Mode */}
+          <div className="mb-6 p-4 rounded-2xl border border-border/80 bg-card/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="size-10 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
+                {selectedProductMode === "offline" ? (
+                  <QrCode className="size-5" />
+                ) : (
+                  <Radio className="size-5" />
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-extrabold text-sm text-foreground">
+                    {selectedProductMode === "offline" ? "Ishyura Offline" : "Ishyura Online"}
+                  </span>
+                  <Badge variant="secondary" className="text-[10px] font-bold">
+                    {selectedProductMode === "offline"
+                      ? "Direct Telecom USSD"
+                      : "Edge Payment Page"}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {selectedProductMode === "offline"
+                    ? "Accept payments directly through USSD. No Ishyura webpage required."
+                    : "Use a payment page with flexible configuration and online engagement analytics."}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              {selectedProductMode === "offline" && (
+                <Badge variant="outline" className="text-xs font-semibold py-1 px-2.5">
+                  Quota: {entitlements?.offline_generations?.available ?? 1} available
+                </Badge>
+              )}
+              {selectedProductMode === "online" && (
+                <Badge
+                  variant={entitlements?.is_pro ? "default" : "outline"}
+                  className="text-xs font-semibold py-1 px-2.5"
+                >
+                  {entitlements?.is_pro ? "PRO Active" : "Standard Plan"}
+                </Badge>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSelectedProductMode(null)}
+                className="text-xs font-bold rounded-xl h-8 px-3 border-border/80 hover:bg-muted/40"
+              >
+                Switch Product
+              </Button>
+            </div>
+          </div>
+
           {/* Page Title Header (Clean and focused) */}
           <div className="border-b border-border/50 pb-5 mb-2">
             <div className="flex items-center gap-2 mb-1">
@@ -2617,177 +2729,44 @@ function Index() {
                 </div>
 
                 {/* ---------------------------------------------------- */}
-                {/* TIER SELECTION: Basic Stand (Free) vs Dynamic PRO Stand */}
+                {/* SELECTED PRODUCT MODE SUMMARY */}
                 {/* ---------------------------------------------------- */}
                 <div className="space-y-4 pt-2">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1">
-                    <div>
-                      <Label className="text-xs sm:text-sm font-black uppercase tracking-wider text-foreground">
-                        Select Payment Stand Tier
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        Choose between 100% offline static card or smart update-anytime PRO stand
+                  {selectedProductMode === "offline" ? (
+                    <div className="p-4 rounded-2xl border border-border/80 bg-muted/20 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <QrCode className="size-4 text-foreground" />
+                          <span className="text-xs font-bold text-foreground">
+                            Ishyura Offline Mode (Direct USSD)
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="text-[10px]">
+                          {entitlements?.offline_generations?.available ?? 1} included generation available
+                        </Badge>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Encodes direct telecom dial string (<code className="bg-muted px-1 py-0.5 rounded">*182*8*1*...#</code>). Customer phone immediately opens the native telecom dialer. Zero mobile data needed.
                       </p>
                     </div>
-                    <span className="text-xs font-bold text-muted-foreground shrink-0">
-                      {isDynamic ? "⚡ Dynamic PRO Selected" : "📴 Basic Offline Selected"}
-                    </span>
-                  </div>
-
-                  <div className="flex flex-col gap-3">
-                    {/* TIER 1: Basic Offline (100% Free) */}
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        setIsDynamic(false);
-                        if (confirmedData) setConfirmedData(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          setIsDynamic(false);
-                          if (confirmedData) setConfirmedData(null);
-                        }
-                      }}
-                      className={`relative cursor-pointer rounded-2xl border-2 p-3.5 sm:p-4 transition-all text-left shadow-xs ${
-                        !isDynamic
-                          ? "border-emerald-500 bg-emerald-500/5 ring-3 ring-emerald-500/20 shadow-sm"
-                          : "border-border/70 bg-card/60 hover:border-emerald-500/40 hover:bg-muted/30 opacity-80"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div
-                            className={`size-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                              !isDynamic
-                                ? "border-emerald-500 bg-emerald-500 text-white"
-                                : "border-muted-foreground/40"
-                            }`}
-                          >
-                            {!isDynamic && <div className="size-2 rounded-full bg-white" />}
-                          </div>
-                          <div className="size-10 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-xl shrink-0 font-bold">
-                            📴
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-extrabold text-sm sm:text-base text-foreground tracking-tight">
-                                Basic Stand
-                              </h3>
-                              <span className="text-[10px] font-semibold text-muted-foreground hidden sm:inline">
-                                · Static Counter Card
-                              </span>
-                            </div>
-                            <p className="text-xs text-muted-foreground truncate">
-                              100% Offline · Direct phone USSD · Zero mobile data needed
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col items-end gap-0.5 shrink-0">
-                          <span className="text-xs font-black rounded-lg px-2.5 py-1 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                            0 RWF Free
-                          </span>
-                          <span className="text-[10px] font-bold text-muted-foreground">
-                            Free Forever
+                  ) : (
+                    <div className="p-4 rounded-2xl border border-border/80 bg-muted/20 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Radio className="size-4 text-foreground" />
+                          <span className="text-xs font-bold text-foreground">
+                            Ishyura Online Mode (Edge Payment Page)
                           </span>
                         </div>
+                        <Badge variant={entitlements?.is_pro ? "default" : "outline"} className="text-[10px]">
+                          {entitlements?.is_pro ? "PRO Active" : "5,000 RWF / month"}
+                        </Badge>
                       </div>
-
-                      <div className="mt-3 pt-2.5 border-t border-border/40 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1.5 font-medium text-foreground">
-                          <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                          Zero Internet Needed
-                        </span>
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                          One-Time Print
-                        </span>
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                          No Recurring Fees
-                        </span>
-                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Encodes an HTTPS payment URL hosted on Cloudflare edge. You can update this bill or amount remotely from your phone without reprinting your physical stand.
+                      </p>
                     </div>
-
-                    {/* TIER 2: Dynamic PRO (Monthly Plan - Print Once, Update Forever) */}
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        setIsDynamic(true);
-                        if (confirmedData) setConfirmedData(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          setIsDynamic(true);
-                          if (confirmedData) setConfirmedData(null);
-                        }
-                      }}
-                      className={`relative cursor-pointer rounded-2xl border-2 p-3.5 sm:p-4 transition-all text-left shadow-xs ${
-                        isDynamic
-                          ? "border-amber-500 bg-amber-500/5 ring-3 ring-amber-500/20 shadow-sm"
-                          : "border-border/70 bg-card/60 hover:border-amber-500/40 hover:bg-muted/30 opacity-80"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div
-                            className={`size-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                              isDynamic
-                                ? "border-amber-500 bg-amber-500 text-slate-950"
-                                : "border-muted-foreground/40"
-                            }`}
-                          >
-                            {isDynamic && <div className="size-2 rounded-full bg-slate-950" />}
-                          </div>
-                          <div className="size-10 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center text-xl shrink-0 font-bold">
-                            ⚡
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-extrabold text-sm sm:text-base text-foreground tracking-tight">
-                                Dynamic PRO
-                              </h3>
-                              <span className="inline-flex items-center rounded-full bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 px-1.5 py-0.2 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400">
-                                PRO
-                              </span>
-                              <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 hidden sm:inline">
-                                · Print Once, Update Forever
-                              </span>
-                            </div>
-                            <p className="text-xs text-muted-foreground truncate">
-                              Smart Acrylic Stand &amp; NFC Tag · Change bills without reprinting
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col items-end gap-0.5 shrink-0">
-                          <span className="text-xs font-black rounded-lg px-2.5 py-1 bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
-                            5,000 RWF/mo
-                          </span>
-                          <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
-                            NFC Ready
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 pt-2.5 border-t border-border/40 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1.5 font-medium text-foreground">
-                          <CheckCircle2 className="size-3.5 text-amber-500 shrink-0" />
-                          Print Once Guarantee
-                        </span>
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <CheckCircle2 className="size-3.5 text-amber-500 shrink-0" />
-                          Live Bill Updater (Instant)
-                        </span>
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <CheckCircle2 className="size-3.5 text-amber-500 shrink-0" />
-                          Physical NFC Tag Ready
-                        </span>
-                      </div>
-                    </div>
-                  </div>
+                  )}
 
                   {/* Contextual Tier Configuration Box */}
                   <div className="rounded-2xl border border-border/80 bg-card/60 p-4 space-y-4">

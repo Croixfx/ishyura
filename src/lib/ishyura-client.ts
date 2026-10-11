@@ -40,6 +40,22 @@ export interface AuthTokenResponse {
   plan?: "free" | "pro";
 }
 
+export interface MerchantEntitlementsResponse {
+  merchant_id: string;
+  offline_generations: {
+    granted: number;
+    consumed: number;
+    available: number;
+  };
+  pdf_downloads: {
+    granted: number;
+    consumed: number;
+    available: number;
+  };
+  is_pro: boolean;
+  pro_expires_at: string | null;
+}
+
 export interface AdminUserRecord {
   id: string;
   email: string;
@@ -475,6 +491,43 @@ export class IshyuraClient {
       localStorage.setItem(USER_KEY, JSON.stringify(updatedUser));
     }
     return updatedUser;
+  }
+
+  static async getEntitlements(merchantId?: string): Promise<MerchantEntitlementsResponse> {
+    const user = this.getSavedUser();
+    const token = this.getToken();
+    const mid = merchantId || user?.id || user?.phone_number || "";
+    if (!mid) {
+      return {
+        merchant_id: "",
+        offline_generations: { granted: 1, consumed: 0, available: 1 },
+        pdf_downloads: { granted: 1, consumed: 0, available: 1 },
+        is_pro: false,
+        pro_expires_at: null,
+      };
+    }
+
+    try {
+      const res = await fetch(
+        getApiEndpoint(`merchants/entitlements?merchant_id=${encodeURIComponent(mid)}`),
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        },
+      );
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Local fallback
+    }
+
+    return {
+      merchant_id: mid,
+      offline_generations: { granted: 1, consumed: 0, available: 1 },
+      pdf_downloads: { granted: 1, consumed: 0, available: 1 },
+      is_pro: false,
+      pro_expires_at: null,
+    };
   }
 
   static async createQrCode(

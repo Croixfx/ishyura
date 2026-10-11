@@ -11,6 +11,12 @@ import { extractMerchantOrAccountCode } from "./momo-formatters";
 import { ensurePaymentDomainSchema } from "./payment/d1-bootstrap";
 import { inferPaymentMode, publicIdFromInternalId } from "./payment/identity";
 import { mapNetworkToProvider } from "./payment/ussd";
+import {
+  canGenerateOffline,
+  canDownloadPdf,
+  isProActive,
+  MONETIZATION_PRICES,
+} from "./payment";
 
 export interface D1PreparedStatement {
   bind(...params: unknown[]): D1PreparedStatement;
@@ -158,6 +164,27 @@ const memMerchants: Map<string, MemMerchant> = new Map([
     },
   ],
 ]);
+
+interface MemEntitlement {
+  granted_count: number;
+  consumed_count: number;
+  valid_until?: string | null;
+}
+
+const memEntitlements: Map<string, Map<string, MemEntitlement>> = new Map();
+
+function getMemEntitlements(merchantId: string): Map<string, MemEntitlement> {
+  let map = memEntitlements.get(merchantId);
+  if (!map) {
+    map = new Map<string, MemEntitlement>([
+      ["offline_qr_generation", { granted_count: 1, consumed_count: 0 }],
+      ["pdf_export", { granted_count: 1, consumed_count: 0 }],
+      ["dynamic_pro_subscription", { granted_count: 0, consumed_count: 0, valid_until: null }],
+    ]);
+    memEntitlements.set(merchantId, map);
+  }
+  return map;
+}
 
 const memQrCodes: MemQrCode[] = [
   {
@@ -1232,6 +1259,133 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     // ----------------------------------------------------
+    // 2F. MERCHANT ENTITLEMENTS (Offline Gen, PDF, Pro)
+    // ----------------------------------------------------
+    if (
+      (path === "/merchants/entitlements" || path === "/api/merchants/entitlements") &&
+      request.method === "GET"
+    ) {
+      const merchantIdParam = (url.searchParams.get("merchant_id") || "").trim();
+      const bearer = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+      const merchantId = merchantIdParam || bearer || "unassigned";
+
+      if (!merchantId || merchantId === "unassigned") {
+        return jsonResponse(
+          {
+            merchant_id: "",
+            offline_generations: { granted: 1, consumed: 0, available: 1 },
+            pdf_downloads: { granted: 1, consumed: 0, available: 1 },
+            is_pro: false,
+            pro_expires_at: null,
+          },
+          200,
+        );
+      }
+
+      if (env.DB) {
+        try {
+          await ensurePaymentDomainSchema(env.DB);
+          const rows = await env.DB.prepare(
+            "SELECT entitlement_key, granted_count, consumed_count, valid_until FROM merchant_entitlements WHERE merchant_id = ?",
+          )
+            .bind(merchantId)
+            .all<{
+              entitlement_key: string;
+              granted_count: number;
+              consumed_count: number;
+              valid_until: string | null;
+            }>();
+
+          let offlineGranted = 1;
+          let offlineConsumed = 0;
+          let pdfGranted = 1;
+          let pdfConsumed = 0;
+          let isPro = false;
+          let proExpiresAt: string | null = null;
+
+          if (rows.results && rows.results.length > 0) {
+            for (const r of rows.results) {
+              if (r.entitlement_key === "offline_qr_generation") {
+                offlineGranted = r.granted_count;
+                offlineConsumed = r.consumed_count;
+              } else if (r.entitlement_key === "pdf_export" || r.entitlement_key === "pdf_download") {
+                pdfGranted = r.granted_count;
+                pdfConsumed = r.consumed_count;
+              } else if (r.entitlement_key === "dynamic_pro_subscription") {
+                if (r.valid_until && new Date(r.valid_until).getTime() > Date.now()) {
+                  isPro = true;
+                  proExpiresAt = r.valid_until;
+                }
+              }
+            }
+          } else {
+            // Check if existing merchant has past QR records to preserve
+            const pastCountRow = await env.DB.prepare(
+              "SELECT count(*) as count FROM qr_codes WHERE owner_id = ? OR phone_number = ?",
+            )
+              .bind(merchantId, merchantId)
+              .first<{ count: number }>();
+            const pastCount = pastCountRow?.count || 0;
+            if (pastCount > 0) {
+              offlineGranted = Math.max(1, pastCount);
+              offlineConsumed = pastCount;
+              pdfGranted = Math.max(1, pastCount);
+              pdfConsumed = pastCount;
+            }
+
+            // Insert initial record for this merchant
+            await env.DB.prepare(
+              "INSERT OR IGNORE INTO merchant_entitlements (merchant_id, entitlement_key, granted_count, consumed_count) VALUES (?, 'offline_qr_generation', ?, ?), (?, 'pdf_export', ?, ?)",
+            )
+              .bind(merchantId, offlineGranted, offlineConsumed, merchantId, pdfGranted, pdfConsumed)
+              .run();
+          }
+
+          return jsonResponse({
+            merchant_id: merchantId,
+            offline_generations: {
+              granted: offlineGranted,
+              consumed: offlineConsumed,
+              available: Math.max(0, offlineGranted - offlineConsumed),
+            },
+            pdf_downloads: {
+              granted: pdfGranted,
+              consumed: pdfConsumed,
+              available: Math.max(0, pdfGranted - pdfConsumed),
+            },
+            is_pro: isPro,
+            pro_expires_at: proExpiresAt,
+          });
+        } catch (dbErr) {
+          console.warn("D1 entitlements query error:", dbErr);
+        }
+      }
+
+      // In-memory fallback
+      const mEnts = getMemEntitlements(merchantId);
+      const off = mEnts.get("offline_qr_generation") || { granted_count: 1, consumed_count: 0 };
+      const pdf = mEnts.get("pdf_export") || { granted_count: 1, consumed_count: 0 };
+      const pro = mEnts.get("dynamic_pro_subscription") || { granted_count: 0, consumed_count: 0 };
+      const isPro = Boolean(pro.valid_until && new Date(pro.valid_until).getTime() > Date.now());
+
+      return jsonResponse({
+        merchant_id: merchantId,
+        offline_generations: {
+          granted: off.granted_count,
+          consumed: off.consumed_count,
+          available: Math.max(0, off.granted_count - off.consumed_count),
+        },
+        pdf_downloads: {
+          granted: pdf.granted_count,
+          consumed: pdf.consumed_count,
+          available: Math.max(0, pdf.granted_count - pdf.consumed_count),
+        },
+        is_pro: isPro,
+        pro_expires_at: pro.valid_until || null,
+      });
+    }
+
+    // ----------------------------------------------------
     // 3. QR CODES: Create, Edit & List (Dynamic & Fixed Price Support)
     // ----------------------------------------------------
     if (
@@ -1347,6 +1501,22 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
         // Check if requester has Admin credentials
         const isAdmin = verifyAdminAuth(request, env);
+        const authHeader = (request.headers.get("Authorization") || "").trim();
+
+        // Enforce Authentication: unauthenticated guests cannot create QR codes
+        if (
+          !isAdmin &&
+          (!authHeader || ownerId === "unassigned" || (!body.owner_id && !body.phone_number))
+        ) {
+          return jsonResponse(
+            {
+              error: "UNAUTHORIZED",
+              detail:
+                "Authentication is required to generate payment QR codes. Please sign in or create an account.",
+            },
+            401,
+          );
+        }
 
         // ENFORCE SINGLE GENERATION & IN-PLACE DYNAMIC UPDATES:
         if (env.DB) {
@@ -1469,6 +1639,57 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             // ignore check error
           }
 
+          // Enforce Entitlements before generating a new QR:
+          if (!isAdmin) {
+            if (isDynamic) {
+              const proRow = await env.DB.prepare(
+                "SELECT valid_until FROM merchant_entitlements WHERE merchant_id = ? AND entitlement_key = 'dynamic_pro_subscription' LIMIT 1",
+              )
+                .bind(ownerId)
+                .first<{ valid_until: string | null }>();
+              const proActive = Boolean(
+                proRow?.valid_until && new Date(proRow.valid_until).getTime() > Date.now(),
+              );
+              if (!proActive) {
+                return jsonResponse(
+                  {
+                    error: "PRO_ENTITLEMENT_REQUIRED",
+                    locked: true,
+                    price: MONETIZATION_PRICES.pro_monthly,
+                    currency: "RWF",
+                    entitlement_key: "dynamic_pro_subscription",
+                    detail:
+                      "Dynamic Smart Stand features require an active Ishyura PRO subscription.",
+                  },
+                  402,
+                );
+              }
+            } else {
+              const entRow = await env.DB.prepare(
+                "SELECT granted_count, consumed_count FROM merchant_entitlements WHERE merchant_id = ? AND entitlement_key = 'offline_qr_generation' LIMIT 1",
+              )
+                .bind(ownerId)
+                .first<{ granted_count: number; consumed_count: number }>();
+
+              const granted = entRow?.granted_count ?? 1;
+              const consumed = entRow?.consumed_count ?? 0;
+              if (granted - consumed <= 0) {
+                return jsonResponse(
+                  {
+                    error: "ENTITLEMENT_REQUIRED",
+                    locked: true,
+                    price: MONETIZATION_PRICES.extra_offline_generation,
+                    currency: "RWF",
+                    entitlement_key: "offline_qr_generation",
+                    detail:
+                      "You have used your included offline QR generation. An additional generation entitlement is required.",
+                  },
+                  402,
+                );
+              }
+            }
+          }
+
           try {
             await env.DB.prepare(
               "INSERT INTO qr_codes (id, owner_id, phone_number, business_name, network, payment_type, dial_code, description, amount, is_dynamic, item_name) " +
@@ -1520,6 +1741,28 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             amount: numAmount,
             isDynamic,
           });
+
+          // Record consumption for offline generations
+          if (!isAdmin && !isDynamic) {
+            try {
+              await env.DB.prepare(
+                "INSERT INTO merchant_entitlements (merchant_id, entitlement_key, granted_count, consumed_count) VALUES (?, 'offline_qr_generation', 1, 1) " +
+                  "ON CONFLICT(merchant_id, entitlement_key) DO UPDATE SET consumed_count = consumed_count + 1, updated_at = datetime('now')",
+              )
+                .bind(ownerId)
+                .run();
+
+              const eventId = `ev_${crypto.randomUUID()}`;
+              await env.DB.prepare(
+                "INSERT INTO entitlement_events (id, merchant_id, entitlement_key, event_type, delta, current_balance, metadata) " +
+                  "VALUES (?, ?, 'offline_qr_generation', 'consumed', 1, 0, ?)",
+              )
+                .bind(eventId, ownerId, JSON.stringify({ stand_id: id, dial_code: dialCode }))
+                .run();
+            } catch (entErr) {
+              console.warn("D1 entitlement update error:", entErr);
+            }
+          }
 
           return jsonResponse({
             id,
@@ -1601,6 +1844,47 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             },
             409,
           );
+        }
+
+        if (!isAdmin) {
+          const mEnts = getMemEntitlements(ownerId);
+          if (isDynamic) {
+            const pro = mEnts.get("dynamic_pro_subscription");
+            const proActive = Boolean(
+              pro?.valid_until && new Date(pro.valid_until).getTime() > Date.now(),
+            );
+            if (!proActive) {
+              return jsonResponse(
+                {
+                  error: "PRO_ENTITLEMENT_REQUIRED",
+                  locked: true,
+                  price: MONETIZATION_PRICES.pro_monthly,
+                  currency: "RWF",
+                  entitlement_key: "dynamic_pro_subscription",
+                  detail:
+                    "Dynamic Smart Stand features require an active Ishyura PRO subscription.",
+                },
+                402,
+              );
+            }
+          } else {
+            const off = mEnts.get("offline_qr_generation")!;
+            if (off.granted_count - off.consumed_count <= 0) {
+              return jsonResponse(
+                {
+                  error: "ENTITLEMENT_REQUIRED",
+                  locked: true,
+                  price: MONETIZATION_PRICES.extra_offline_generation,
+                  currency: "RWF",
+                  entitlement_key: "offline_qr_generation",
+                  detail:
+                    "You have used your included offline QR generation. An additional generation entitlement is required.",
+                },
+                402,
+              );
+            }
+            off.consumed_count += 1;
+          }
         }
 
         const newQr: MemQrCode = {
