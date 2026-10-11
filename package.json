@@ -15,9 +15,7 @@
     "d1:migrate:local": "wrangler d1 migrations apply ishyura-db --local",
     "deploy": "npm run build && wrangler d1 migrations apply ishyura-db --remote && wrangler deploy",
     "lint": "eslint .",
-    "format": "prettier --write .",
-    "postinstall": "node scripts/patch-wrangler.cjs",
-    "prebuild": "node scripts/patch-wrangler.cjs"
+    "format": "prettier --write ."
   },
   "overrides": {
     "rolldown": "1.2.1"
