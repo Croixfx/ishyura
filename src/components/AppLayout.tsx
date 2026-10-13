@@ -42,9 +42,9 @@ export function AppLayout({
   // 1. UNLOGGED VISITOR: Flawlessly scrollable layout with fixed header & dedicated scroll viewport
   if (!currentUser) {
     return (
-      <div className="min-h-screen w-full bg-background text-foreground flex flex-col">
+      <div className="h-dvh max-h-dvh w-full bg-background text-foreground flex flex-col overflow-hidden">
         {/* Public Top Header */}
-        <header className="sticky top-0 z-40 border-b border-border/60 bg-background/90 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
+        <header className="z-40 border-b border-border/60 bg-background/90 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
           <Link to="/" className="flex items-center gap-3">
             <div className="size-9 rounded-xl bg-foreground text-background flex items-center justify-center font-black text-sm shadow-xs">
               <QrCode className="size-5" />
@@ -132,8 +132,10 @@ export function AppLayout({
           </div>
         </header>
 
-        {/* Natural page flow ensuring smooth full-page scrolling without clipping or double scroll */}
-        <main className="flex-1 w-full">
+        <main
+          id="ishyura-public-scroll"
+          className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-y-contain"
+        >
           {children}
         </main>
 

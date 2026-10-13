@@ -111,7 +111,8 @@
     height: 100%;
     margin: 0;
     padding: 0;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   body {
@@ -119,6 +120,10 @@
     color: var(--color-foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+  }
+
+  #ishyura-public-scroll {
+    -webkit-overflow-scrolling: touch;
   }
 }
 
