@@ -18,9 +18,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { MONETIZATION_PRICES } from "@/lib/payment";
-import { ORDER_UNIT_PRICES } from "@/lib/order-catalog";
-import { ScrollProgressiveSection } from "@/components/ui/ScrollProgressiveSection";
+import { LazySection } from "@/components/landing/LazySection";
+
+const loadProductsSection = () => import("./landing/ProductsSection");
+const loadHowItWorksSection = () => import("./landing/HowItWorksSection");
+const loadHardwareSection = () => import("./landing/HardwareSection");
+const loadPricingSection = () => import("./landing/PricingSection");
+const loadFaqSection = () => import("./landing/FaqSection");
+const loadFinalCtaSection = () => import("./landing/FinalCtaSection");
 
 interface PublicLandingViewProps {
   onGetStarted: (targetProduct?: "offline" | "online") => void;
@@ -33,6 +38,7 @@ export function PublicLandingView({
   onOpenStore,
   onOpenInquiry,
 }: PublicLandingViewProps) {
+  const sectionProps = { onGetStarted, onOpenStore, onOpenInquiry };
   return (
     <div className="w-full bg-background text-foreground flex flex-col">
       {/* 1. Hero Section */}
@@ -224,642 +230,47 @@ export function PublicLandingView({
       </section>
 
       {/* 2. Product Offerings: Ishyura Offline vs. Ishyura Online */}
-      <ScrollProgressiveSection
+      <LazySection
         id="products"
-        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15"
-      >
-        <div className="mx-auto max-w-5xl space-y-12">
-          <div className="text-center space-y-3 max-w-2xl mx-auto">
-            <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
-              Product Offerings
-            </Badge>
-            <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-foreground">
-              Two Tailored Products for Rwanda Merchants
-            </h2>
-            <p className="text-xs sm:text-sm text-muted-foreground">
-              Choose between direct offline telecom USSD or a flexible, dynamic Cloudflare edge
-              payment page.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch">
-            {/* Ishyura Offline Card */}
-            <div className="rounded-2xl border-2 border-border/80 bg-card p-6 sm:p-8 flex flex-col justify-between space-y-6 shadow-sm hover:border-foreground/40 transition-colors">
-              <div className="space-y-5">
-                <div className="flex items-center justify-between">
-                  <div className="size-12 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
-                    <QrCode className="size-6" />
-                  </div>
-                  <Badge variant="secondary" className="text-[11px] font-bold">
-                    Direct Telecom USSD
-                  </Badge>
-                </div>
-
-                <div>
-                  <h3 className="text-xl sm:text-2xl font-black text-foreground">
-                    Ishyura Offline
-                  </h3>
-                  <p className="text-xs sm:text-sm text-muted-foreground mt-2 leading-relaxed font-medium">
-                    Accept payments directly through USSD. No Ishyura webpage required.
-                  </p>
-                </div>
-
-                <div className="border-t border-border/60 pt-5 space-y-3.5 text-xs text-muted-foreground">
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">Direct USSD QR Generation:</strong>{" "}
-                      Encodes an instant telecom dial string (
-                      <code className="text-[11px] bg-muted px-1.5 py-0.5 rounded font-mono text-foreground">
-                        *182*8*1*...#
-                      </code>
-                      ) that opens the phone dialer directly.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">Zero Customer Internet:</strong> Customers
-                      can pay without mobile data or internet access.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">Amount Flexibility:</strong> Predefined
-                      fixed amount or customer-entered amount through the provider menu.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">1 Included Output:</strong> Free initial
-                      QR &amp; PDF download for registered merchants; additional outputs require a
-                      modest top-up.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">Hardware &amp; NFC Ready:</strong>{" "}
-                      Optional laser-cut acrylic stands and NFC rewrite cards.
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-border/60 space-y-2">
-                <Button
-                  onClick={() => onGetStarted("offline")}
-                  className="w-full h-11 rounded-xl font-bold text-xs bg-foreground text-background hover:bg-foreground/90 gap-1.5"
-                >
-                  <span>Select Ishyura Offline</span>
-                  <ChevronRight className="size-4" />
-                </Button>
-                <p className="text-center text-[10px] text-muted-foreground">
-                  No subscription required for basic offline QR generation
-                </p>
-              </div>
-            </div>
-
-            {/* Ishyura Online Card */}
-            <div className="rounded-2xl border-2 border-border/80 bg-card p-6 sm:p-8 flex flex-col justify-between space-y-6 shadow-sm hover:border-foreground/40 transition-colors">
-              <div className="space-y-5">
-                <div className="flex items-center justify-between">
-                  <div className="size-12 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
-                    <Radio className="size-6" />
-                  </div>
-                  <Badge variant="secondary" className="text-[11px] font-bold">
-                    Edge Payment Page
-                  </Badge>
-                </div>
-
-                <div>
-                  <h3 className="text-xl sm:text-2xl font-black text-foreground">Ishyura Online</h3>
-                  <p className="text-xs sm:text-sm text-muted-foreground mt-2 leading-relaxed font-medium">
-                    Use a payment page with flexible configuration and online engagement analytics.
-                  </p>
-                </div>
-
-                <div className="border-t border-border/60 pt-5 space-y-3.5 text-xs text-muted-foreground">
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">HTTPS Edge Payment URL:</strong> QR code
-                      opens an instant Ishyura payment sheet hosted on Cloudflare edge.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">Remotely Editable Bills:</strong> Update
-                      prices or item names anytime from your phone without reprinting your counter
-                      stands.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">Web-Based Amount Entry:</strong> Customer
-                      can enter the bill amount directly on your store checkout page.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">Engagement Analytics:</strong> Track page
-                      visits and scan trends over time.{" "}
-                      <em>(Note: visits do not prove payment).</em>
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
-                    <span>
-                      <strong className="text-foreground">PRO Subscriptions:</strong> Verified PRO
-                      entitlement for {MONETIZATION_PRICES.pro_monthly.toLocaleString()} RWF/month.
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-border/60 space-y-2">
-                <Button
-                  onClick={() => onGetStarted("online")}
-                  className="w-full h-11 rounded-xl font-bold text-xs bg-foreground text-background hover:bg-foreground/90 gap-1.5"
-                >
-                  <span>Select Ishyura Online</span>
-                  <ChevronRight className="size-4" />
-                </Button>
-                <p className="text-center text-[10px] text-muted-foreground">
-                  Dynamic PRO features require active entitlement
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </ScrollProgressiveSection>
+        minHeight={900}
+        loader={loadProductsSection}
+        sectionProps={sectionProps}
+      />
 
       {/* 3. How Payment Initiation Works */}
-      <ScrollProgressiveSection
+      <LazySection
         id="how-it-works"
-        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60"
-      >
-        <div className="mx-auto max-w-5xl space-y-12">
-          <div className="text-center space-y-3 max-w-2xl mx-auto">
-            <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
-              Payment Flow
-            </Badge>
-            <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-foreground">
-              How Payment Initiation Works
-            </h2>
-            <p className="text-xs sm:text-sm text-muted-foreground">
-              Fast, frictionless 3-step checkout at your store counter with any phone.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="rounded-2xl border border-border/80 bg-card p-6 space-y-4 shadow-2xs">
-              <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-black text-base">
-                1
-              </div>
-              <h3 className="font-extrabold text-base text-foreground">Scan or Tap</h3>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Customer aims their smartphone camera at your high-contrast QR code or taps their
-                NFC-enabled smartphone against your acrylic counter stand.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-border/80 bg-card p-6 space-y-4 shadow-2xs">
-              <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-black text-base">
-                2
-              </div>
-              <h3 className="font-extrabold text-base text-foreground">Instant Launch</h3>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                <strong>Offline:</strong> Phone immediately launches the telecom USSD dialer (
-                <code className="text-[11px] bg-muted px-1 py-0.5 rounded font-mono">
-                  *182*8*1*...#
-                </code>
-                ). <br />
-                <strong>Online:</strong> Phone opens high-speed payment page with your live counter
-                bill.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-border/80 bg-card p-6 space-y-4 shadow-2xs">
-              <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-black text-base">
-                3
-              </div>
-              <h3 className="font-extrabold text-base text-foreground">Confirm with PIN</h3>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Customer reviews the merchant name and confirms the payment with their private MoMo
-                or Airtel PIN. Funds transfer immediately to your account.
-              </p>
-            </div>
-          </div>
-        </div>
-      </ScrollProgressiveSection>
+        minHeight={600}
+        loader={loadHowItWorksSection}
+        sectionProps={sectionProps}
+      />
 
       {/* 4. Physical Stands & Counter Hardware */}
-      <ScrollProgressiveSection
+      <LazySection
         id="hardware-section"
-        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15"
-      >
-        <div className="mx-auto max-w-5xl space-y-12">
-          <div className="text-center space-y-3 max-w-2xl mx-auto">
-            <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
-              Hardware
-            </Badge>
-            <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-foreground">
-              Physical Stands &amp; Counter Hardware
-            </h2>
-            <p className="text-xs sm:text-sm text-muted-foreground">
-              Laser-cut acrylic tabletop stands and waterproof vinyl stickers engineered for busy
-              Kigali shops and restaurants.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Stand */}
-            <div className="p-6 rounded-2xl border border-border/80 bg-card flex flex-col justify-between space-y-5 shadow-sm">
-              <div className="space-y-3.5">
-                <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
-                  <Store className="size-6" />
-                </div>
-                <h3 className="font-extrabold text-base text-foreground">
-                  A6 Tabletop Acrylic Stand
-                </h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Laser-cut crystal-clear acrylic L-stand. Protects your payment card from spills,
-                  grease, and wear on busy retail counters.
-                </p>
-              </div>
-              <div className="pt-4 border-t border-border/60 flex items-center justify-between">
-                <div>
-                  <span className="text-lg font-black text-foreground">5,000 RWF</span>
-                  <span className="text-[10px] text-muted-foreground block">
-                    Delivered in Kigali
-                  </span>
-                </div>
-                <Badge variant="outline" className="text-[10px] font-bold">
-                  Popular
-                </Badge>
-              </div>
-            </div>
-
-            {/* Stickers */}
-            <div className="p-6 rounded-2xl border border-border/80 bg-card flex flex-col justify-between space-y-5 shadow-sm">
-              <div className="space-y-3.5">
-                <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
-                  <Package className="size-6" />
-                </div>
-                <h3 className="font-extrabold text-base text-foreground">
-                  Pack of 5 Vinyl Stickers
-                </h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Heavy-duty laminated vinyl stickers. Waterproof and weather-resistant for windows,
-                  cash registers, and takeaway counters.
-                </p>
-              </div>
-              <div className="pt-4 border-t border-border/60 flex items-center justify-between">
-                <div>
-                  <span className="text-lg font-black text-foreground">
-                    {ORDER_UNIT_PRICES.vinyl_stickers.toLocaleString()} RWF
-                  </span>
-                  <span className="text-[10px] text-muted-foreground block">Pack of 5 units</span>
-                </div>
-                <Badge variant="outline" className="text-[10px] font-bold">
-                  Multi-Pack
-                </Badge>
-              </div>
-            </div>
-
-            {/* Wooden Stand */}
-            <div className="p-6 rounded-2xl border border-border/80 bg-card flex flex-col justify-between space-y-5 shadow-sm">
-              <div className="space-y-3.5">
-                <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
-                  <Sparkles className="size-6" />
-                </div>
-                <h3 className="font-extrabold text-base text-foreground">
-                  Engraved Hardwood Stand
-                </h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Solid polished hardwood stand with laser-engraved business branding. Ideal for
-                  boutique cafes, hotels, and upscale dining.
-                </p>
-              </div>
-              <div className="pt-4 border-t border-border/60 flex items-center justify-between">
-                <div>
-                  <span className="text-lg font-black text-foreground">12,000 RWF</span>
-                  <span className="text-[10px] text-muted-foreground block">Custom Engraved</span>
-                </div>
-                <Badge variant="outline" className="text-[10px] font-bold">
-                  Premium
-                </Badge>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-xl border border-border/70 bg-card/80 text-center max-w-xl mx-auto space-y-1 shadow-2xs">
-            <p className="text-xs font-semibold text-foreground">
-              📦 Physical stands can be ordered directly from your merchant studio
-            </p>
-            <p className="text-[11px] text-muted-foreground">
-              Delivered within Kigali in 24-48 hours via fast moto courier. Payment on delivery or
-              via Mobile Money.
-            </p>
-          </div>
-        </div>
-      </ScrollProgressiveSection>
+        minHeight={700}
+        loader={loadHardwareSection}
+        sectionProps={sectionProps}
+      />
 
       {/* 5. Clear, Transparent Pricing */}
-      <ScrollProgressiveSection
+      <LazySection
         id="pricing"
-        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60"
-      >
-        <div className="mx-auto max-w-5xl space-y-12">
-          <div className="text-center space-y-3 max-w-2xl mx-auto">
-            <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
-              Transparent Pricing
-            </Badge>
-            <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-foreground">
-              Clear, Predictable Merchant Pricing
-            </h2>
-            <p className="text-xs sm:text-sm text-muted-foreground">
-              No hidden fees, no forced monthly commitments for basic offline stands.
-            </p>
-          </div>
-
-          {/* Pricing Tiers Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {/* 1. Starter Tier */}
-            <div className="rounded-2xl border-2 border-border/80 bg-card p-6 flex flex-col justify-between space-y-5 shadow-2xs">
-              <div className="space-y-3">
-                <Badge variant="secondary" className="text-[10px] font-bold">
-                  Included
-                </Badge>
-                <h3 className="font-extrabold text-base text-foreground">Starter Merchant</h3>
-                <div className="pt-1">
-                  <span className="text-2xl font-black text-foreground">0 RWF</span>
-                  <span className="text-xs text-muted-foreground block">
-                    Free upon registration
-                  </span>
-                </div>
-                <div className="pt-3 border-t border-border/50 space-y-2 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>1st Offline USSD QR code</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>1st High-res PDF tent card</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
-                    <span>Merchant dashboard access</span>
-                  </div>
-                </div>
-              </div>
-              <Button
-                onClick={() => onGetStarted("offline")}
-                className="w-full text-xs font-bold rounded-xl h-9"
-              >
-                Get Started Free
-              </Button>
-            </div>
-
-            {/* 2. Extra QR Quota */}
-            <div className="rounded-2xl border border-border/80 bg-card p-6 flex flex-col justify-between space-y-5 shadow-2xs">
-              <div className="space-y-3">
-                <Badge variant="outline" className="text-[10px] font-bold">
-                  Top-up
-                </Badge>
-                <h3 className="font-extrabold text-base text-foreground">Additional QR</h3>
-                <div className="pt-1">
-                  <span className="text-2xl font-black text-foreground">
-                    {MONETIZATION_PRICES.extra_offline_generation.toLocaleString()} RWF
-                  </span>
-                  <span className="text-xs text-muted-foreground block">
-                    Per extra card generation
-                  </span>
-                </div>
-                <div className="pt-3 border-t border-border/50 space-y-2 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-foreground shrink-0" />
-                    <span>Add new counters or staff</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-foreground shrink-0" />
-                    <span>Direct telecom dial code</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-foreground shrink-0" />
-                    <span>Permanent merchant record</span>
-                  </div>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                onClick={() => onGetStarted("offline")}
-                className="w-full text-xs font-bold rounded-xl h-9"
-              >
-                Learn More
-              </Button>
-            </div>
-
-            {/* 3. PDF Downloads */}
-            <div className="rounded-2xl border border-border/80 bg-card p-6 flex flex-col justify-between space-y-5 shadow-2xs">
-              <div className="space-y-3">
-                <Badge variant="outline" className="text-[10px] font-bold">
-                  Export
-                </Badge>
-                <h3 className="font-extrabold text-base text-foreground">PDF Tent Card</h3>
-                <div className="pt-1">
-                  <span className="text-2xl font-black text-foreground">
-                    {MONETIZATION_PRICES.pdf_download.toLocaleString()} RWF
-                  </span>
-                  <span className="text-xs text-muted-foreground block">
-                    Per print-ready PDF export
-                  </span>
-                </div>
-                <div className="pt-3 border-t border-border/50 space-y-2 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-foreground shrink-0" />
-                    <span>Vector-sharp 300 DPI output</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-foreground shrink-0" />
-                    <span>A6 tabletop folding guides</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-foreground shrink-0" />
-                    <span>Commercial print ready</span>
-                  </div>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                onClick={() => onGetStarted("offline")}
-                className="w-full text-xs font-bold rounded-xl h-9"
-              >
-                Learn More
-              </Button>
-            </div>
-
-            {/* 4. PRO Monthly */}
-            <div className="rounded-2xl border-2 border-primary/50 bg-primary/5 p-6 flex flex-col justify-between space-y-5 shadow-md">
-              <div className="space-y-3">
-                <Badge
-                  variant="default"
-                  className="text-[10px] font-bold bg-primary text-primary-foreground"
-                >
-                  PRO Plan
-                </Badge>
-                <h3 className="font-extrabold text-base text-foreground">Ishyura Online PRO</h3>
-                <div className="pt-1">
-                  <span className="text-2xl font-black text-foreground">
-                    {MONETIZATION_PRICES.pro_monthly.toLocaleString()} RWF
-                  </span>
-                  <span className="text-xs text-muted-foreground block">Monthly subscription</span>
-                </div>
-                <div className="pt-3 border-t border-border/50 space-y-2 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-primary shrink-0" />
-                    <span>Remotely editable pay link</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-primary shrink-0" />
-                    <span>Real-time visit analytics</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-3.5 text-primary shrink-0" />
-                    <span>Change prices without reprinting</span>
-                  </div>
-                </div>
-              </div>
-              <Button
-                onClick={() => onGetStarted("online")}
-                className="w-full text-xs font-bold rounded-xl h-9 bg-primary text-primary-foreground hover:bg-primary/90"
-              >
-                Get Online PRO
-              </Button>
-            </div>
-          </div>
-        </div>
-      </ScrollProgressiveSection>
+        minHeight={900}
+        loader={loadPricingSection}
+        sectionProps={sectionProps}
+      />
 
       {/* 6. Frequently Asked Questions (FAQ) */}
-      <ScrollProgressiveSection
-        id="faq"
-        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15"
-      >
-        <div className="mx-auto max-w-4xl space-y-12">
-          <div className="text-center space-y-3 max-w-2xl mx-auto">
-            <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
-              FAQ
-            </Badge>
-            <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-foreground">
-              Frequently Asked Questions
-            </h2>
-            <p className="text-xs sm:text-sm text-muted-foreground">
-              Everything you need to know about Ishyura payment cards and hardware in Rwanda.
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            <div className="p-6 rounded-2xl border border-border/80 bg-card space-y-2">
-              <h4 className="font-extrabold text-sm sm:text-base text-foreground flex items-center gap-2">
-                <HelpCircle className="size-4 text-primary shrink-0" />
-                <span>
-                  Does a customer need an internet connection to pay with Ishyura Offline?
-                </span>
-              </h4>
-              <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                <strong>No!</strong> Ishyura Offline encodes the telecom USSD dial string (
-                <code className="text-[11px] bg-muted px-1.5 py-0.5 rounded font-mono text-foreground">
-                  *182*8*1*...#
-                </code>
-                ) directly into the QR pattern. When a customer scans with an iPhone or Android
-                camera, it opens their phone dialer instantly without connecting to any webpage or
-                using mobile data.
-              </p>
-            </div>
-
-            <div className="p-6 rounded-2xl border border-border/80 bg-card space-y-2">
-              <h4 className="font-extrabold text-sm sm:text-base text-foreground flex items-center gap-2">
-                <HelpCircle className="size-4 text-primary shrink-0" />
-                <span>Which payment networks in Rwanda are supported?</span>
-              </h4>
-              <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                Ishyura supports <strong>MTN Mobile Money (MoMo Pay)</strong>,{" "}
-                <strong>Airtel Money</strong>, and <strong>Equity Bank eKash</strong>. You can
-                generate dedicated counter cards for any of these providers.
-              </p>
-            </div>
-
-            <div className="p-6 rounded-2xl border border-border/80 bg-card space-y-2">
-              <h4 className="font-extrabold text-sm sm:text-base text-foreground flex items-center gap-2">
-                <HelpCircle className="size-4 text-primary shrink-0" />
-                <span>How do I order tabletop acrylic stands in Kigali?</span>
-              </h4>
-              <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                Simply sign in or create a merchant account. In the Hardware Store section, select
-                your desired stand (A6 Acrylic Stand for{" "}
-                {ORDER_UNIT_PRICES.acrylic_stand.toLocaleString()} RWF or Vinyl Stickers for{" "}
-                {ORDER_UNIT_PRICES.vinyl_stickers.toLocaleString()} RWF). We deliver directly to
-                your shop in Kigali via moto courier within 24 to 48 hours.
-              </p>
-            </div>
-
-            <div className="p-6 rounded-2xl border border-border/80 bg-card space-y-2">
-              <h4 className="font-extrabold text-sm sm:text-base text-foreground flex items-center gap-2">
-                <HelpCircle className="size-4 text-primary shrink-0" />
-                <span>Can I change my price after printing the card?</span>
-              </h4>
-              <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                With <strong>Ishyura Online (PRO)</strong>, yes! The QR code points to your
-                Cloudflare edge pay page which you can edit remotely from your phone anytime without
-                reprinting your physical stand. For <strong>Ishyura Offline</strong>, you can create
-                a card with a customer-entered amount where the customer enters the amount on their
-                phone keypad.
-              </p>
-            </div>
-
-            <div className="p-6 rounded-2xl border border-border/80 bg-card space-y-2">
-              <h4 className="font-extrabold text-sm sm:text-base text-foreground flex items-center gap-2">
-                <HelpCircle className="size-4 text-primary shrink-0" />
-                <span>Is the first QR code and PDF really included?</span>
-              </h4>
-              <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                Yes! Every registered merchant receives one included initial offline USSD QR card
-                and high-resolution PDF download to get started right away.
-              </p>
-            </div>
-          </div>
-        </div>
-      </ScrollProgressiveSection>
+      <LazySection id="faq" minHeight={700} loader={loadFaqSection} sectionProps={sectionProps} />
 
       {/* 7. Bottom Call to Action */}
-      <ScrollProgressiveSection className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 text-center space-y-6">
-        <div className="max-w-2xl mx-auto space-y-3">
-          <h2 className="text-2xl sm:text-4xl font-black text-foreground tracking-tight">
-            Ready to Modernize Your Counter?
-          </h2>
-          <p className="text-xs sm:text-sm text-muted-foreground max-w-md mx-auto leading-relaxed">
-            Create your merchant account to select your product and generate your official Rwandan
-            payment tent card today.
-          </p>
-        </div>
-        <div className="pt-2">
-          <Button
-            size="lg"
-            onClick={() => onGetStarted()}
-            className="h-12 px-8 rounded-xl font-bold text-sm bg-primary text-primary-foreground hover:bg-primary/90 gap-2 shadow-sm"
-          >
-            <span>Create Account / Sign In</span>
-            <ArrowRight className="size-4" />
-          </Button>
-        </div>
-      </ScrollProgressiveSection>
+      <LazySection
+        id={undefined}
+        minHeight={320}
+        loader={loadFinalCtaSection}
+        sectionProps={sectionProps}
+      />
 
       {/* 8. Polished Footer */}
       <footer className="border-t border-border/60 bg-muted/20 pt-12 pb-20 sm:pb-14 px-4 sm:px-6 lg:px-8 text-xs text-muted-foreground">

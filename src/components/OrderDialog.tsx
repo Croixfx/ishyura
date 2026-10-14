@@ -22,7 +22,13 @@ import {
   Tag,
   Radio,
 } from "lucide-react";
-import { IshyuraClient, type OrderItemType, type OrderPayload } from "@/lib/ishyura-client";
+import {
+  IshyuraClient,
+  type OrderItemType,
+  type OrderPayload,
+  type QRCodeRecord,
+} from "@/lib/ishyura-client";
+import { QrPicker } from "@/components/QrPicker";
 import { ORDER_UNIT_PRICES, MAX_ORDER_QUANTITY } from "@/lib/order-catalog";
 
 export interface OrderDialogProps {
@@ -117,12 +123,18 @@ export function OrderDialog({
   const [customerName, setCustomerName] = useState<string>("");
   const [customerPhone, setCustomerPhone] = useState<string>(defaultPhone);
   const [businessName, setBusinessName] = useState<string>(defaultBusinessName);
+  const [selectedQr, setSelectedQr] = useState<QRCodeRecord | null>(null);
+  const [signedIn, setSignedIn] = useState<boolean>(false);
   const [deliveryLocation, setDeliveryLocation] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [completedOrderNumber, setCompletedOrderNumber] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (open) setSignedIn(Boolean(IshyuraClient.getSavedUser()));
+  }, [open]);
 
   // Sync defaults when dialog opens or defaults change
   React.useEffect(() => {
@@ -147,9 +159,12 @@ export function OrderDialog({
 
     const name = customerName.trim();
     const phone = (customerPhone || "").trim();
-    const bName = (businessName || "").trim();
     const location = deliveryLocation.trim();
 
+    if (!selectedQr) {
+      setError("Choose which of your generated payment QR codes this order is for.");
+      return;
+    }
     if (!name) {
       setError("Please provide your name or contact person.");
       return;
@@ -168,16 +183,13 @@ export function OrderDialog({
     setLoading(true);
     try {
       const payload: OrderPayload = {
+        qr_code_id: selectedQr.id,
         customer_name: name,
         customer_phone: phone,
-        business_name: bName || name,
         delivery_location: location,
         item_type: selectedProduct,
         quantity,
-        total_price: totalPrice,
         notes: notes.trim() || undefined,
-        network,
-        dial_code: dialCode,
       };
 
       const res = await IshyuraClient.createOrder(payload);
@@ -287,9 +299,28 @@ export function OrderDialog({
               </div>
             )}
 
+            {/* Which generated payment QR is this for? */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">1. Which payment QR is this for?</Label>
+              <QrPicker
+                signedIn={signedIn}
+                value={selectedQr?.id ?? null}
+                onChange={setSelectedQr}
+              />
+              {selectedQr && (
+                <p className="text-[11px] text-muted-foreground">
+                  We will print your{" "}
+                  <strong className="text-foreground">
+                    {selectedQr.is_dynamic ? "Online (smart stand)" : "Offline (USSD)"}
+                  </strong>{" "}
+                  QR for {selectedQr.business_name || "your business"} on the item you choose below.
+                </p>
+              )}
+            </div>
+
             {/* Product selection tiles */}
             <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">1. Choose Your Physical Display</Label>
+              <Label className="text-xs font-semibold">2. Choose Your Physical Display</Label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {PRODUCTS.map((prod) => {
                   const isSelected = selectedProduct === prod.id;
@@ -392,7 +423,7 @@ export function OrderDialog({
 
             {/* Customer Details */}
             <div className="space-y-3">
-              <Label className="text-xs font-semibold">2. Delivery &amp; Contact Details</Label>
+              <Label className="text-xs font-semibold">3. Delivery &amp; Contact Details</Label>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
@@ -472,7 +503,7 @@ export function OrderDialog({
 
             <Button
               type="submit"
-              disabled={loading}
+              disabled={loading || !selectedQr}
               className="w-full h-11 text-xs font-bold gap-2 shadow-md shadow-primary/20"
             >
               {loading ? (

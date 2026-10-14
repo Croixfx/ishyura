@@ -409,7 +409,20 @@ function Index() {
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setQrHistory(parsed);
+          // Only ever show cards that belong to the signed-in user (shared devices).
+          const saved = IshyuraClient.getSavedUser();
+          const mine = parsed.filter(
+            (q: QRCodeRecord) =>
+              Boolean(saved) &&
+              (q.owner_id === saved!.id ||
+                q.owner_id === saved!.phone_number ||
+                q.phone_number === saved!.phone_number),
+          );
+          if (mine.length > 0) {
+            setQrHistory(mine);
+            // Show them straight away; the fresh list replaces them when it arrives.
+            setRecordsLoading(false);
+          }
         }
       }
     } catch {
@@ -2556,7 +2569,7 @@ function Index() {
                 </Button>
               </div>
 
-              {paymentRequestsLoading ? (
+              {paymentRequestsLoading && paymentRequests.length === 0 ? (
                 <div className="space-y-3">
                   {[1, 2].map((i) => (
                     <div

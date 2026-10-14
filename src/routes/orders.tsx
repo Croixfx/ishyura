@@ -18,6 +18,7 @@ import {
   AlertCircle,
   Plus,
   Minus,
+  Trash2,
 } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -34,11 +35,14 @@ import {
   IshyuraClient,
   type OrderPayload,
   type OrderRecord,
+  type QRCodeRecord,
+  canDeleteOrder,
   type OrderItemType,
   type UserProfile,
 } from "@/lib/ishyura-client";
 import { signInWithGoogleReal } from "@/lib/firebase-auth";
 import { ORDER_UNIT_PRICES, MAX_ORDER_QUANTITY } from "@/lib/order-catalog";
+import { QrPicker } from "@/components/QrPicker";
 
 export const Route = createFileRoute("/orders")({
   head: () => ({
@@ -166,8 +170,9 @@ export function OrdersPage() {
   const [deliveryLocation, setDeliveryLocation] = useState("Kigali - Nyarugenge / Downtown");
   const [customLocationDetail, setCustomLocationDetail] = useState("");
   const [orderNotes, setOrderNotes] = useState("");
-  const [orderNetwork, setOrderNetwork] = useState("MTN MoMo");
-  const [orderDialCode, setOrderDialCode] = useState("");
+  const [selectedQr, setSelectedQr] = useState<QRCodeRecord | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [historyNotice, setHistoryNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<OrderRecord | null>(null);
@@ -219,6 +224,24 @@ export function OrdersPage() {
     }
   }, [activeTab]);
 
+  const handleDeleteOrder = async (order: OrderRecord) => {
+    setHistoryNotice(null);
+    setDeletingId(order.id);
+    try {
+      const res = await IshyuraClient.deleteOrder(order.id);
+      setOrderHistory((prev) => prev.filter((o) => o.id !== order.id));
+      setHistoryNotice({ ok: true, text: res.message });
+    } catch (err: unknown) {
+      setHistoryNotice({
+        ok: false,
+        text: err instanceof Error ? err.message : "This order could not be deleted.",
+      });
+      void loadOrders();
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const defaultProduct = PHYSICAL_PRODUCTS[0]!;
   const activeProductData =
     PHYSICAL_PRODUCTS.find((p) => p.id === selectedProduct) ?? defaultProduct;
@@ -228,16 +251,16 @@ export function OrdersPage() {
     e.preventDefault();
     setSubmitError(null);
 
+    if (!selectedQr) {
+      setSubmitError("Choose which of your generated payment QR codes this order is for.");
+      return;
+    }
     if (!customerName.trim()) {
       setSubmitError("Please enter your name.");
       return;
     }
     if (!customerPhone.trim() || customerPhone.replace(/\D/g, "").length < 8) {
       setSubmitError("Please enter a valid Rwandan phone number for delivery updates.");
-      return;
-    }
-    if (!businessName.trim()) {
-      setSubmitError("Please enter your shop or business name to print on the stand.");
       return;
     }
 
@@ -248,36 +271,20 @@ export function OrdersPage() {
     setSubmitting(true);
     try {
       const payload: OrderPayload = {
+        qr_code_id: selectedQr.id,
         customer_name: customerName.trim(),
         customer_phone: customerPhone.trim(),
-        business_name: businessName.trim(),
         delivery_location: fullLocation,
         item_type: selectedProduct,
         quantity,
-        total_price: totalPrice,
         notes: orderNotes.trim() || undefined,
-        network: orderNetwork,
-        dial_code: orderDialCode.trim() || undefined,
       };
 
       const result = await IshyuraClient.createOrder(payload);
-      const createdRecord: OrderRecord = result.order || {
-        id: crypto.randomUUID(),
-        order_number: result.order_number,
-        customer_name: payload.customer_name,
-        customer_phone: payload.customer_phone,
-        business_name: payload.business_name,
-        delivery_location: payload.delivery_location,
-        item_type: payload.item_type,
-        quantity: payload.quantity ?? 1,
-        total_price: payload.total_price,
-        notes: payload.notes || null,
-        network: payload.network || null,
-        dial_code: payload.dial_code || null,
-        status: "pending",
-        created_at: new Date().toISOString(),
-      };
-      setSubmitSuccess(createdRecord);
+      if (!result.order) {
+        throw new Error("The order was saved but could not be displayed. Check My Orders.");
+      }
+      setSubmitSuccess(result.order);
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : "Failed to place order.");
     } finally {
@@ -570,18 +577,15 @@ export function OrdersPage() {
                       </div>
                     </div>
 
-                    {/* Shop / Business Name */}
+                    {/* Which generated payment QR is this for? */}
                     <div className="space-y-1.5">
                       <Label className="text-xs font-bold text-foreground">
-                        Shop / Business Name <span className="text-red-500">*</span>
+                        Which payment QR should we print? <span className="text-red-500">*</span>
                       </Label>
-                      <Input
-                        type="text"
-                        placeholder="e.g. Kigali Fresh Market / Bourbon Coffee"
-                        value={businessName}
-                        onChange={(e) => setBusinessName(e.target.value)}
-                        required
-                        className="h-9 text-xs"
+                      <QrPicker
+                        signedIn={Boolean(currentUser)}
+                        value={selectedQr?.id ?? null}
+                        onChange={setSelectedQr}
                       />
                     </div>
 
@@ -611,37 +615,6 @@ export function OrdersPage() {
                           value={customerPhone}
                           onChange={(e) => setCustomerPhone(e.target.value)}
                           required
-                          className="h-9 text-xs"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Payment Network on Stand */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <Label className="text-xs font-bold text-foreground">Primary Network</Label>
-                        <Select value={orderNetwork} onValueChange={setOrderNetwork}>
-                          <SelectTrigger className="h-9 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="MTN MoMo">MTN Mobile Money</SelectItem>
-                            <SelectItem value="Airtel Money">Airtel Money</SelectItem>
-                            <SelectItem value="Equity eKash">Equity Bank eKash</SelectItem>
-                            <SelectItem value="Multi-Network">Multi-Network (Both)</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label className="text-xs font-bold text-foreground">
-                          Merchant / Till Code
-                        </Label>
-                        <Input
-                          type="text"
-                          placeholder="e.g. 123456 or phone"
-                          value={orderDialCode}
-                          onChange={(e) => setOrderDialCode(e.target.value)}
                           className="h-9 text-xs"
                         />
                       </div>
@@ -696,7 +669,7 @@ export function OrdersPage() {
                     {/* Submit Button */}
                     <Button
                       type="submit"
-                      disabled={submitting}
+                      disabled={submitting || !selectedQr}
                       className="w-full h-10 text-xs font-bold gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20"
                     >
                       {submitting ? (
@@ -740,6 +713,18 @@ export function OrdersPage() {
                 <span>Refresh</span>
               </Button>
             </div>
+
+            {historyNotice && (
+              <div
+                className={`p-3 rounded-lg border text-xs ${
+                  historyNotice.ok
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                    : "bg-destructive/10 border-destructive/20 text-destructive"
+                }`}
+              >
+                {historyNotice.text}
+              </div>
+            )}
 
             {loadingHistory ? (
               <div className="p-12 text-center text-xs text-muted-foreground">
@@ -795,6 +780,11 @@ export function OrdersPage() {
                             {order.business_name}
                           </span>
                         </div>
+                        {order.qr_label && (
+                          <p className="text-[11px] text-muted-foreground">
+                            For QR: <span className="font-semibold">{order.qr_label}</span>
+                          </p>
+                        )}
                         <p className="text-xs text-foreground font-medium">
                           {order.item_type.replace(/_/g, " ")} (x{order.quantity}) ·{" "}
                           <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
@@ -811,9 +801,35 @@ export function OrdersPage() {
                         <span className="text-[11px] text-muted-foreground block">
                           {new Date(order.created_at).toLocaleDateString()}
                         </span>
-                        <span className="text-xs font-semibold text-foreground">
+                        <span className="text-xs font-semibold text-foreground block">
                           Contact: {order.customer_phone}
                         </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!canDeleteOrder(order.status) || deletingId === order.id}
+                          title={
+                            canDeleteOrder(order.status)
+                              ? order.status === "pending"
+                                ? "Cancel and remove this order"
+                                : "Remove this order from your list"
+                              : "Being processed: you can delete it after it is delivered"
+                          }
+                          onClick={() => handleDeleteOrder(order)}
+                          className="mt-2 h-7 text-[11px] gap-1.5"
+                        >
+                          {deletingId === order.id ? (
+                            <Loader2 className="size-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3" />
+                          )}
+                          <span>{order.status === "pending" ? "Cancel & delete" : "Delete"}</span>
+                        </Button>
+                        {!canDeleteOrder(order.status) && (
+                          <span className="block text-[10px] text-muted-foreground mt-1">
+                            In process: delete after delivery
+                          </span>
+                        )}
                       </div>
                     </div>
                   );

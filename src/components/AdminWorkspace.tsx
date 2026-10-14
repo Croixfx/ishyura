@@ -248,24 +248,37 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
   };
 
   // Handle updating order status
-  const handleToggleOrderStatus = async (orderId: string, currentStatus: string) => {
-    const nextStatus = currentStatus === "pending" ? "delivered" : "pending";
+  const refreshStats = () =>
+    IshyuraClient.getAdminStats(adminKey)
+      .then((s) => {
+        if (s) setStats(s);
+      })
+      .catch(() => {});
+
+  // pending -> processing -> delivered (or cancelled at any point before delivery)
+  const handleSetOrderStatus = async (
+    orderId: string,
+    nextStatus: "pending" | "processing" | "delivered" | "cancelled",
+  ) => {
     try {
       await IshyuraClient.updateOrderStatus(adminKey, orderId, nextStatus);
       setOrders((prev) =>
         prev.map((item) => (item.id === orderId ? { ...item, status: nextStatus } : item)),
       );
-      if (stats) {
-        setStats({
-          ...stats,
-          pending_orders:
-            nextStatus === "delivered"
-              ? Math.max(0, stats.pending_orders - 1)
-              : stats.pending_orders + 1,
-        });
-      }
+      void refreshStats();
     } catch (err) {
       console.error("Failed to update order status", err);
+    }
+  };
+
+  // Only finished (delivered / cancelled) orders can be deleted.
+  const handleDeleteOrder = async (orderId: string) => {
+    try {
+      await IshyuraClient.adminDeleteOrder(adminKey, orderId);
+      setOrders((prev) => prev.filter((item) => item.id !== orderId));
+      void refreshStats();
+    } catch (err) {
+      console.error("Failed to delete order", err);
     }
   };
 
@@ -902,11 +915,14 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                           {order.status}
                         </span>
                         <span className="text-xs font-bold text-primary truncate">
-                          {order.item_type === "acrylic_stand"
-                            ? "1x A6 Acrylic Tabletop Stand"
-                            : order.item_type === "vinyl_stickers"
-                              ? "Pack of 5 Waterproof Stickers"
-                              : "Complete Merchant Bundle"}
+                          {{
+                            acrylic_stand: "A6 Acrylic Tabletop Stand",
+                            vinyl_stickers: "Pack of 5 Waterproof Stickers",
+                            smart_nfc_stand: "Smart NFC + QR Stand",
+                            pro_bundle: "Complete Merchant Bundle",
+                            custom: "Custom Branding Stand",
+                          }[order.item_type] || order.item_type}{" "}
+                          x{order.quantity}
                         </span>
                       </div>
 
@@ -919,6 +935,17 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                       <div>
                         <p className="text-muted-foreground text-[11px]">Shop / Business:</p>
                         <p className="font-bold text-foreground mt-0.5">{order.business_name}</p>
+                        {order.qr_label && (
+                          <p className="mt-1 text-[11px] font-semibold text-sky-700 dark:text-sky-300">
+                            Print QR: {order.qr_label}
+                            {order.dial_code ? ` · ${order.dial_code}` : ""}
+                          </p>
+                        )}
+                        {order.merchant_deleted_at && (
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            Removed by merchant
+                          </p>
+                        )}
                       </div>
                       <div>
                         <p className="text-muted-foreground text-[11px]">Contact & Phone:</p>
@@ -942,16 +969,47 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                       <span className="text-muted-foreground text-[11px]">
                         Created: {new Date(order.created_at).toLocaleString()}
                       </span>
-                      <Button
-                        size="sm"
-                        variant={order.status === "pending" ? "default" : "outline"}
-                        onClick={() => handleToggleOrderStatus(order.id, order.status)}
-                        className="h-7 text-xs font-semibold rounded-lg px-3"
-                      >
-                        {order.status === "pending"
-                          ? "Mark Dispatched / Delivered"
-                          : "Mark Pending"}
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        {order.status === "pending" && (
+                          <Button
+                            size="sm"
+                            onClick={() => handleSetOrderStatus(order.id, "processing")}
+                            className="h-7 text-xs font-semibold rounded-lg px-3"
+                          >
+                            Start processing
+                          </Button>
+                        )}
+                        {order.status === "processing" && (
+                          <Button
+                            size="sm"
+                            onClick={() => handleSetOrderStatus(order.id, "delivered")}
+                            className="h-7 text-xs font-semibold rounded-lg px-3"
+                          >
+                            Mark delivered
+                          </Button>
+                        )}
+                        {(order.status === "pending" || order.status === "processing") && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSetOrderStatus(order.id, "cancelled")}
+                            className="h-7 text-xs font-semibold rounded-lg px-3"
+                          >
+                            Cancel
+                          </Button>
+                        )}
+                        {(order.status === "delivered" || order.status === "cancelled") && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDeleteOrder(order.id)}
+                            className="h-7 text-xs font-semibold rounded-lg px-3 gap-1.5"
+                          >
+                            <Trash2 className="size-3" />
+                            Delete
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}

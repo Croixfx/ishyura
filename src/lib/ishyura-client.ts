@@ -141,17 +141,15 @@ export type OrderItemType =
 
 export type OrderStatus = "pending" | "processing" | "delivered" | "cancelled";
 
+/** An order is always for one of the merchant's own generated payment QR codes. */
 export interface OrderPayload {
+  qr_code_id: string;
   customer_name: string;
   customer_phone: string;
-  business_name: string;
   delivery_location: string;
   item_type: OrderItemType;
   quantity?: number;
-  total_price: number;
   notes?: string;
-  network?: string;
-  dial_code?: string;
 }
 
 export interface OrderRecord {
@@ -168,8 +166,17 @@ export interface OrderRecord {
   network?: string | null;
   dial_code?: string | null;
   status: OrderStatus;
+  qr_code_id?: string | null;
+  qr_kind?: "online" | "offline" | null;
+  qr_label?: string | null;
+  merchant_deleted_at?: string | null;
   created_at: string;
   updated_at?: string;
+}
+
+/** Orders being processed cannot be deleted until they are delivered. */
+export function canDeleteOrder(status: OrderStatus): boolean {
+  return status !== "processing";
 }
 
 export interface DownloadEventRecord {
@@ -1045,42 +1052,39 @@ export class IshyuraClient {
     message: string;
     order?: OrderRecord;
   }> {
+    const token = this.getToken();
+    let res: Response;
     try {
-      const res = await fetch(getApiEndpoint("orders"), {
+      res = await fetch(getApiEndpoint("orders"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(payload),
       });
-      if (res.ok) {
-        return await res.json();
-      }
+    } catch {
+      // An order only exists once the server has saved it, so never pretend it went through.
+      throw new Error("You appear to be offline. Please reconnect and place your order again.");
+    }
+    if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: "Order failed" }));
       throw new Error(err.detail || "Failed to place order.");
-    } catch (e: unknown) {
-      if (e instanceof Error && e.message !== "Failed to fetch") {
-        throw e;
-      }
-      // Offline fallback
-      const orderNum = `ISH-${Math.floor(100000 + Math.random() * 900000)}`;
-      const localOrders = JSON.parse(localStorage.getItem("pending_orders") || "[]");
-      const offlineRecord: OrderRecord = {
-        ...payload,
-        id: crypto.randomUUID(),
-        order_number: orderNum,
-        quantity: payload.quantity ?? 1,
-        total_price: payload.total_price,
-        status: "pending",
-        created_at: new Date().toISOString(),
-      };
-      localOrders.unshift(offlineRecord);
-      localStorage.setItem("pending_orders", JSON.stringify(localOrders));
-      return {
-        success: true,
-        order_number: orderNum,
-        message: "Order placed successfully! We will contact you via WhatsApp/Phone.",
-        order: offlineRecord,
-      };
     }
+    return await res.json();
+  }
+
+  static async deleteOrder(id: string): Promise<{ success: boolean; message: string }> {
+    const token = this.getToken();
+    const res = await fetch(getApiEndpoint(`orders?id=${encodeURIComponent(id)}`), {
+      method: "DELETE",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error((data as { detail?: string }).detail || "This order could not be deleted.");
+    }
+    return data as { success: boolean; message: string };
   }
 
   static async listOrders(): Promise<OrderRecord[]> {
@@ -1193,6 +1197,19 @@ export class IshyuraClient {
       throw new Error(err.detail || `Server returned ${res.status}`);
     }
     return await res.json();
+  }
+
+  /** Admin delete: only delivered or cancelled orders can be removed. */
+  static async adminDeleteOrder(adminKey: string, id: string): Promise<void> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
+    const res = await fetch(getApiEndpoint(`orders?id=${encodeURIComponent(id)}`), {
+      method: "DELETE",
+      headers: { "x-admin-key": cleanKey },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { detail?: string }).detail || "Failed to delete the order.");
+    }
   }
 
   static async updateOrderStatus(adminKey: string, id: string, status: OrderStatus): Promise<void> {

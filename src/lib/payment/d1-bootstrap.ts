@@ -114,7 +114,26 @@ export const PAYMENT_DOMAIN_INDEXES: string[] = [
   "CREATE INDEX IF NOT EXISTS idx_payment_events_created ON payment_events(created_at)",
 ];
 
-export async function ensurePaymentDomainSchema(db: BootstrapDatabase): Promise<void> {
+const paymentSchemaReady = new WeakMap<object, Promise<void>>();
+
+/**
+ * Brings the payment/entitlement schema up to date. It costs ~30 sequential D1 statements, so it
+ * runs once per database per Worker instance and concurrent callers share the same run; before
+ * this it ran on every request and dominated dashboard load time.
+ */
+export function ensurePaymentDomainSchema(db: BootstrapDatabase): Promise<void> {
+  let ready = paymentSchemaReady.get(db);
+  if (!ready) {
+    ready = runPaymentDomainSchema(db).catch((error) => {
+      paymentSchemaReady.delete(db); // let the next request retry after a failure
+      throw error;
+    });
+    paymentSchemaReady.set(db, ready);
+  }
+  return ready;
+}
+
+async function runPaymentDomainSchema(db: BootstrapDatabase): Promise<void> {
   for (const statement of PAYMENT_DOMAIN_CREATE_TABLES) {
     await db.prepare(statement).run();
   }

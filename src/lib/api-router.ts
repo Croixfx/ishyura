@@ -92,6 +92,11 @@ interface MemOrder {
   network: string | null;
   dial_code: string | null;
   status: "pending" | "processing" | "delivered" | "cancelled";
+  merchant_id?: string | null;
+  qr_code_id?: string | null;
+  qr_kind?: "online" | "offline" | null;
+  qr_label?: string | null;
+  merchant_deleted_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -567,30 +572,36 @@ async function verifyPassword(
   return constantTimeEqual(await derivePasswordHash(password, salt, iterations), hash);
 }
 
-let merchantColumnsChecked = false;
+let appColumnsChecked = false;
 /**
- * The merchants table created by migration 0001 lacks columns the app relies on
- * (password_hash, business_name, role). Add whichever are missing, once per isolate.
+ * Tables created by the original migrations lack columns the app relies on. Add whichever are
+ * missing, once per Worker instance (merchants: password/business/role; orders: QR link and
+ * merchant-side deletion).
  */
-async function ensureMerchantColumns(db: D1Database): Promise<void> {
-  if (merchantColumnsChecked) return;
-  const columns: Array<[string, string]> = [
-    ["password_hash", "TEXT"],
-    ["business_name", "TEXT"],
-    ["role", "TEXT DEFAULT 'merchant'"],
+async function ensureAppColumns(db: D1Database): Promise<void> {
+  if (appColumnsChecked) return;
+  const columns: Array<[string, string, string]> = [
+    ["merchants", "password_hash", "TEXT"],
+    ["merchants", "business_name", "TEXT"],
+    ["merchants", "role", "TEXT DEFAULT 'merchant'"],
+    ["orders", "merchant_id", "TEXT"],
+    ["orders", "qr_code_id", "TEXT"],
+    ["orders", "qr_kind", "TEXT"],
+    ["orders", "qr_label", "TEXT"],
+    ["orders", "merchant_deleted_at", "TEXT"],
   ];
-  for (const [name, type] of columns) {
+  for (const [table, name, type] of columns) {
     try {
-      await db.prepare(`SELECT ${name} FROM merchants LIMIT 1`).first();
+      await db.prepare(`SELECT ${name} FROM ${table} LIMIT 1`).first();
     } catch {
       try {
-        await db.exec(`ALTER TABLE merchants ADD COLUMN ${name} ${type}`);
+        await db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
       } catch {
-        // column raced into existence or table missing; ensureD1Tables handles the latter
+        // column raced into existence, or the table is created later by ensureD1Tables
       }
     }
   }
-  merchantColumnsChecked = true;
+  appColumnsChecked = true;
 }
 
 // ----------------------------------------------------
@@ -892,8 +903,20 @@ async function syncPaymentDomainRecord(
   };
 }
 
-export async function ensureD1Tables(db: D1Database): Promise<void> {
-  if (d1Initialized) return;
+let d1InitInFlight: Promise<void> | null = null;
+
+/** Initialises tables once per Worker instance; parallel first requests share a single run. */
+export function ensureD1Tables(db: D1Database): Promise<void> {
+  if (d1Initialized) return Promise.resolve();
+  if (!d1InitInFlight) {
+    d1InitInFlight = initD1Tables(db).finally(() => {
+      d1InitInFlight = null;
+    });
+  }
+  return d1InitInFlight;
+}
+
+async function initD1Tables(db: D1Database): Promise<void> {
   try {
     const statements = [
       `CREATE TABLE IF NOT EXISTS merchants (
@@ -1088,7 +1111,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
   const env = (rawEnv || {}) as AppEnv;
   if (env.DB) {
     await ensureD1Tables(env.DB);
-    await ensureMerchantColumns(env.DB);
+    await ensureAppColumns(env.DB);
   }
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api/, "");
@@ -1620,7 +1643,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       };
 
       if (env.DB) {
-        await ensureMerchantColumns(env.DB);
+        await ensureAppColumns(env.DB);
         const merchant = await env.DB.prepare(
           "SELECT id, phone_number, email, business_name, password_hash FROM merchants WHERE phone_number = ? OR phone_number = ? OR email = ?",
         )
@@ -1701,7 +1724,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       const now = new Date().toISOString();
 
       if (env.DB) {
-        await ensureMerchantColumns(env.DB);
+        await ensureAppColumns(env.DB);
         const merchant = await env.DB.prepare(
           "SELECT id, phone_number, email FROM merchants WHERE id = ?",
         )
@@ -2682,7 +2705,6 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
         // Check if requester has Admin credentials
         const isAdmin = qrAdmin;
-        const authHeader = (request.headers.get("Authorization") || "").trim();
 
         // A merchant can only create stands for themselves: ownership comes from the session,
         // not from owner_id / phone_number in the request body.
@@ -2699,21 +2721,6 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           }
           ownerId = qrSession.sub;
           phone = qrSession.phone || qrSession.sub;
-        }
-
-        // Enforce Authentication: unauthenticated guests cannot create QR codes
-        if (
-          !isAdmin &&
-          (!authHeader || ownerId === "unassigned" || (!body.owner_id && !body.phone_number))
-        ) {
-          return jsonResponse(
-            {
-              error: "UNAUTHORIZED",
-              detail:
-                "Authentication is required to generate payment QR codes. Please sign in or create an account.",
-            },
-            401,
-          );
         }
 
         // ENFORCE SINGLE GENERATION & IN-PLACE DYNAMIC UPDATES:
@@ -3539,29 +3546,47 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 4C. ORDERS: Physical Stands & Stickers Checkout
     // ----------------------------------------------------
     if (path === "/orders" && request.method === "POST") {
+      // An order is always for one of the merchant's own generated payment QRs, so the printer
+      // knows exactly what to design (online smart stand vs offline USSD code, which network).
+      const orderSession = await getSession(request, env);
+      if (!orderSession) {
+        return jsonResponse(
+          { detail: "Please sign in and generate a payment QR before placing an order." },
+          401,
+        );
+      }
+
       const body = (await request.json().catch(() => ({}))) as {
+        qr_code_id?: string;
         customer_name?: string;
         customer_phone?: string;
-        business_name?: string;
         delivery_location?: string;
         item_type?: string;
         quantity?: number;
-        total_price?: number;
         notes?: string;
-        network?: string;
-        dial_code?: string;
       };
 
+      const qrCodeId = (body.qr_code_id || "").trim();
       const customerName = (body.customer_name || "").trim().slice(0, 100);
       const customerPhone = (body.customer_phone || "").trim().slice(0, 32);
-      const businessName = (body.business_name || "").trim().slice(0, 120);
       const deliveryLocation = (body.delivery_location || "").trim().slice(0, 300);
       const itemType = (body.item_type || "acrylic_stand").trim();
       const notes = (body.notes || "").trim().slice(0, 1000) || null;
-      const network = (body.network || "").trim().slice(0, 40) || null;
-      const dialCode = (body.dial_code || "").trim().slice(0, 64) || null;
 
-      // The catalog decides what an order costs; total_price from the client is ignored.
+      if (!qrCodeId) {
+        return jsonResponse(
+          { detail: "Choose which of your generated payment QR codes this order is for." },
+          400,
+        );
+      }
+      if (!customerName || !customerPhone || !deliveryLocation) {
+        return jsonResponse(
+          { detail: "Please provide your name, phone number, and delivery location in Kigali." },
+          400,
+        );
+      }
+
+      // The catalog decides what an order costs; any price sent by the client is ignored.
       if (!isCatalogItem(itemType)) {
         return jsonResponse({ detail: "Unknown product." }, 400);
       }
@@ -3574,8 +3599,33 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
       const totalPrice = ORDER_UNIT_PRICES[itemType] * quantity;
 
-      // Checkout is open to guests, so cap how many orders one phone / IP can place per hour.
+      // The QR must exist and belong to the caller; its details are copied onto the order.
+      const qr: Partial<MemQrCode> | null = env.DB
+        ? await env.DB.prepare(
+            "SELECT id, owner_id, phone_number, business_name, network, dial_code, is_dynamic FROM qr_codes WHERE id = ?",
+          )
+            .bind(qrCodeId)
+            .first<MemQrCode>()
+        : memQrCodes.find((q) => q.id === qrCodeId) || null;
+      if (!qr) {
+        return jsonResponse({ detail: "That payment QR code was not found." }, 404);
+      }
+      if (!ownsRecord(orderSession, qr)) {
+        return jsonResponse({ detail: "You can only order for your own payment QR codes." }, 403);
+      }
+      const qrKind: "online" | "offline" = qr.is_dynamic ? "online" : "offline";
+      const businessName = (qr.business_name || customerName).slice(0, 120);
+      const network = (qr.network || "").slice(0, 40) || null;
+      const dialCode = (qr.dial_code || "").slice(0, 64) || null;
+      const qrLabel = `${businessName} · ${network || "Mobile Money"} · ${qrKind === "online" ? "Online (smart stand)" : "Offline (USSD)"}`;
+
+      // Cap how many orders one merchant / phone / IP can place per hour.
       const orderIp = clientIp(request);
+      const orderMerchantCount = await rateLimitHit(
+        env,
+        `order-merchant:${orderSession.sub}`,
+        ORDER_WINDOW_MS,
+      );
       const orderPhoneCount = await rateLimitHit(
         env,
         `order:${customerPhone.replace(/[^0-9+]/g, "")}`,
@@ -3584,15 +3634,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       const orderIpCount = orderIp
         ? await rateLimitHit(env, `order-ip:${orderIp}`, ORDER_WINDOW_MS)
         : 0;
-      if (orderPhoneCount > ORDER_MAX_PER_PHONE || orderIpCount > ORDER_MAX_PER_IP) {
+      if (
+        orderMerchantCount > ORDER_MAX_PER_PHONE ||
+        orderPhoneCount > ORDER_MAX_PER_PHONE ||
+        orderIpCount > ORDER_MAX_PER_IP
+      ) {
         return tooManyAttempts(3600, "Too many orders placed recently. Please try again later.");
-      }
-
-      if (!customerName || !customerPhone || !deliveryLocation) {
-        return jsonResponse(
-          { detail: "Please provide your name, phone number, and delivery location in Kigali." },
-          400,
-        );
       }
 
       const id = crypto.randomUUID();
@@ -3614,6 +3661,11 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         network,
         dial_code: dialCode,
         status: "pending",
+        merchant_id: orderSession.sub,
+        qr_code_id: qrCodeId,
+        qr_kind: qrKind,
+        qr_label: qrLabel,
+        merchant_deleted_at: null,
         created_at: now,
         updated_at: now,
       };
@@ -3625,8 +3677,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         for (let attempt = 0; attempt < 3 && !saved; attempt++) {
           try {
             await env.DB.prepare(
-              "INSERT INTO orders (id, order_number, customer_name, customer_phone, business_name, delivery_location, item_type, quantity, total_price, notes, network, dial_code, status) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+              "INSERT INTO orders (id, order_number, customer_name, customer_phone, business_name, delivery_location, item_type, quantity, total_price, notes, network, dial_code, status, merchant_id, qr_code_id, qr_kind, qr_label) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
             )
               .bind(
                 id,
@@ -3641,6 +3693,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 notes,
                 network,
                 dialCode,
+                orderSession.sub,
+                qrCodeId,
+                qrKind,
+                qrLabel,
               )
               .run();
             saved = true;
@@ -3677,33 +3733,35 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         return jsonResponse({ detail: "Please sign in to view orders." }, 401);
       }
       const adminPhone = ordersAdmin ? url.searchParams.get("phone") : null;
-      // Orders store the phone as typed (+250…, 250…, 07…), so match every form of the session phone.
+      // Orders placed before orders were tied to a QR only have the phone as typed (+250…, 250…, 07…).
       const ownPhones = ordersSession
         ? Array.from(sessionIdentities(ordersSession)).filter((v) => /^\+?\d{8,}$/.test(v))
         : [];
-      if (ordersSession && ownPhones.length === 0) return jsonResponse([]);
 
       if (env.DB) {
         try {
           if (ordersSession) {
             const marks = ownPhones.map(() => "?").join(", ");
+            const legacy = ownPhones.length
+              ? ` OR (merchant_id IS NULL AND customer_phone IN (${marks}))`
+              : "";
             const rows = await env.DB.prepare(
-              `SELECT * FROM orders WHERE customer_phone IN (${marks}) ORDER BY created_at DESC LIMIT 50`,
+              `SELECT * FROM orders WHERE merchant_deleted_at IS NULL AND (merchant_id = ?${legacy}) ORDER BY created_at DESC LIMIT 100`,
             )
-              .bind(...ownPhones)
+              .bind(ordersSession.sub, ...ownPhones)
               .all();
             return jsonResponse(rows.results || []);
           }
           if (adminPhone) {
             const rows = await env.DB.prepare(
-              "SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 50",
+              "SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 100",
             )
               .bind(adminPhone)
               .all();
             return jsonResponse(rows.results || []);
           }
           const rows = await env.DB.prepare(
-            "SELECT * FROM orders ORDER BY created_at DESC LIMIT 50",
+            "SELECT * FROM orders ORDER BY created_at DESC LIMIT 100",
           ).all();
           return jsonResponse(rows.results || []);
         } catch {
@@ -3712,12 +3770,125 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       if (ordersSession) {
-        return jsonResponse(memOrders.filter((o) => ownPhones.includes(o.customer_phone)));
+        return jsonResponse(
+          memOrders.filter(
+            (o) =>
+              !o.merchant_deleted_at &&
+              (o.merchant_id === ordersSession.sub ||
+                (!o.merchant_id && ownPhones.includes(o.customer_phone))),
+          ),
+        );
       }
       if (adminPhone) {
         return jsonResponse(memOrders.filter((o) => o.customer_phone === adminPhone));
       }
       return jsonResponse(memOrders);
+    }
+
+    // Delete an order. Merchants: not while it is being processed (wait until it is delivered);
+    // a still-pending order is cancelled. Admins: only finished (delivered / cancelled) orders.
+    if (
+      (path === "/orders" && request.method === "DELETE") ||
+      (path === "/orders/delete" && request.method === "POST")
+    ) {
+      const delAdmin = await verifyAdminAuth(request, env);
+      const delSession = delAdmin ? null : await getSession(request, env);
+      if (!delAdmin && !delSession) {
+        return jsonResponse({ detail: "Please sign in to manage your orders." }, 401);
+      }
+      let delId = url.searchParams.get("id");
+      if (!delId) {
+        const delBody = (await request.json().catch(() => ({}))) as { id?: string };
+        delId = delBody.id || null;
+      }
+      if (!delId) {
+        return jsonResponse({ detail: "Order ID required." }, 400);
+      }
+
+      type OrderRow = Pick<
+        MemOrder,
+        "id" | "status" | "merchant_id" | "customer_phone" | "merchant_deleted_at"
+      >;
+      const row: OrderRow | null = env.DB
+        ? await env.DB.prepare(
+            "SELECT id, status, merchant_id, customer_phone, merchant_deleted_at FROM orders WHERE id = ?",
+          )
+            .bind(delId)
+            .first<OrderRow>()
+        : memOrders.find((o) => o.id === delId) || null;
+      if (!row) {
+        return jsonResponse({ detail: "Order not found." }, 404);
+      }
+
+      if (delSession) {
+        const ownPhones = Array.from(sessionIdentities(delSession));
+        const mine =
+          row.merchant_id === delSession.sub ||
+          (!row.merchant_id && ownPhones.includes(row.customer_phone));
+        if (!mine || row.merchant_deleted_at) {
+          return jsonResponse({ detail: "Order not found." }, 404);
+        }
+      }
+
+      if (row.status === "processing") {
+        return jsonResponse(
+          {
+            error: "ORDER_IN_PROGRESS",
+            detail: "This order is being processed. You can delete it once it has been delivered.",
+          },
+          409,
+        );
+      }
+      if (delAdmin && row.status === "pending") {
+        return jsonResponse(
+          {
+            error: "ORDER_NOT_COMPLETE",
+            detail: "Only delivered or cancelled orders can be deleted. Cancel it first.",
+          },
+          409,
+        );
+      }
+
+      const now = new Date().toISOString();
+      if (delAdmin) {
+        // Finished orders only: remove the record entirely.
+        if (env.DB) {
+          await env.DB.prepare(
+            "DELETE FROM orders WHERE id = ? AND status IN ('delivered', 'cancelled')",
+          )
+            .bind(delId)
+            .run();
+        } else {
+          const idx = memOrders.findIndex((o) => o.id === delId);
+          if (idx !== -1) memOrders.splice(idx, 1);
+        }
+        return jsonResponse({ success: true, message: "Order deleted." });
+      }
+
+      // Merchant delete: hide it from their list but keep the record for fulfilment / accounting.
+      // A pending order that was never started is cancelled so the printer does not make it.
+      const newStatus = row.status === "pending" ? "cancelled" : row.status;
+      if (env.DB) {
+        await env.DB.prepare(
+          "UPDATE orders SET status = ?, merchant_deleted_at = ?, updated_at = ? WHERE id = ? AND status != 'processing'",
+        )
+          .bind(newStatus, now, now, delId)
+          .run();
+      } else {
+        const ord = memOrders.find((o) => o.id === delId);
+        if (ord) {
+          ord.status = newStatus as MemOrder["status"];
+          ord.merchant_deleted_at = now;
+          ord.updated_at = now;
+        }
+      }
+      return jsonResponse({
+        success: true,
+        message:
+          row.status === "pending"
+            ? "Order cancelled and removed."
+            : "Order removed from your list.",
+      });
     }
 
     // ----------------------------------------------------
@@ -3730,58 +3901,42 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
       if (env.DB) {
         try {
-          const merchantsCount =
-            (
-              await env.DB.prepare("SELECT count(*) as count FROM merchants").first<{
-                count: number;
-              }>()
-            )?.count || 0;
-
-          const qrCount =
-            (
-              await env.DB.prepare("SELECT count(*) as count FROM qr_codes").first<{
-                count: number;
-              }>()
-            )?.count || 0;
-
-          const inquiriesTotal =
-            (
-              await env.DB.prepare("SELECT count(*) as count FROM inquiries").first<{
-                count: number;
-              }>()
-            )?.count || 0;
-
-          const inquiriesNew =
-            (
-              await env.DB.prepare(
-                "SELECT count(*) as count FROM inquiries WHERE status = 'new'",
-              ).first<{ count: number }>()
-            )?.count || 0;
-
-          const ordersTotal =
-            (
-              await env.DB.prepare("SELECT count(*) as count FROM orders").first<{
-                count: number;
-              }>()
-            )?.count || 0;
-
-          const ordersPending =
-            (
-              await env.DB.prepare(
-                "SELECT count(*) as count FROM orders WHERE status = 'pending'",
-              ).first<{ count: number }>()
-            )?.count || 0;
-
-          const downloadsTotal =
-            (
-              await env.DB.prepare("SELECT count(*) as count FROM download_events").first<{
-                count: number;
-              }>()
-            )?.count || 0;
-
-          const networks = await env.DB.prepare(
-            "SELECT network, count(*) as count FROM qr_codes GROUP BY network",
-          ).all<{ network: string; count: number }>();
+          // Independent counts run in parallel instead of one round-trip after another.
+          const [
+            merchantsRow,
+            qrRow,
+            inquiriesRow,
+            inquiriesNewRow,
+            ordersRow,
+            ordersPendingRow,
+            downloadsRow,
+            networks,
+          ] = await Promise.all([
+            env.DB.prepare("SELECT count(*) as count FROM merchants").first<{ count: number }>(),
+            env.DB.prepare("SELECT count(*) as count FROM qr_codes").first<{ count: number }>(),
+            env.DB.prepare("SELECT count(*) as count FROM inquiries").first<{ count: number }>(),
+            env.DB.prepare("SELECT count(*) as count FROM inquiries WHERE status = 'new'").first<{
+              count: number;
+            }>(),
+            env.DB.prepare("SELECT count(*) as count FROM orders").first<{ count: number }>(),
+            env.DB.prepare("SELECT count(*) as count FROM orders WHERE status = 'pending'").first<{
+              count: number;
+            }>(),
+            env.DB.prepare("SELECT count(*) as count FROM download_events").first<{
+              count: number;
+            }>(),
+            env.DB.prepare("SELECT network, count(*) as count FROM qr_codes GROUP BY network").all<{
+              network: string;
+              count: number;
+            }>(),
+          ]);
+          const merchantsCount = merchantsRow?.count || 0;
+          const qrCount = qrRow?.count || 0;
+          const inquiriesTotal = inquiriesRow?.count || 0;
+          const inquiriesNew = inquiriesNewRow?.count || 0;
+          const ordersTotal = ordersRow?.count || 0;
+          const ordersPending = ordersPendingRow?.count || 0;
+          const downloadsTotal = downloadsRow?.count || 0;
 
           const networkStats = (networks.results || []).reduce<Record<string, number>>(
             (acc, row) => {
@@ -4326,6 +4481,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         };
         if (!body.id || !body.status) {
           return jsonResponse({ detail: "Order ID and status required." }, 400);
+        }
+        if (!["pending", "processing", "delivered", "cancelled"].includes(body.status)) {
+          return jsonResponse({ detail: "Invalid order status." }, 400);
         }
 
         const now = new Date().toISOString();
