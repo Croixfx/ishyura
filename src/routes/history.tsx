@@ -85,6 +85,16 @@ function HistoryPage() {
     }
   }, [loadPayments, loadOrders]);
 
+  useEffect(() => {
+    if (search.tab) setTab(search.tab);
+    if (search.placed) {
+      setNotice({
+        ok: true,
+        text: `Order ${search.placed} received. Our team will call you to confirm delivery.`,
+      });
+    }
+  }, [search.tab, search.placed]);
+
   const handleDeleteOrder = async (order: OrderRecord) => {
     setNotice(null);
     setDeletingId(order.id);
