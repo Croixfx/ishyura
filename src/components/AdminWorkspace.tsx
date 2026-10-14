@@ -54,6 +54,7 @@ import {
   type InquiryRecord,
   type OrderRecord,
   type DownloadEventRecord,
+  type AuditEventRecord,
   type AdminUserRecord,
   type QRCodeRecord,
   type UserProfile,
@@ -67,6 +68,25 @@ interface AdminWorkspaceProps {
   onTabChange?: (tab: string) => void;
 }
 
+/** Plain-words label for one audit entry. */
+function describeAuditEvent(ev: AuditEventRecord): string {
+  const thing = ev.kind === "nfc_stand" ? "Smart stand (QR + NFC)" : "Payment QR card";
+  switch (ev.event_type) {
+    case "qr_created":
+      return `${thing} created`;
+    case "qr_deleted":
+      return `${thing} deleted`;
+    case "card_exported":
+      return "Card exported";
+    case "account_deactivated":
+      return "Account deactivated";
+    case "account_reactivated":
+      return "Account reactivated";
+    default:
+      return ev.event_type;
+  }
+}
+
 export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWorkspaceProps) {
   const adminKey = currentUser.access_token || IshyuraClient.getToken() || "";
 
@@ -78,6 +98,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
   const [merchants, setMerchants] = useState<MerchantRecord[]>([]);
   const [systemAdmins, setSystemAdmins] = useState<AdminUserRecord[]>([]);
   const [downloads, setDownloads] = useState<DownloadEventRecord[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEventRecord[]>([]);
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequestRecord[]>([]);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [reviewToast, setReviewToast] = useState<string | null>(null);
@@ -178,8 +199,12 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
             break;
           }
           case "logs": {
-            const data = await IshyuraClient.getAdminDownloads(adminKey).catch(() => []);
+            const [data, audit] = await Promise.all([
+              IshyuraClient.getAdminDownloads(adminKey).catch(() => []),
+              IshyuraClient.getAdminAudit(adminKey).catch(() => []),
+            ]);
             setDownloads(data);
+            setAuditEvents(audit);
             break;
           }
           case "approvals": {
@@ -243,6 +268,56 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
       }
     } catch (err) {
       console.error("Failed to update inquiry status", err);
+    }
+  };
+
+  // Free a merchant account from the phones/browsers it is tied to (one-device-one-account rule)
+  const [clearingDeviceFor, setClearingDeviceFor] = useState<string | null>(null);
+  const handleClearDevices = async (merchantId: string) => {
+    setClearingDeviceFor(merchantId);
+    try {
+      await IshyuraClient.adminClearDeviceLinks(adminKey, merchantId);
+      setUnlockMsg("Devices released. This account can now sign in from a new phone or browser.");
+      setTimeout(() => setUnlockMsg(null), 4000);
+    } catch (err) {
+      console.error("Failed to clear device links", err);
+    } finally {
+      setClearingDeviceFor(null);
+    }
+  };
+
+  // Deactivate / reactivate a merchant account (a deactivated account is signed out and cannot sign in)
+  const [deactivateTarget, setDeactivateTarget] = useState<MerchantRecord | null>(null);
+  const [deactivateReason, setDeactivateReason] = useState("");
+  const [changingAccountFor, setChangingAccountFor] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
+
+  const applyAccountChange = async (merchant: MerchantRecord, deactivate: boolean) => {
+    setChangingAccountFor(merchant.id);
+    setAccountError(null);
+    try {
+      const res = deactivate
+        ? await IshyuraClient.adminDeactivateMerchant(adminKey, merchant.id, deactivateReason)
+        : await IshyuraClient.adminReactivateMerchant(adminKey, merchant.id);
+      setMerchants((prev) =>
+        prev.map((m) =>
+          m.id === merchant.id
+            ? {
+                ...m,
+                deactivated_at: deactivate ? new Date().toISOString() : null,
+                deactivated_reason: deactivate ? deactivateReason.trim() || null : null,
+              }
+            : m,
+        ),
+      );
+      setUnlockMsg(res.message);
+      setTimeout(() => setUnlockMsg(null), 4000);
+      setDeactivateTarget(null);
+      setDeactivateReason("");
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : "Could not change this account.");
+    } finally {
+      setChangingAccountFor(null);
     }
   };
 
@@ -1232,6 +1307,11 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
         {/* TAB 4: MERCHANTS DIRECTORY */}
         {activeTab === "merchants" && (
           <div className="space-y-3">
+            {unlockMsg && (
+              <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                {unlockMsg}
+              </div>
+            )}
             {filteredMerchants.length === 0 ? (
               <div className="p-12 rounded-2xl border border-dashed border-border/80 text-center bg-card/20 space-y-2">
                 <Users className="size-8 mx-auto text-muted-foreground/40" />
@@ -1247,6 +1327,8 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                         <th className="p-3">Email Address</th>
                         <th className="p-3">Account Status</th>
                         <th className="p-3">Registered Date</th>
+                        <th className="p-3 text-right">Access</th>
+                        <th className="p-3 text-right">Devices</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/40">
@@ -1262,12 +1344,61 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                           </td>
                           <td className="p-3 text-muted-foreground">{merchant.email || "—"}</td>
                           <td className="p-3">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                              Active Merchant
-                            </span>
+                            {merchant.deactivated_at ? (
+                              <span
+                                title={merchant.deactivated_reason || "Deactivated by an admin"}
+                                className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                              >
+                                Deactivated
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                Active Merchant
+                              </span>
+                            )}
                           </td>
                           <td className="p-3 text-muted-foreground">
                             {new Date(merchant.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="p-3 text-right">
+                            {merchant.role === "admin" ? (
+                              <span className="text-[10px] text-muted-foreground">Admin</span>
+                            ) : merchant.deactivated_at ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={changingAccountFor === merchant.id}
+                                onClick={() => applyAccountChange(merchant, false)}
+                                className="h-7 text-[11px] rounded-lg px-2"
+                              >
+                                Reactivate
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  setAccountError(null);
+                                  setDeactivateReason("");
+                                  setDeactivateTarget(merchant);
+                                }}
+                                className="h-7 text-[11px] rounded-lg px-2 text-rose-600 hover:text-rose-700"
+                              >
+                                Deactivate
+                              </Button>
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={clearingDeviceFor === merchant.id}
+                              onClick={() => handleClearDevices(merchant.id)}
+                              title="Forget the phones and browsers this account is tied to, so it can sign in from a new device"
+                              className="h-7 text-[11px] rounded-lg px-2"
+                            >
+                              Release devices
+                            </Button>
                           </td>
                         </tr>
                       ))}
@@ -1351,39 +1482,117 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
 
         {/* TAB 6: AUDIT & EXPORT LOGS */}
         {activeTab === "logs" && (
-          <div className="space-y-3">
-            {downloads.length === 0 ? (
+          <div className="space-y-5">
+            {auditEvents.length === 0 && downloads.length === 0 ? (
               <div className="p-12 rounded-2xl border border-dashed border-border/80 text-center bg-card/20 space-y-2">
                 <Clock className="size-8 mx-auto text-muted-foreground/40" />
-                <p className="text-sm font-bold text-foreground">No export events logged yet</p>
+                <p className="text-sm font-bold text-foreground">Nothing logged yet</p>
+                <p className="text-xs text-muted-foreground">
+                  Cards created or deleted, exports and account changes will appear here with the
+                  owner they belong to.
+                </p>
               </div>
-            ) : (
+            ) : null}
+
+            {auditEvents.length > 0 && (
               <div className="rounded-2xl border border-border/70 overflow-hidden bg-card/30">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-muted/50 border-b border-border/60 text-muted-foreground font-bold">
                       <tr>
-                        <th className="p-3">Shop / Business</th>
-                        <th className="p-3">Network</th>
-                        <th className="p-3">Dial Code</th>
-                        <th className="p-3">Export Timestamp</th>
+                        <th className="p-3">When</th>
+                        <th className="p-3">What happened</th>
+                        <th className="p-3">Owner</th>
+                        <th className="p-3">Card / Stand</th>
+                        <th className="p-3">Done by</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-border/40 font-mono">
-                      {downloads.slice(0, 50).map((dl) => (
-                        <tr key={dl.id} className="hover:bg-muted/20 transition-colors">
-                          <td className="p-3 font-sans font-bold text-foreground">
-                            {dl.business_name}
+                    <tbody className="divide-y divide-border/40">
+                      {auditEvents.map((ev) => (
+                        <tr key={ev.id} className="hover:bg-muted/20 transition-colors align-top">
+                          <td className="p-3 text-muted-foreground whitespace-nowrap">
+                            {new Date(ev.created_at).toLocaleString()}
                           </td>
-                          <td className="p-3">{dl.network}</td>
-                          <td className="p-3 text-primary font-bold">{dl.dial_code}</td>
-                          <td className="p-3 text-muted-foreground font-sans">
-                            {new Date(dl.created_at).toLocaleString()}
+                          <td className="p-3 font-bold text-foreground">
+                            {describeAuditEvent(ev)}
+                            {ev.detail ? (
+                              <span className="block text-[10px] font-normal text-muted-foreground">
+                                {ev.detail}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="p-3">
+                            {ev.owner_id || ev.owner_phone ? (
+                              <div className="space-y-0.5">
+                                <p className="font-bold text-foreground">
+                                  {ev.owner_name || ev.owner_phone || "Unknown merchant"}
+                                </p>
+                                {ev.owner_name && ev.owner_phone ? (
+                                  <p className="text-muted-foreground">{ev.owner_phone}</p>
+                                ) : null}
+                                {ev.owner_email ? (
+                                  <p className="text-muted-foreground">{ev.owner_email}</p>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">Guest (not signed in)</span>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            {ev.label || ev.dial_code ? (
+                              <div className="space-y-0.5">
+                                <p className="font-bold text-foreground">{ev.label || "—"}</p>
+                                {ev.dial_code ? (
+                                  <p className="font-mono text-primary">{ev.dial_code}</p>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="p-3 text-muted-foreground capitalize">
+                            {ev.actor_role || "system"}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+
+            {downloads.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Earlier exports (before owners were recorded)
+                </p>
+                <div className="rounded-2xl border border-border/70 overflow-hidden bg-card/30">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-muted/50 border-b border-border/60 text-muted-foreground font-bold">
+                        <tr>
+                          <th className="p-3">Shop / Business</th>
+                          <th className="p-3">Network</th>
+                          <th className="p-3">Dial Code</th>
+                          <th className="p-3">Export Timestamp</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/40 font-mono">
+                        {downloads.slice(0, 50).map((dl) => (
+                          <tr key={dl.id} className="hover:bg-muted/20 transition-colors">
+                            <td className="p-3 font-sans font-bold text-foreground">
+                              {dl.business_name}
+                            </td>
+                            <td className="p-3">{dl.network}</td>
+                            <td className="p-3 text-primary font-bold">{dl.dial_code}</td>
+                            <td className="p-3 text-muted-foreground font-sans">
+                              {new Date(dl.created_at).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
@@ -2022,6 +2231,61 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Deactivate account confirmation */}
+      <Dialog
+        open={Boolean(deactivateTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeactivateTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md bg-card border-border/80">
+          <DialogHeader>
+            <DialogTitle className="text-base font-extrabold text-destructive">
+              Deactivate this account?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              {deactivateTarget?.email || deactivateTarget?.phone_number} will be signed out and
+              will not be able to sign in or use the app until you reactivate the account. Their
+              saved cards and records are kept.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="deactivate-reason" className="text-xs font-semibold">
+              Reason (optional, shown only to admins)
+            </Label>
+            <Input
+              id="deactivate-reason"
+              value={deactivateReason}
+              onChange={(e) => setDeactivateReason(e.target.value)}
+              maxLength={300}
+              placeholder="e.g. Fake business name reported by a customer"
+              className="text-xs h-10"
+            />
+          </div>
+          {accountError && <p className="text-xs font-semibold text-destructive">{accountError}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeactivateTarget(null)}
+              className="rounded-xl text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={!deactivateTarget || changingAccountFor === deactivateTarget.id}
+              onClick={() => deactivateTarget && applyAccountChange(deactivateTarget, true)}
+              className="rounded-xl text-xs font-bold bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deactivateTarget && changingAccountFor === deactivateTarget.id
+                ? "Deactivating..."
+                : "Yes, deactivate"}
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

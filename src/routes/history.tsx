@@ -14,11 +14,14 @@ import {
 
 interface HistorySearch {
   tab?: "payments" | "orders";
+  /** Order number just placed: shown as a confirmation above the list. */
+  placed?: string;
 }
 
 export const Route = createFileRoute("/history")({
   validateSearch: (search: Record<string, unknown>): HistorySearch => ({
     tab: search.tab === "orders" ? "orders" : search.tab === "payments" ? "payments" : undefined,
+    placed: typeof search.placed === "string" && search.placed ? search.placed : undefined,
   }),
   head: () => ({
     meta: [
@@ -43,7 +46,14 @@ function HistoryPage() {
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(
+    search.placed
+      ? {
+          ok: true,
+          text: `Order ${search.placed} received. Our team will call you to confirm delivery.`,
+        }
+      : null,
+  );
 
   const loadPayments = useCallback(async (user: UserProfile | null) => {
     if (!user) return;

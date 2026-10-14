@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import React, { useState, useEffect } from "react";
 import {
   Package,
@@ -166,6 +166,7 @@ const PHYSICAL_PRODUCTS: Array<{
 ];
 
 export function OrdersPage() {
+  const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<OrderItemType>("acrylic_stand");
   const [quantity, setQuantity] = useState(1);
@@ -294,7 +295,11 @@ export function OrdersPage() {
       if (!result.order) {
         throw new Error("The order was saved but could not be displayed. Check My Orders.");
       }
-      setSubmitSuccess(result.order);
+      // Straight to the orders list, where the new order is already listed.
+      await navigate({
+        to: "/history",
+        search: { tab: "orders", placed: result.order.order_number },
+      });
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : "Failed to place order.");
     } finally {

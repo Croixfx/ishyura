@@ -20,13 +20,21 @@ const vite = await createServer({
   appType: "custom",
 });
 
-const [{ buildRwandaUssdString }, { buildStandPayloads }, identity, { PaymentQrCode }] =
-  await Promise.all([
-    vite.ssrLoadModule("/src/lib/momo-formatters.ts"),
-    vite.ssrLoadModule("/src/lib/payment/payload.ts"),
-    vite.ssrLoadModule("/src/lib/payment/identity.ts"),
-    vite.ssrLoadModule("/src/components/PaymentQrCode.tsx"),
-  ]);
+const [
+  { buildRwandaUssdString },
+  { buildStandPayloads },
+  identity,
+  { PaymentQrCode },
+  { PLATFORM_MOMO_CODE, PLATFORM_PAYEE_NAME },
+  { MONETIZATION_PRICES },
+] = await Promise.all([
+  vite.ssrLoadModule("/src/lib/momo-formatters.ts"),
+  vite.ssrLoadModule("/src/lib/payment/payload.ts"),
+  vite.ssrLoadModule("/src/lib/payment/identity.ts"),
+  vite.ssrLoadModule("/src/components/PaymentQrCode.tsx"),
+  vite.ssrLoadModule("/src/lib/payment/platform-payee.ts"),
+  vite.ssrLoadModule("/src/lib/payment/types.ts"),
+]);
 
 test("MTN fixed-amount merchant instruction keeps existing USSD syntax", () => {
   assert.equal(
@@ -141,4 +149,33 @@ test("static stand markup retains a single offline QR", () => {
 
 test.after(async () => {
   await vite.close();
+});
+
+test("Ishyura's own fees are paid to MoMo code 729710, registered under Jean De La Croix", () => {
+  assert.equal(PLATFORM_MOMO_CODE, "729710");
+  assert.equal(PLATFORM_PAYEE_NAME, "Jean De La Croix");
+});
+
+test("the fee QR carries the exact amount already filled in for every fee", () => {
+  for (const price of Object.values(MONETIZATION_PRICES)) {
+    const payloads = buildStandPayloads({
+      standId: "ishyura-fee",
+      publicId: null,
+      configVersion: 1,
+      isDynamic: false,
+      network: "MTN MoMo",
+      paymentType: "momo_code",
+      destination: PLATFORM_MOMO_CODE,
+      amount: price,
+    });
+    const expected = `*182*8*1*729710*${price}#`;
+    assert.equal(
+      buildRwandaUssdString("MTN MoMo", "momo_code", PLATFORM_MOMO_CODE, price),
+      expected,
+    );
+    assert.ok(
+      decodeURIComponent(payloads.qrValue).includes(expected),
+      `QR for ${price} RWF should dial ${expected}, got ${payloads.qrValue}`,
+    );
+  }
 });

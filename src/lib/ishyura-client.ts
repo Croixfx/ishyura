@@ -21,6 +21,51 @@ export function isKnownAdminEmail(email?: string | null): boolean {
   return KNOWN_ADMIN_EMAILS.has(email.trim().toLowerCase());
 }
 
+const DEVICE_ID_KEY = "ishyura_device_id";
+let memoryDeviceId: string | null = null;
+
+/**
+ * A random id for this browser, kept in localStorage and mirrored in a cookie. It is sent when
+ * signing in so the server can tell that one phone or browser is not being used for two merchant
+ * accounts. It identifies a browser, not a person, and is never shown to anyone.
+ */
+export function getDeviceId(): string {
+  if (typeof window === "undefined") return "";
+  const fromCookie = () =>
+    document.cookie.match(/(?:^|;\s*)ishyura_did=([A-Za-z0-9_-]{16,64})/)?.[1];
+  let id: string | null | undefined = null;
+  try {
+    id = localStorage.getItem(DEVICE_ID_KEY);
+  } catch {
+    // storage blocked: fall back to the cookie / memory
+  }
+  id = id || fromCookie() || memoryDeviceId;
+  if (!id || !/^[A-Za-z0-9_-]{16,64}$/.test(id)) {
+    id = (crypto.randomUUID?.() || `d${Date.now()}${Math.random().toString(36).slice(2)}`).replace(
+      /[^A-Za-z0-9_-]/g,
+      "",
+    );
+    if (id.length < 16) id = id.padEnd(16, "x");
+  }
+  memoryDeviceId = id;
+  try {
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  } catch {
+    // ignore
+  }
+  try {
+    document.cookie = `ishyura_did=${id}; Max-Age=31536000; Path=/; SameSite=Lax`;
+  } catch {
+    // ignore
+  }
+  return id;
+}
+
+function deviceHeaders(): Record<string, string> {
+  const id = getDeviceId();
+  return id ? { "x-device-id": id } : {};
+}
+
 /** True for something that looks like a real phone number (8-15 digits), not an email or placeholder. */
 export function isRealPhoneNumber(value?: string | null): boolean {
   if (!value) return false;
@@ -258,10 +303,40 @@ export interface MerchantRecord {
   phone_number: string;
   is_fully_registered: boolean;
   email?: string | null;
+  business_name?: string | null;
+  role?: string | null;
   created_at: string;
   last_active_at: string;
   qr_count?: number;
+  /** Set when an admin has deactivated the account; null/absent while it is active. */
+  deactivated_at?: string | null;
+  deactivated_reason?: string | null;
 }
+
+export type AuditEventType =
+  "qr_created" | "qr_deleted" | "card_exported" | "account_deactivated" | "account_reactivated";
+
+/** One line of the audit trail, naming the owner of the card or account it is about. */
+export interface AuditEventRecord {
+  id: string;
+  event_type: AuditEventType | string;
+  /** "qr" = payment QR card, "nfc_stand" = smart stand (QR + NFC tag). */
+  kind?: "qr" | "nfc_stand" | string | null;
+  qr_id?: string | null;
+  owner_id?: string | null;
+  owner_phone?: string | null;
+  owner_email?: string | null;
+  owner_name?: string | null;
+  actor_id?: string | null;
+  actor_role?: string | null;
+  label?: string | null;
+  dial_code?: string | null;
+  detail?: string | null;
+  created_at: string;
+}
+
+export const ACCOUNT_DEACTIVATED_MESSAGE =
+  "This account has been deactivated by Ishyura. Please contact support if you think this is a mistake.";
 
 const TOKEN_KEY = "ishyura_auth_token";
 const USER_KEY = "ishyura_user_profile";
@@ -375,13 +450,13 @@ export class IshyuraClient {
     try {
       const res = await fetch(getApiEndpoint("auth/request-otp"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...deviceHeaders() },
         body: JSON.stringify({ phone_number: cleanPhone }),
       });
       if (res.ok) {
         return await res.json();
       }
-      if (res.status === 429) {
+      if (res.status === 429 || res.status === 409 || res.status === 403) {
         const err = await res.json().catch(() => ({}));
         rejection = new Error(
           (err as { detail?: string }).detail || "Too many requests. Please wait and try again.",
@@ -420,7 +495,7 @@ export class IshyuraClient {
     try {
       const res = await fetch(getApiEndpoint("auth/verify-otp"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...deviceHeaders() },
         body: JSON.stringify({ phone_number: cleanPhone, otp: otp.trim() }),
       });
       if (res.ok) {
@@ -439,7 +514,13 @@ export class IshyuraClient {
           role,
         };
       }
-      if (res.status === 401 || res.status === 429 || res.status === 503) {
+      if (
+        res.status === 401 ||
+        res.status === 403 ||
+        res.status === 409 ||
+        res.status === 429 ||
+        res.status === 503
+      ) {
         const err = await res.json().catch(() => ({}));
         rejection = new Error((err as { detail?: string }).detail || "Invalid verification code.");
       }
@@ -497,7 +578,7 @@ export class IshyuraClient {
     try {
       const res = await fetch(getApiEndpoint("auth/google"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...deviceHeaders() },
         body: JSON.stringify({
           email,
           name: profile.name,
@@ -507,7 +588,7 @@ export class IshyuraClient {
         }),
       });
 
-      if (res.status === 401 || res.status === 503) {
+      if (res.status === 401 || res.status === 403 || res.status === 409 || res.status === 503) {
         const err = await res.json().catch(() => ({}));
         rejection = new Error(
           (err as { detail?: string }).detail || "Google sign-in could not be verified.",
@@ -549,7 +630,7 @@ export class IshyuraClient {
     const cleanId = identifier.trim();
     const res = await fetch(getApiEndpoint("auth/password-login"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...deviceHeaders() },
       body: JSON.stringify({ identifier: cleanId, password }),
     });
 
@@ -1487,6 +1568,71 @@ export class IshyuraClient {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to delete QR.";
       throw new Error(msg);
+    }
+  }
+
+  /** Admin: stop a merchant account from signing in or using the app. */
+  static async adminDeactivateMerchant(
+    adminKey: string,
+    merchantId: string,
+    reason?: string,
+  ): Promise<{ message: string }> {
+    return this.adminSetMerchantActive(adminKey, merchantId, false, reason);
+  }
+
+  /** Admin: let a deactivated merchant account sign in again. */
+  static async adminReactivateMerchant(
+    adminKey: string,
+    merchantId: string,
+  ): Promise<{ message: string }> {
+    return this.adminSetMerchantActive(adminKey, merchantId, true);
+  }
+
+  private static async adminSetMerchantActive(
+    adminKey: string,
+    merchantId: string,
+    active: boolean,
+    reason?: string,
+  ): Promise<{ message: string }> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
+    const res = await fetch(
+      getApiEndpoint(active ? "admin/merchants/reactivate" : "admin/merchants/deactivate"),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-key": cleanKey },
+        body: JSON.stringify({ merchant_id: merchantId, reason: reason?.trim() || undefined }),
+      },
+    );
+    const body = (await res.json().catch(() => ({}))) as { detail?: string; message?: string };
+    if (!res.ok) {
+      throw new Error(body.detail || "Could not change this account.");
+    }
+    return { message: body.message || "Done." };
+  }
+
+  /** Admin: the audit trail, newest first, with the owner of each QR card or stand. */
+  static async getAdminAudit(adminKey?: string): Promise<AuditEventRecord[]> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
+    const res = await fetch(getApiEndpoint("admin/audit"), {
+      headers: { "x-admin-key": cleanKey },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server returned ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  /** Support: forget which devices a merchant account is tied to. */
+  static async adminClearDeviceLinks(adminKey: string, merchantId: string): Promise<void> {
+    const cleanKey = this.getEffectiveAdminKey(adminKey);
+    const res = await fetch(
+      getApiEndpoint(`admin/device-links?merchant_id=${encodeURIComponent(merchantId)}`),
+      { method: "DELETE", headers: { "x-admin-key": cleanKey } },
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { detail?: string }).detail || "Could not clear device links.");
     }
   }
 

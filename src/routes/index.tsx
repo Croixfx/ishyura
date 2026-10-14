@@ -49,7 +49,7 @@ import {
 import { InquiryDialog } from "@/components/InquiryDialog";
 import { OrderDialog } from "@/components/OrderDialog";
 import { AdminWorkspace } from "@/components/AdminWorkspace";
-import { type OrderItemType, knownPhone } from "@/lib/ishyura-client";
+import { type OrderItemType, knownPhone, ACCOUNT_DEACTIVATED_MESSAGE } from "@/lib/ishyura-client";
 import { signInWithGoogleReal, logoutGoogle } from "@/lib/firebase-auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -108,6 +108,8 @@ interface IndexSearch {
   /** Open the view-and-download dialog for this QR card (linked from payment history). */
   card?: string;
   product?: "offline" | "online";
+  /** Set after an admin deactivated the signed-in account. */
+  deactivated?: boolean;
 }
 
 export const Route = createFileRoute("/")({
@@ -119,6 +121,8 @@ export const Route = createFileRoute("/")({
         search.product === "offline" || search.product === "online"
           ? (search.product as "offline" | "online")
           : undefined,
+      deactivated:
+        search.deactivated === "1" || search.deactivated === 1 || search.deactivated === true,
     };
   },
   loader: async () => {
@@ -576,7 +580,7 @@ function Index() {
   const customerPrintCardRef = useRef<HTMLDivElement>(null);
   const [downloadingCustomerCard, setDownloadingCustomerCard] = useState(false);
 
-  // Customer Delete QR State (releases lock so one can create/print a new one)
+  // Customer Delete QR State (frees the payment code; the generation allowance is not refunded)
   const [deleteConfirmCustomerQr, setDeleteConfirmCustomerQr] = useState<QRCodeRecord | null>(null);
   const [deletingCustomerQr, setDeletingCustomerQr] = useState(false);
   const [customerToastMsg, setCustomerToastMsg] = useState<string | null>(null);
@@ -1231,7 +1235,7 @@ function Index() {
       }
       setDuplicateWarning(null);
       setCustomerToastMsg(
-        `Payment card for "${deleteConfirmCustomerQr.business_name}" deleted. Single-generation lock released — you can generate or print a fresh card anytime!`,
+        `Payment card for "${deleteConfirmCustomerQr.business_name}" deleted. Your allowance for QR cards is unchanged, so a new card needs an approved payment.`,
       );
       setTimeout(() => setCustomerToastMsg(null), 5000);
       setDeleteConfirmCustomerQr(null);
@@ -1689,6 +1693,7 @@ function Index() {
 
   return (
     <AppLayout
+      notice={searchParams.deactivated ? ACCOUNT_DEACTIVATED_MESSAGE : undefined}
       currentUser={currentUser}
       onUserChange={handleUserChange}
       onOpenAuthDialog={() => {
@@ -2450,7 +2455,7 @@ function Index() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base font-extrabold text-destructive">
               <Trash2 className="size-5" />
-              <span>Delete QR &amp; Unlock Payment Code</span>
+              <span>Delete QR Card</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
               Delete the payment card for{" "}
@@ -2461,12 +2466,13 @@ function Index() {
           <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-xs space-y-2 text-destructive dark:text-rose-200">
             <p className="font-bold flex items-center gap-1.5">
               <AlertCircle className="size-4 shrink-0" />
-              <span>Single-Generation Lock Will Be Released</span>
+              <span>Deleting does not give back your QR allowance</span>
             </p>
             <p className="text-[11px] leading-relaxed text-muted-foreground dark:text-rose-100/90">
-              Deleting this card removes it from your saved records and unlocks this payment number
-              in the Ishyura system. You will be free to generate a fresh new card from scratch
-              anytime.
+              This removes the card from your saved records and frees its payment number. The QR you
+              already used stays counted: your free QR and every paid QR can only be used once, so
+              making a new card after deleting this one needs a new approved payment (2,000 RWF).
+              Download the card first if you still need it.
             </p>
           </div>
 
@@ -2491,7 +2497,7 @@ function Index() {
               ) : (
                 <Trash2 className="size-3.5" />
               )}
-              <span>{deletingCustomerQr ? "Deleting..." : "Yes, Delete & Unlock"}</span>
+              <span>{deletingCustomerQr ? "Deleting..." : "Yes, Delete Card"}</span>
             </Button>
           </div>
         </DialogContent>
@@ -3103,7 +3109,7 @@ function Index() {
                           variant="ghost"
                           onClick={() => setDeleteConfirmCustomerQr(qr)}
                           className="h-8 text-xs font-semibold text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-xl px-2"
-                          title="Delete card and release duplicate lock so you can print again"
+                          title="Delete this card (your QR allowance is not refunded)"
                         >
                           <Trash2 className="size-3.5" />
                           <span className="sr-only sm:not-sr-only sm:inline">Delete</span>

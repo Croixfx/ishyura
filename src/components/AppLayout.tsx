@@ -18,6 +18,8 @@ interface AppLayoutProps {
   inquiryCount?: number;
   orderCount?: number;
   isAuthLoading?: boolean;
+  /** A message shown across the top of the page (for example after an account was deactivated). */
+  notice?: string;
 }
 
 export function AppLayout({
@@ -30,6 +32,7 @@ export function AppLayout({
   inquiryCount = 0,
   orderCount = 0,
   isAuthLoading = false,
+  notice,
 }: AppLayoutProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [inquiryOpen, setInquiryOpen] = useState(false);
@@ -43,6 +46,14 @@ export function AppLayout({
   if (!currentUser) {
     return (
       <div className="h-dvh max-h-dvh w-full bg-background text-foreground flex flex-col overflow-hidden">
+        {notice && (
+          <div
+            role="alert"
+            className="shrink-0 bg-destructive px-4 py-2.5 text-center text-xs font-bold text-destructive-foreground"
+          >
+            {notice}
+          </div>
+        )}
         {/* Public Top Header */}
         <header className="z-40 border-b border-border/60 bg-background/90 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
           <Link to="/" className="flex items-center gap-3">

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Link, useLocation } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import {
   QrCode,
   Package,
@@ -48,6 +48,7 @@ export function AppSidebar({
   orderCount = 0,
 }: AppSidebarProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(initialUser || null);
   const [mounted, setMounted] = useState(false);
   const [isDark, setIsDark] = useState(true);
@@ -119,6 +120,8 @@ export function AppSidebar({
     IshyuraClient.logout();
     setCurrentUser(null);
     if (onUserChange) onUserChange(null);
+    // Signing out always lands on the public landing page, whichever page the user was on.
+    await navigate({ to: "/", search: {}, replace: true });
   };
 
   const isAdmin = mounted && isAdminUser(currentUser);
@@ -126,6 +129,11 @@ export function AppSidebar({
   const handleTabClick = (tabKey: string) => {
     if (onSelectTab) {
       onSelectTab(tabKey);
+    } else if (isAdmin) {
+      // Pages like Payments & Orders do not own these tabs, so go to the page that does.
+      void navigate({ to: "/admin", search: { tab: tabKey } });
+    } else {
+      void navigate({ to: "/", search: { tab: tabKey } });
     }
     onNavigate?.();
   };

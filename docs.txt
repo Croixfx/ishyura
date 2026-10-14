@@ -1,0 +1,7 @@
+Session id: claude --resume 8ad14d1c-b560-47b4-846f-49b52919768d
+when user submits an order, they should go to orders immediately
+when users logs out they should go to landing page immediately(not to /hostory)
+when user clicks Paymenst&Orders button, they should not be blocked from accessing Payment Tent card, MyCards and records or any other link
+when user goes to payment screen, they should see a QR to scan with exact amount prefilled and the code is 729710(Registered under Jean De La Croix)
+Admin should be able to deactivate accounts
+audit should know the owner of what qr or nfc created

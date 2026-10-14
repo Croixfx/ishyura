@@ -52,4 +52,6 @@ export {
   publicIdFromInternalId,
 } from "./identity";
 
+export { PLATFORM_MOMO_CODE, PLATFORM_PAYEE_NAME } from "./platform-payee";
+
 export { buildStandPayloads, type BuildStandPayloadsInput } from "./payload";

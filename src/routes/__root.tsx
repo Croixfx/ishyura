@@ -10,6 +10,9 @@ import {
 import type { ReactNode } from "react";
 
 import appCss from "../styles.css?url";
+import { installDeactivationGuard } from "@/lib/deactivation-guard";
+
+installDeactivationGuard();
 
 if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((error: unknown) => {

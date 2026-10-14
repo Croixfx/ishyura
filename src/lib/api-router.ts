@@ -355,7 +355,7 @@ export function corsHeaders(): HeadersInit {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-admin-key",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-admin-key, x-device-id",
   };
 }
 
@@ -635,6 +635,8 @@ async function ensureAppColumns(db: D1Database): Promise<void> {
     ["orders", "merchant_deleted_at", "TEXT"],
     ["payment_requests", "draft_json", "TEXT"],
     ["payment_requests", "fulfilled_qr_id", "TEXT"],
+    ["merchants", "deactivated_at", "TEXT"],
+    ["merchants", "deactivated_reason", "TEXT"],
   ];
   for (const [table, name, type] of columns) {
     try {
@@ -753,6 +755,292 @@ function tooManyAttempts(retryAfterSec: number, detail: string): Response {
 
 function clientIp(request: Request): string {
   return (request.headers.get("CF-Connecting-IP") || "").trim();
+}
+
+// ----------------------------------------------------
+// ONE DEVICE, ONE MERCHANT ACCOUNT
+// The browser keeps a random device id and sends it as `x-device-id` when signing in. The server
+// remembers which merchant accounts have signed in from which device and refuses a second one.
+// This is a deterrent for casual duplicate accounts, not a guarantee: clearing site data or using
+// another browser gives a new device id. One account may use any number of devices. Admins are exempt.
+// ----------------------------------------------------
+const memDeviceLinks = new Map<string, Set<string>>();
+let deviceTableReady = false;
+
+function readDeviceId(request: Request): string | null {
+  const v = (request.headers.get("x-device-id") || "").trim();
+  return /^[A-Za-z0-9_-]{16,64}$/.test(v) ? v : null;
+}
+
+async function ensureDeviceTable(db: D1Database): Promise<void> {
+  if (deviceTableReady) return;
+  await db.exec(
+    "CREATE TABLE IF NOT EXISTS device_accounts (device_id TEXT NOT NULL, merchant_id TEXT NOT NULL, first_seen_at TEXT DEFAULT (datetime('now')), last_seen_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (device_id, merchant_id));",
+  );
+  await db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_device_accounts_merchant ON device_accounts(merchant_id);",
+  );
+  deviceTableReady = true;
+}
+
+// ----------------------------------------------------
+// ACCOUNT DEACTIVATION + AUDIT TRAIL
+// ----------------------------------------------------
+const DEACTIVATED_DETAIL =
+  "This account has been deactivated by Ishyura. Please contact support if you think this is a mistake.";
+
+function deactivatedResponse(): Response {
+  return jsonResponse({ error: "ACCOUNT_DEACTIVATED", detail: DEACTIVATED_DETAIL }, 403);
+}
+
+/**
+ * True when the merchant behind this identity has been deactivated by an admin. Admin accounts can
+ * never be deactivated, so they are never reported here.
+ */
+async function isDeactivated(
+  env: AppEnv,
+  who: { id?: string | null; phone?: string | null; email?: string | null },
+): Promise<boolean> {
+  const id = (who.id || "").trim();
+  const phone = (who.phone || "").trim();
+  const email = (who.email || "").trim().toLowerCase();
+  if (!id && !phone && !email) return false;
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare(
+        "SELECT id FROM merchants WHERE deactivated_at IS NOT NULL AND COALESCE(role, 'merchant') != 'admin' " +
+          "AND (id = ? OR phone_number = ? OR LOWER(COALESCE(email, '')) = ?) LIMIT 1",
+      )
+        .bind(id || "-", phone || "-", email || "-")
+        .first();
+      return Boolean(row);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+type AuditEvent =
+  "qr_created" | "qr_deleted" | "card_exported" | "account_deactivated" | "account_reactivated";
+
+interface AuditInput {
+  event: AuditEvent;
+  /** "qr" = printed payment QR card, "nfc_stand" = smart stand (QR + NFC tag). */
+  kind?: "qr" | "nfc_stand" | null;
+  qrId?: string | null;
+  /** The merchant that owns the card or account the event is about. */
+  ownerId?: string | null;
+  ownerPhone?: string | null;
+  label?: string | null;
+  dialCode?: string | null;
+  actor?: { id?: string | null; role: "admin" | "merchant" | "system" } | null;
+  detail?: string | null;
+}
+
+interface AuditRow {
+  id: string;
+  event_type: string;
+  kind: string | null;
+  qr_id: string | null;
+  owner_id: string | null;
+  owner_phone: string | null;
+  owner_email: string | null;
+  owner_name: string | null;
+  actor_id: string | null;
+  actor_role: string | null;
+  label: string | null;
+  dial_code: string | null;
+  detail: string | null;
+  created_at: string;
+}
+
+const memAudit: AuditRow[] = [];
+let auditTableReady = false;
+
+async function ensureAuditTable(db: D1Database): Promise<void> {
+  if (auditTableReady) return;
+  await db.exec(
+    "CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, event_type TEXT NOT NULL, kind TEXT, qr_id TEXT, owner_id TEXT, owner_phone TEXT, owner_email TEXT, owner_name TEXT, actor_id TEXT, actor_role TEXT, label TEXT, dial_code TEXT, detail TEXT, created_at TEXT DEFAULT (datetime('now')));",
+  );
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);");
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_events_owner ON audit_events(owner_id);");
+  auditTableReady = true;
+}
+
+/**
+ * Append one audit entry that names the owner of the card or account. The owner is looked up at the
+ * time of the event and stored on the row, so the record stays readable if the account changes later.
+ * Auditing never fails the request it describes.
+ */
+async function recordAudit(env: AppEnv, a: AuditInput): Promise<void> {
+  try {
+    let ownerId = (a.ownerId || "").trim() || null;
+    let ownerPhone = (a.ownerPhone || "").trim() || null;
+    let ownerEmail: string | null = null;
+    let ownerName: string | null = null;
+
+    if (env.DB) {
+      await ensureAuditTable(env.DB);
+      if (ownerId || ownerPhone) {
+        const m = await env.DB.prepare(
+          "SELECT id, phone_number, email, business_name FROM merchants WHERE id = ? OR phone_number = ? LIMIT 1",
+        )
+          .bind(ownerId || "-", ownerPhone || ownerId || "-")
+          .first<{
+            id: string;
+            phone_number: string | null;
+            email: string | null;
+            business_name: string | null;
+          }>();
+        if (m) {
+          ownerId = m.id;
+          ownerPhone = m.phone_number || ownerPhone;
+          ownerEmail = m.email;
+          ownerName = m.business_name;
+        }
+      }
+    } else {
+      const m = [...memMerchants.values()].find(
+        (x) => (ownerId && x.id === ownerId) || (ownerPhone && x.phone_number === ownerPhone),
+      );
+      if (m) {
+        ownerId = m.id;
+        ownerPhone = m.phone_number;
+        ownerEmail = m.email || null;
+      }
+    }
+
+    const row: AuditRow = {
+      id: crypto.randomUUID(),
+      event_type: a.event,
+      kind: a.kind || null,
+      qr_id: a.qrId || null,
+      owner_id: ownerId,
+      owner_phone: ownerPhone,
+      owner_email: ownerEmail,
+      owner_name: ownerName,
+      actor_id: a.actor?.id || null,
+      actor_role: a.actor?.role || null,
+      label: a.label || null,
+      dial_code: a.dialCode || null,
+      detail: a.detail || null,
+      created_at: new Date().toISOString(),
+    };
+
+    if (env.DB) {
+      await env.DB.prepare(
+        "INSERT INTO audit_events (id, event_type, kind, qr_id, owner_id, owner_phone, owner_email, owner_name, actor_id, actor_role, label, dial_code, detail) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+        .bind(
+          row.id,
+          row.event_type,
+          row.kind,
+          row.qr_id,
+          row.owner_id,
+          row.owner_phone,
+          row.owner_email,
+          row.owner_name,
+          row.actor_id,
+          row.actor_role,
+          row.label,
+          row.dial_code,
+          row.detail,
+        )
+        .run();
+    } else {
+      memAudit.unshift(row);
+      if (memAudit.length > 500) memAudit.length = 500;
+    }
+  } catch (err) {
+    console.warn("Audit entry could not be recorded:", err);
+  }
+}
+
+function maskEmail(email: string): string {
+  const [name = "", domain = ""] = email.split("@");
+  return `${name.slice(0, 1)}***@${domain}`;
+}
+
+function maskPhone(phone: string): string {
+  const d = phone.replace(/\D/g, "");
+  return d.length >= 7
+    ? `+${d.slice(0, 3)} ${d.slice(3, 5)}* *** ${d.slice(-3)}`
+    : "your other account";
+}
+
+/**
+ * A response refusing the sign-in if this device already belongs to a *different* merchant account,
+ * otherwise null. `candidateMerchantId` is the account being signed in to ("" if it does not exist yet).
+ */
+async function deviceConflict(
+  env: AppEnv,
+  request: Request,
+  candidateMerchantId: string,
+  isAdmin: boolean,
+): Promise<Response | null> {
+  const deviceId = readDeviceId(request);
+  if (!deviceId || isAdmin) return null;
+
+  let other: { id: string; email: string | null; phone: string | null } | null = null;
+  if (env.DB) {
+    await ensureDeviceTable(env.DB);
+    other = await env.DB.prepare(
+      "SELECT m.id AS id, m.email AS email, m.phone_number AS phone FROM device_accounts d " +
+        "JOIN merchants m ON m.id = d.merchant_id " +
+        "WHERE d.device_id = ? AND d.merchant_id != ? AND COALESCE(m.role, 'merchant') != 'admin' LIMIT 1",
+    )
+      .bind(deviceId, candidateMerchantId)
+      .first<{ id: string; email: string | null; phone: string | null }>();
+  } else {
+    const linked = [...(memDeviceLinks.get(deviceId) || [])].find(
+      (id) => id !== candidateMerchantId,
+    );
+    if (linked) {
+      const m = [...memMerchants.values()].find((x) => x.id === linked);
+      other = { id: linked, email: m?.email ?? null, phone: m?.phone_number ?? null };
+    }
+  }
+  if (!other) return null;
+
+  const hint = other.email
+    ? maskEmail(other.email)
+    : other.phone && !other.phone.startsWith("g-")
+      ? maskPhone(other.phone)
+      : "your other account";
+  return jsonResponse(
+    {
+      error: "DEVICE_HAS_ACCOUNT",
+      detail: `This phone or browser is already used by another Ishyura account (${hint}). Each person can only own one account. Please sign in with that account instead.`,
+      existing_account: hint,
+    },
+    409,
+  );
+}
+
+/** Remember that this merchant account has signed in from this device. */
+async function linkDevice(
+  env: AppEnv,
+  request: Request,
+  merchantId: string,
+  isAdmin: boolean,
+): Promise<void> {
+  const deviceId = readDeviceId(request);
+  if (!deviceId || isAdmin || !merchantId) return;
+  if (env.DB) {
+    await ensureDeviceTable(env.DB);
+    await env.DB.prepare(
+      "INSERT INTO device_accounts (device_id, merchant_id) VALUES (?, ?) " +
+        "ON CONFLICT(device_id, merchant_id) DO UPDATE SET last_seen_at = datetime('now')",
+    )
+      .bind(deviceId, merchantId)
+      .run();
+    return;
+  }
+  const set = memDeviceLinks.get(deviceId) || new Set<string>();
+  set.add(merchantId);
+  memDeviceLinks.set(deviceId, set);
 }
 
 /** Admin identity comes from the database when attached, otherwise the in-memory seed list. */
@@ -1176,6 +1464,28 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     return handleEdgePayPage(request, env);
   }
 
+  // A deactivated merchant loses access at once, even with a session token that has not expired yet.
+  // Sign-in and support messages stay reachable so the person sees why and can ask for help.
+  if (
+    env.DB &&
+    !path.startsWith("/auth/") &&
+    !path.startsWith("/admin/") &&
+    path !== "/inquiries" &&
+    path !== "/health"
+  ) {
+    const gateSession = await getSession(request, env);
+    if (
+      gateSession?.role === "merchant" &&
+      (await isDeactivated(env, {
+        id: gateSession.sub,
+        phone: gateSession.phone,
+        email: gateSession.email,
+      }))
+    ) {
+      return deactivatedResponse();
+    }
+  }
+
   try {
     if (path === "/payment-events" && request.method === "POST") {
       if (!env.DB) {
@@ -1294,6 +1604,22 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           wait.retryAfterSec || 60,
           "Too many verification codes requested. Please wait before trying again.",
         );
+      }
+
+      // Refuse early (before spending an SMS) if this device already belongs to another account.
+      {
+        const knownId = env.DB
+          ? (
+              await env.DB.prepare(
+                "SELECT id FROM merchants WHERE phone_number = ? OR phone_number = ? LIMIT 1",
+              )
+                .bind(e164Phone, cleanDigits)
+                .first<{ id: string }>()
+            )?.id
+          : (memMerchants.get(e164Phone) || memMerchants.get(cleanDigits))?.id;
+        const requestIsAdmin = await isAdminIdentity(env, { phones: [e164Phone, cleanDigits] });
+        const conflict = await deviceConflict(env, request, knownId || "", requestIsAdmin);
+        if (conflict) return conflict;
       }
 
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -1454,6 +1780,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
         const userId = merchant?.id || crypto.randomUUID();
         const role: "admin" | "merchant" = otpIsAdmin ? "admin" : "merchant";
+        if (!otpIsAdmin && (await isDeactivated(env, { id: userId, phone: e164Phone }))) {
+          return deactivatedResponse();
+        }
+        const deviceBlock = await deviceConflict(env, request, userId, otpIsAdmin);
+        if (deviceBlock) return deviceBlock;
+        await linkDevice(env, request, userId, otpIsAdmin);
         const token = await issueSessionToken(env, { sub: userId, role, phone: e164Phone });
         if (!token) return adminAuthUnavailable();
 
@@ -1499,7 +1831,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           created_at: new Date().toISOString(),
           last_active_at: new Date().toISOString(),
         };
+      const memDeviceBlock = await deviceConflict(env, request, merchant.id, otpIsAdmin);
+      if (memDeviceBlock) return memDeviceBlock;
       memMerchants.set(e164Phone, merchant);
+      await linkDevice(env, request, merchant.id, otpIsAdmin);
 
       const memRole: "admin" | "merchant" = otpIsAdmin ? "admin" : "merchant";
       const memToken = await issueSessionToken(env, {
@@ -1566,6 +1901,14 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const phoneToUse = merchant?.phone_number || fallbackPhone;
         const role = isAdmin ? "admin" : "merchant";
 
+        if (!isAdmin && (await isDeactivated(env, { id: merchantId, phone: phoneToUse, email }))) {
+          return deactivatedResponse();
+        }
+        // Checked before the account row is created, so a refused second account leaves nothing behind.
+        const deviceBlock = await deviceConflict(env, request, merchantId, isAdmin);
+        if (deviceBlock) return deviceBlock;
+        await linkDevice(env, request, merchantId, isAdmin);
+
         await env.DB.prepare(
           "INSERT INTO merchants (id, phone_number, email, business_name, role, is_fully_registered, last_active_at) " +
             "VALUES (?, ?, ?, ?, ?, 1, ?) " +
@@ -1598,6 +1941,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
       // Memory fallback
       const merchantId = verified.sub || `g-${Date.now()}`;
+      const googleMemBlock = await deviceConflict(env, request, merchantId, isAdmin);
+      if (googleMemBlock) return googleMemBlock;
+      await linkDevice(env, request, merchantId, isAdmin);
       const merchant = {
         id: merchantId,
         phone_number: fallbackPhone,
@@ -1713,6 +2059,17 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           return rejectPassword();
         }
         await rateLimitReset(env, pwdKey);
+        if (await isDeactivated(env, { id: merchant.id })) {
+          return deactivatedResponse();
+        }
+
+        const pwdIsAdmin = await isAdminIdentity(env, {
+          email: merchant.email,
+          phones: [merchant.phone_number],
+        });
+        const pwdDeviceBlock = await deviceConflict(env, request, merchant.id, pwdIsAdmin);
+        if (pwdDeviceBlock) return pwdDeviceBlock;
+        await linkDevice(env, request, merchant.id, pwdIsAdmin);
 
         // Password login never yields an admin session: the email on a merchant row is
         // self-declared (unverified), so admins must sign in with OTP or Google.
@@ -2605,12 +2962,23 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                   .bind(now, existingRow.id)
                   .run();
               } else {
+                // 1 free + 1 just paid for. For offline QR codes, what is already used is the number
+                // of cards that exist (not an assumed 1), so a first-time payer gets both.
+                let alreadyUsed = 1;
+                if (!isPdfReq) {
+                  const cards = await env.DB.prepare(
+                    "SELECT count(*) AS count FROM qr_codes WHERE (owner_id = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
+                  )
+                    .bind(mid, existing.merchant_phone || mid)
+                    .first<{ count: number }>();
+                  alreadyUsed = cards?.count ?? 0;
+                }
                 const newEntId = `ent_${crypto.randomUUID()}`;
                 await env.DB.prepare(
                   "INSERT INTO merchant_entitlements (id, merchant_id, entitlement_type, entitlement_key, granted_count, consumed_count, status, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, ?, 2, 1, 'active', ?, ?)",
+                    "VALUES (?, ?, ?, ?, 2, ?, 'active', ?, ?)",
                 )
-                  .bind(newEntId, mid, entType, entKey, now, now)
+                  .bind(newEntId, mid, entType, entKey, alreadyUsed, now, now)
                   .run();
               }
             }
@@ -3041,8 +3409,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
               // Free included offline generation is 1. Admin approved payment increases granted_count.
               const granted = Math.max(1, entRow?.granted_count ?? 1);
+              // consumed_count only ever goes up, so deleting a card never gives its slot back.
+              const usedSlots = Math.max(entRow?.consumed_count ?? 0, existingOfflineCount);
 
-              if (existingOfflineCount >= granted) {
+              if (usedSlots >= granted) {
                 // Check if there is a pending payment request
                 const pendingReq = await env.DB.prepare(
                   "SELECT reference_code FROM payment_requests WHERE (merchant_id = ? OR merchant_id = ? OR merchant_phone = ? OR merchant_phone = ?) AND status = 'pending' AND (requested_entitlement = 'offline_qr_generation' OR product_type = 'offline_qr_generation') ORDER BY created_at DESC LIMIT 1",
@@ -3133,10 +3503,15 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 .first<{ id: string; consumed_count?: number }>();
 
               if (existingEnt) {
-                await env.DB.prepare(
-                  "UPDATE merchant_entitlements SET consumed_count = consumed_count + 1, updated_at = datetime('now') WHERE id = ?",
+                const cardsNow = await env.DB.prepare(
+                  "SELECT count(*) AS count FROM qr_codes WHERE (owner_id = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
                 )
-                  .bind(existingEnt.id)
+                  .bind(ownerId, phone)
+                  .first<{ count: number }>();
+                await env.DB.prepare(
+                  "UPDATE merchant_entitlements SET consumed_count = MAX(consumed_count + 1, ?), updated_at = datetime('now') WHERE id = ?",
+                )
+                  .bind(cardsNow?.count ?? 0, existingEnt.id)
                   .run();
               } else {
                 const newEntId = `ent_${crypto.randomUUID()}`;
@@ -3158,6 +3533,17 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               console.warn("D1 entitlement update error:", entErr);
             }
           }
+
+          await recordAudit(env, {
+            event: "qr_created",
+            kind: isDynamic ? "nfc_stand" : "qr",
+            qrId: id,
+            ownerId,
+            ownerPhone: phone,
+            label: businessName,
+            dialCode,
+            actor: { id: qrSession?.sub || null, role: isAdmin ? "admin" : "merchant" },
+          });
 
           return jsonResponse({
             id,
@@ -3271,7 +3657,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               consumed_count: 0,
             };
             const granted = Math.max(1, off.granted_count);
-            if (existingMemCount >= granted) {
+            const usedSlots = Math.max(off.consumed_count, existingMemCount);
+            if (usedSlots >= granted) {
               return jsonResponse(
                 {
                   error: "ENTITLEMENT_REQUIRED",
@@ -3285,9 +3672,20 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 402,
               );
             }
-            off.consumed_count = existingMemCount + 1;
+            off.consumed_count = usedSlots + 1;
           }
         }
+
+        await recordAudit(env, {
+          event: "qr_created",
+          kind: isDynamic ? "nfc_stand" : "qr",
+          qrId: id,
+          ownerId,
+          ownerPhone: phone,
+          label: businessName,
+          dialCode,
+          actor: { id: qrSession?.sub || null, role: isAdmin ? "admin" : "merchant" },
+        });
 
         const newQr: MemQrCode = {
           id,
@@ -3514,9 +3912,17 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         }
 
         const deleteTarget = env.DB
-          ? await env.DB.prepare("SELECT owner_id, phone_number FROM qr_codes WHERE id = ?")
+          ? await env.DB.prepare(
+              "SELECT owner_id, phone_number, business_name, dial_code, is_dynamic FROM qr_codes WHERE id = ?",
+            )
               .bind(id)
-              .first<{ owner_id?: string | null; phone_number?: string | null }>()
+              .first<{
+                owner_id?: string | null;
+                phone_number?: string | null;
+                business_name?: string | null;
+                dial_code?: string | null;
+                is_dynamic?: number | null;
+              }>()
           : memQrCodes.find((q) => q.id === id);
         if (deleteTarget) {
           const deleteDenied = qrDenied(deleteTarget);
@@ -3529,10 +3935,23 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const idx = memQrCodes.findIndex((q) => q.id === id);
         if (idx !== -1) memQrCodes.splice(idx, 1);
 
+        if (deleteTarget) {
+          await recordAudit(env, {
+            event: "qr_deleted",
+            kind: deleteTarget.is_dynamic ? "nfc_stand" : "qr",
+            qrId: id,
+            ownerId: deleteTarget.owner_id,
+            ownerPhone: deleteTarget.phone_number,
+            label: deleteTarget.business_name,
+            dialCode: deleteTarget.dial_code,
+            actor: { id: qrSession?.sub || null, role: qrAdmin ? "admin" : "merchant" },
+          });
+        }
+
         return jsonResponse({
           success: true,
           message:
-            "Payment QR card deleted and single-generation lock released. You can now generate or print a new card.",
+            "Payment QR card deleted. Its payment code is free to register again, but deleting a card does not give back its generation slot: an additional QR needs an approved payment.",
         });
       }
     }
@@ -3637,6 +4056,16 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           )
             .bind(id, businessName, network, dialCode, phone, fileFormat)
             .run();
+
+          await recordAudit(env, {
+            event: "card_exported",
+            ownerId: dlSession?.sub || null,
+            ownerPhone: dlSession?.phone || null,
+            label: businessName,
+            dialCode,
+            actor: { id: dlSession?.sub || null, role: dlSession?.role || "system" },
+            detail: fileFormat.toUpperCase(),
+          });
 
           // Increment pdf_export consumed_count for this merchant if known
           if (phone && phone !== "guest") {
@@ -4154,6 +4583,134 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // ----------------------------------------------------
     // 6. ADMIN: Merchants List
     // ----------------------------------------------------
+    // Support tool: forget which devices a merchant account is tied to (for example after the
+    // account holder gets a new phone, or two people legitimately share one).
+    if (
+      path === "/admin/device-links" &&
+      (request.method === "DELETE" || request.method === "POST")
+    ) {
+      if (!(await verifyAdminAuth(request, env))) {
+        return jsonResponse({ detail: "Unauthorized admin access." }, 401);
+      }
+      let targetId = url.searchParams.get("merchant_id");
+      if (!targetId) {
+        const b = (await request.json().catch(() => ({}))) as { merchant_id?: string };
+        targetId = b.merchant_id || null;
+      }
+      if (!targetId) {
+        return jsonResponse({ detail: "merchant_id required." }, 400);
+      }
+      if (env.DB) {
+        await ensureDeviceTable(env.DB);
+        await env.DB.prepare("DELETE FROM device_accounts WHERE merchant_id = ?")
+          .bind(targetId)
+          .run();
+      }
+      for (const set of memDeviceLinks.values()) set.delete(targetId);
+      return jsonResponse({ success: true, message: "Device links cleared for this account." });
+    }
+
+    // ----------------------------------------------------
+    // 6B. ADMIN: Deactivate / reactivate a merchant account
+    // ----------------------------------------------------
+    if (
+      (path === "/admin/merchants/deactivate" || path === "/admin/merchants/reactivate") &&
+      request.method === "POST"
+    ) {
+      if (!(await verifyAdminAuth(request, env))) {
+        return jsonResponse({ detail: "Unauthorized admin access." }, 401);
+      }
+      const deactivating = path === "/admin/merchants/deactivate";
+      const body = (await request.json().catch(() => ({}))) as {
+        merchant_id?: string;
+        reason?: string;
+      };
+      const merchantId = (body.merchant_id || "").trim();
+      const reason = (body.reason || "").trim().slice(0, 300) || null;
+      if (!merchantId) {
+        return jsonResponse({ detail: "merchant_id is required." }, 400);
+      }
+      if (!env.DB) {
+        return jsonResponse({ detail: "Account management needs the database." }, 503);
+      }
+
+      const target = await env.DB.prepare(
+        "SELECT id, phone_number, email, business_name, role FROM merchants WHERE id = ?",
+      )
+        .bind(merchantId)
+        .first<{
+          id: string;
+          phone_number: string;
+          email: string | null;
+          business_name: string | null;
+          role: string | null;
+        }>();
+      if (!target) {
+        return jsonResponse({ detail: "Account not found." }, 404);
+      }
+      if (
+        (target.role || "merchant") === "admin" ||
+        (await isAdminIdentity(env, { email: target.email, phones: [target.phone_number] }))
+      ) {
+        return jsonResponse(
+          { detail: "Administrator accounts cannot be deactivated here. Remove the admin first." },
+          400,
+        );
+      }
+
+      if (deactivating) {
+        await env.DB.prepare(
+          "UPDATE merchants SET deactivated_at = datetime('now'), deactivated_reason = ? WHERE id = ?",
+        )
+          .bind(reason, merchantId)
+          .run();
+      } else {
+        await env.DB.prepare(
+          "UPDATE merchants SET deactivated_at = NULL, deactivated_reason = NULL WHERE id = ?",
+        )
+          .bind(merchantId)
+          .run();
+      }
+
+      const adminSession = await getSession(request, env);
+      await recordAudit(env, {
+        event: deactivating ? "account_deactivated" : "account_reactivated",
+        ownerId: target.id,
+        ownerPhone: target.phone_number,
+        actor: { id: adminSession?.sub || null, role: "admin" },
+        detail: reason,
+      });
+
+      return jsonResponse({
+        success: true,
+        message: deactivating
+          ? "Account deactivated. The merchant is signed out and cannot sign in until you reactivate it."
+          : "Account reactivated. The merchant can sign in again.",
+      });
+    }
+
+    // ----------------------------------------------------
+    // 6C. ADMIN: Audit trail (who created, deleted or exported what, and who owns it)
+    // ----------------------------------------------------
+    if (path === "/admin/audit" && request.method === "GET") {
+      if (!(await verifyAdminAuth(request, env))) {
+        return jsonResponse({ detail: "Unauthorized admin access." }, 401);
+      }
+      if (env.DB) {
+        try {
+          await ensureAuditTable(env.DB);
+          const rows = await env.DB.prepare(
+            "SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 300",
+          ).all();
+          return jsonResponse(rows.results || []);
+        } catch (dbErr) {
+          console.warn("D1 audit query error:", dbErr);
+          return jsonResponse([]);
+        }
+      }
+      return jsonResponse(memAudit);
+    }
+
     if (path === "/admin/merchants" && request.method === "GET") {
       if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
@@ -4162,8 +4719,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       if (env.DB) {
         try {
           const rows = await env.DB.prepare(
-            "SELECT m.id, m.phone_number, m.email, m.is_fully_registered, m.created_at, m.last_active_at, " +
-              "count(q.id) as qr_count " +
+            "SELECT m.id, m.phone_number, m.email, m.business_name, m.role, m.is_fully_registered, m.created_at, m.last_active_at, " +
+              "m.deactivated_at, m.deactivated_reason, count(q.id) as qr_count " +
               "FROM merchants m " +
               "LEFT JOIN qr_codes q ON m.phone_number = q.phone_number " +
               "GROUP BY m.id " +
@@ -4288,6 +4845,19 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               payment_mode: inferPaymentMode(numAmount),
               status: "active",
             };
+
+        const adminCreateSession = await getSession(request, env);
+        await recordAudit(env, {
+          event: "qr_created",
+          kind: isDynamic ? "nfc_stand" : "qr",
+          qrId: id,
+          ownerId: phone,
+          ownerPhone: phone,
+          label: businessName,
+          dialCode,
+          actor: { id: adminCreateSession?.sub || null, role: "admin" },
+          detail: "Created by an administrator for this merchant",
+        });
 
         const newQr: MemQrCode = {
           id,
@@ -4447,16 +5017,59 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         if (!id) {
           return jsonResponse({ detail: "QR code ID required." }, 400);
         }
+        // An admin delete / unlock is a deliberate decision, so it hands the owner's offline slot back.
+        const gone: Partial<MemQrCode> | null = env.DB
+          ? await env.DB.prepare(
+              "SELECT owner_id, phone_number, business_name, dial_code, is_dynamic FROM qr_codes WHERE id = ?",
+            )
+              .bind(id)
+              .first<MemQrCode>()
+          : memQrCodes.find((q) => q.id === id) || null;
         if (env.DB) {
           await env.DB.prepare("DELETE FROM qr_codes WHERE id = ?").bind(id).run();
         }
         const idx = memQrCodes.findIndex((q) => q.id === id);
         if (idx !== -1) memQrCodes.splice(idx, 1);
 
+        if (gone) {
+          const adminDeleteSession = await getSession(request, env);
+          await recordAudit(env, {
+            event: "qr_deleted",
+            kind: gone.is_dynamic ? "nfc_stand" : "qr",
+            qrId: id,
+            ownerId: gone.owner_id,
+            ownerPhone: gone.phone_number,
+            label: gone.business_name,
+            dialCode: gone.dial_code,
+            actor: { id: adminDeleteSession?.sub || null, role: "admin" },
+          });
+        }
+
+        let slotReturned = false;
+        if (gone && !gone.is_dynamic) {
+          if (env.DB) {
+            const refunded = await env.DB.prepare(
+              "UPDATE merchant_entitlements SET consumed_count = MAX(0, consumed_count - 1), updated_at = datetime('now') " +
+                "WHERE (merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') AND consumed_count > 0 RETURNING id",
+            )
+              .bind(gone.owner_id ?? "", gone.phone_number ?? "")
+              .first<{ id: string }>();
+            slotReturned = Boolean(refunded);
+          } else {
+            const off = getMemEntitlements(gone.owner_id ?? "").get("offline_qr_generation");
+            if (off && off.consumed_count > 0) {
+              off.consumed_count -= 1;
+              slotReturned = true;
+            }
+          }
+        }
+
         return jsonResponse({
           success: true,
-          message:
-            "QR code deleted and single-generation lock released. The merchant may now generate or print a new card.",
+          slot_returned: slotReturned,
+          message: slotReturned
+            ? "QR code deleted. The merchant's offline generation slot was returned, so they may generate a new card."
+            : "QR code deleted.",
         });
       }
     }

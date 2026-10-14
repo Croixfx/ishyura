@@ -20,7 +20,14 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { IshyuraClient, type QrDraft } from "@/lib/ishyura-client";
-import { MONETIZATION_PRICES, generateRequestReference } from "@/lib/payment";
+import {
+  MONETIZATION_PRICES,
+  PLATFORM_MOMO_CODE,
+  PLATFORM_PAYEE_NAME,
+  generateRequestReference,
+} from "@/lib/payment";
+import { buildRwandaUssdString } from "@/lib/momo-formatters";
+import { PaymentQrCode } from "@/components/PaymentQrCode";
 
 interface PaymentRequestDialogProps {
   open: boolean;
@@ -164,18 +171,39 @@ export function PaymentRequestDialog({
               </div>
             </div>
 
-            {/* Telecom Payment Guide */}
-            <div className="p-3 rounded-xl border border-border/60 bg-card text-xs space-y-2">
+            {/* Scan-to-pay: MoMo code with the exact fee already filled in */}
+            <div className="p-3 rounded-xl border border-border/60 bg-card text-xs space-y-3">
               <p className="font-bold text-foreground">How to Pay:</p>
+              <div className="flex flex-col items-center gap-2 rounded-xl bg-white p-3">
+                <PaymentQrCode
+                  standId="ishyura-fee"
+                  network="MTN MoMo"
+                  paymentType="momo_code"
+                  destination={PLATFORM_MOMO_CODE}
+                  amount={price}
+                  isDynamic={false}
+                  size={176}
+                />
+                <p className="text-center text-[11px] font-bold text-slate-800">
+                  Scan with your phone camera to pay {price.toLocaleString()} RWF
+                </p>
+              </div>
               <div className="space-y-1 text-muted-foreground text-[11px] leading-relaxed">
                 <div>
-                  • <strong>MTN MoMo:</strong> Pay to MoMo Merchant code:{" "}
-                  <code className="bg-muted px-1 py-0.5 rounded font-bold">234567</code> (Ishyura
-                  Rwanda)
+                  • <strong>MoMo code:</strong>{" "}
+                  <code className="bg-muted px-1 py-0.5 rounded font-bold">
+                    {PLATFORM_MOMO_CODE}
+                  </code>{" "}
+                  (registered under {PLATFORM_PAYEE_NAME}). Check that name before you confirm.
                 </div>
                 <div>
-                  • <strong>Airtel Money:</strong> Pay to Till number:{" "}
-                  <code className="bg-muted px-1 py-0.5 rounded font-bold">123456</code>
+                  • <strong>Amount:</strong> {price.toLocaleString()} RWF, filled in for you.
+                </div>
+                <div>
+                  • <strong>Cannot scan?</strong> Dial{" "}
+                  <code className="bg-muted px-1 py-0.5 rounded font-bold">
+                    {buildRwandaUssdString("MTN MoMo", "momo_code", PLATFORM_MOMO_CODE, price)}
+                  </code>
                 </div>
               </div>
             </div>
