@@ -138,6 +138,14 @@ export function AppSidebar({
     onNavigate?.();
   };
 
+  const isHistoryActive =
+    activeTab === "history" ||
+    location.pathname === "/history" ||
+    location.pathname.startsWith("/history");
+  const isGeneratorActive = activeTab === "generator" && !isHistoryActive;
+  const isRecordsActive = activeTab === "records" && !isHistoryActive;
+  const isStoreActive = activeTab === "store" && !isHistoryActive;
+
   return (
     <aside className="w-64 shrink-0 flex flex-col h-full border-r border-border/60 bg-card/60 backdrop-blur-xl select-none">
       {/* 1. Sticky Brand Header */}
@@ -326,7 +334,7 @@ export function AppSidebar({
                 type="button"
                 onClick={() => handleTabClick("generator")}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
-                  activeTab === "generator"
+                  isGeneratorActive
                     ? "bg-primary text-primary-foreground shadow-xs font-bold"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
                 }`}
@@ -334,7 +342,7 @@ export function AppSidebar({
                 <div className="flex items-center gap-2.5 min-w-0">
                   <QrCode
                     className={`size-4 shrink-0 ${
-                      activeTab === "generator"
+                      isGeneratorActive
                         ? "text-primary-foreground"
                         : "text-muted-foreground group-hover:text-foreground"
                     }`}
@@ -343,7 +351,7 @@ export function AppSidebar({
                 </div>
                 <span
                   className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                    activeTab === "generator"
+                    isGeneratorActive
                       ? "bg-primary-foreground/20 text-primary-foreground"
                       : "bg-muted text-muted-foreground"
                   }`}
@@ -357,7 +365,7 @@ export function AppSidebar({
                 type="button"
                 onClick={() => handleTabClick("records")}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
-                  activeTab === "records"
+                  isRecordsActive
                     ? "bg-primary text-primary-foreground shadow-xs font-bold"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
                 }`}
@@ -365,7 +373,7 @@ export function AppSidebar({
                 <div className="flex items-center gap-2.5 min-w-0">
                   <CreditCard
                     className={`size-4 shrink-0 ${
-                      activeTab === "records"
+                      isRecordsActive
                         ? "text-primary-foreground"
                         : "text-sky-500 group-hover:text-foreground"
                     }`}
@@ -374,7 +382,7 @@ export function AppSidebar({
                 </div>
                 <span
                   className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                    activeTab === "records"
+                    isRecordsActive
                       ? "bg-primary-foreground/20 text-primary-foreground"
                       : "bg-sky-500/10 text-sky-600 dark:text-sky-400"
                   }`}
@@ -388,7 +396,7 @@ export function AppSidebar({
                 to="/history"
                 onClick={() => onNavigate?.()}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
-                  location.pathname === "/history"
+                  isHistoryActive
                     ? "bg-primary text-primary-foreground shadow-xs font-bold"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
                 }`}
@@ -396,7 +404,7 @@ export function AppSidebar({
                 <div className="flex items-center gap-2.5 min-w-0">
                   <Clock
                     className={`size-4 shrink-0 ${
-                      location.pathname === "/history"
+                      isHistoryActive
                         ? "text-primary-foreground"
                         : "text-amber-500 group-hover:text-foreground"
                     }`}
@@ -405,7 +413,7 @@ export function AppSidebar({
                 </div>
                 <span
                   className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                    location.pathname === "/history"
+                    isHistoryActive
                       ? "bg-primary-foreground/20 text-primary-foreground"
                       : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
                   }`}
@@ -425,7 +433,7 @@ export function AppSidebar({
                 type="button"
                 onClick={() => handleTabClick("store")}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
-                  activeTab === "store"
+                  isStoreActive
                     ? "bg-primary text-primary-foreground shadow-xs font-bold"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
                 }`}
@@ -433,14 +441,14 @@ export function AppSidebar({
                 <div className="flex items-center gap-2.5 min-w-0">
                   <ShoppingBag
                     className={`size-4 shrink-0 ${
-                      activeTab === "store" ? "text-primary-foreground" : "text-emerald-500"
+                      isStoreActive ? "text-primary-foreground" : "text-emerald-500"
                     }`}
                   />
                   <span className="truncate">Stands & Stickers</span>
                 </div>
                 <span
                   className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                    activeTab === "store"
+                    isStoreActive
                       ? "bg-primary-foreground/20 text-primary-foreground"
                       : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                   }`}

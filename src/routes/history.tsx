@@ -114,7 +114,7 @@ function HistoryPage() {
   };
 
   return (
-    <AppLayout currentUser={currentUser} onUserChange={setCurrentUser}>
+    <AppLayout currentUser={currentUser} onUserChange={setCurrentUser} activeTab="history">
       <div className="max-w-4xl mx-auto px-4 py-8 sm:px-8 space-y-6">
         <div className="flex items-center gap-3 border-b border-border/50 pb-5">
           <div className="size-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">

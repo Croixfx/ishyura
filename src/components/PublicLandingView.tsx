@@ -88,8 +88,35 @@ export function PublicLandingView({
                 </button>
               </div>
 
+              {/* Supported Rwanda Networks */}
+              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-2 pt-1">
+                <span className="text-[11px] font-semibold text-muted-foreground mr-1">
+                  Works with:
+                </span>
+                <div className="h-7 px-2.5 rounded-lg bg-[#FFCC00] text-slate-950 flex items-center gap-1.5 font-black text-[11px] shadow-2xs border border-amber-400/50 select-none">
+                  <span className="bg-slate-950 text-[#FFCC00] text-[8px] font-black px-1 py-0.5 rounded-xs leading-none">
+                    MTN
+                  </span>
+                  <span className="font-black tracking-tight leading-none">MoMo</span>
+                </div>
+                <div className="h-7 px-2.5 rounded-lg bg-[#E40000] text-white flex items-center gap-1 font-bold text-[11px] shadow-2xs border border-red-600/50 select-none">
+                  <span className="font-extrabold lowercase tracking-tight leading-none">
+                    airtel
+                  </span>
+                  <span className="text-[9px] font-semibold text-white/90 leading-none">
+                    money
+                  </span>
+                </div>
+                <div className="h-7 px-2.5 rounded-lg bg-[#990000] text-white flex items-center gap-1 font-bold text-[11px] shadow-2xs border border-red-900/50 select-none">
+                  <span className="font-black tracking-tight leading-none">Equity</span>
+                  <span className="text-[9px] font-semibold text-white/90 leading-none">
+                    eKash
+                  </span>
+                </div>
+              </div>
+
               {/* Trust & Policy Highlights */}
-              <div className="pt-4 flex flex-wrap items-center justify-center lg:justify-start gap-x-6 gap-y-2 text-xs text-muted-foreground">
+              <div className="pt-3 flex flex-wrap items-center justify-center lg:justify-start gap-x-6 gap-y-2 text-xs text-muted-foreground">
                 <div className="flex items-center gap-1.5">
                   <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
                   <span>1st Offline QR &amp; PDF Included</span>
@@ -116,11 +143,19 @@ export function PublicLandingView({
                   {/* Card Header with Rwanda Telecom Indicators */}
                   <div className="flex items-center justify-between border-b border-border/60 pb-3">
                     <div className="flex items-center gap-2">
-                      <div className="size-8 rounded-lg bg-amber-400 text-amber-950 flex items-center justify-center font-black text-xs">
-                        MoMo
+                      <div className="h-8 px-2.5 rounded-lg bg-[#FFCC00] text-slate-950 flex items-center gap-1.5 font-black text-xs shadow-xs border border-amber-400/50 select-none">
+                        <span className="bg-slate-950 text-[#FFCC00] text-[9px] font-black px-1.5 py-0.5 rounded-xs leading-none">
+                          MTN
+                        </span>
+                        <span className="font-black text-xs tracking-tight leading-none">MoMo</span>
                       </div>
-                      <div className="size-8 rounded-lg bg-red-600 text-white flex items-center justify-center font-black text-[10px]">
-                        airtel
+                      <div className="h-8 px-2.5 rounded-lg bg-[#E40000] text-white flex items-center gap-1 font-bold text-xs shadow-xs border border-red-600/50 select-none">
+                        <span className="font-extrabold text-xs lowercase tracking-tight leading-none">
+                          airtel
+                        </span>
+                        <span className="text-[10px] font-semibold text-white/90 leading-none">
+                          money
+                        </span>
                       </div>
                     </div>
                     <Badge
