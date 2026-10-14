@@ -26,10 +26,12 @@ export function canDownloadPdf(granted: number, consumed: number): boolean {
 /**
  * Check if PRO subscription is currently active.
  */
-export function isProActive(entitlement?: {
-  status: EntitlementStatus | string;
-  expires_at?: string | null;
-} | null): boolean {
+export function isProActive(
+  entitlement?: {
+    status: EntitlementStatus | string;
+    expires_at?: string | null;
+  } | null,
+): boolean {
   if (!entitlement) return false;
   if (entitlement.status !== "active") return false;
   if (!entitlement.expires_at) return true; // Lifetime or open-ended active

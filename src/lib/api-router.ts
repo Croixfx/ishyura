@@ -11,12 +11,8 @@ import { extractMerchantOrAccountCode } from "./momo-formatters";
 import { ensurePaymentDomainSchema } from "./payment/d1-bootstrap";
 import { inferPaymentMode, publicIdFromInternalId } from "./payment/identity";
 import { mapNetworkToProvider } from "./payment/ussd";
-import {
-  canGenerateOffline,
-  canDownloadPdf,
-  isProActive,
-  MONETIZATION_PRICES,
-} from "./payment";
+import { ORDER_UNIT_PRICES, MAX_ORDER_QUANTITY, isCatalogItem } from "./order-catalog";
+import { canGenerateOffline, canDownloadPdf, isProActive, MONETIZATION_PRICES } from "./payment";
 
 export interface D1PreparedStatement {
   bind(...params: unknown[]): D1PreparedStatement;
@@ -33,6 +29,12 @@ export interface D1Database {
 export interface AppEnv extends SmsEnvConfig {
   DB?: D1Database;
   ADMIN_SECRET?: string;
+  /** Comma-separated extra Google OAuth client IDs accepted when verifying Google sign-in. */
+  GOOGLE_CLIENT_IDS?: string;
+  /** Optional separate signing secret for sessions (defaults to ADMIN_SECRET). */
+  SESSION_SECRET?: string;
+  /** Set to "true" ONLY in local dev to accept OTP 123456 for non-admin phones. */
+  ALLOW_TEST_OTP?: string;
 }
 
 // In-memory fallback stores when D1 is not attached (e.g. local dev / preview)
@@ -137,8 +139,6 @@ const memAdmins: Map<string, MemAdmin> = new Map([
     },
   ],
 ]);
-
-const activeAdminTokens = new Set<string>(["admin-token-jeanniyonkuru29"]);
 
 const memMerchants: Map<string, MemMerchant> = new Map([
   [
@@ -263,7 +263,15 @@ interface MemPaymentRequest {
   id: string;
   merchant_id: string;
   merchant_phone: string;
-  requested_entitlement: "offline_qr_generation" | "pdf_download" | "pro_monthly";
+  // Includes legacy/DB aliases (migration 0003 uses offline_generation / pro_subscription).
+  requested_entitlement:
+    | "offline_qr_generation"
+    | "offline_generation"
+    | "pdf_download"
+    | "pdf_export"
+    | "pro_monthly"
+    | "pro_subscription"
+    | "dynamic_pro_subscription";
   amount: number;
   currency: string;
   reference_code: string;
@@ -312,29 +320,469 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
-function verifyAdminAuth(request: Request, env?: AppEnv): boolean {
-  const configuredSecret = (env?.ADMIN_SECRET || "ishyura2026").trim();
-  const authHeader = (request.headers.get("x-admin-key") || "").trim();
-  const authParam = (new URL(request.url).searchParams.get("key") || "").trim();
+// ----------------------------------------------------
+// SESSIONS & ADMIN AUTH
+// Sessions are stateless HMAC-signed tokens (valid across Worker isolates), issued only after the
+// caller proves their identity at login (OTP, verified Google token, or password). Every
+// merchant/admin endpoint derives identity from the verified token, never from request fields.
+// ADMIN_SECRET (or SESSION_SECRET) must be set as a Worker secret; there is no built-in default.
+// ----------------------------------------------------
+const SESSION_PREFIX = "ishyura-session";
+const ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60;
+const MERCHANT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const MIN_SECRET_LENGTH = 16;
+const DEFAULT_GOOGLE_CLIENT_ID =
+  "502837741120-e83vucg1fvlv3upm4jnfpm0r8hr1bp47.apps.googleusercontent.com";
+
+interface Session {
+  sub: string;
+  role: "admin" | "merchant";
+  phone: string | null;
+  email: string | null;
+}
+
+/** Break-glass admin key: compared directly, never used to sign. */
+function getAdminSecret(env?: AppEnv): string | null {
+  const secret = (env?.ADMIN_SECRET || "").trim();
+  return secret.length >= MIN_SECRET_LENGTH ? secret : null;
+}
+
+function getSessionSecret(env?: AppEnv): string | null {
+  const secret = (env?.SESSION_SECRET || env?.ADMIN_SECRET || "").trim();
+  return secret.length >= MIN_SECRET_LENGTH ? secret : null;
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlToBytes(value: string): Uint8Array | null {
+  try {
+    const b64 = value.replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+/** Length-independent, constant-time string comparison. */
+function constantTimeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const x = enc.encode(a);
+  const y = enc.encode(b);
+  let diff = x.length ^ y.length;
+  const len = Math.max(x.length, y.length);
+  for (let i = 0; i < len; i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
+}
+
+async function getSessionKey(secret: string, usage: "sign" | "verify"): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(`${SESSION_PREFIX}-key:${secret}`),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    [usage],
+  );
+}
+
+async function issueSessionToken(
+  env: AppEnv,
+  claims: { sub: string; role: "admin" | "merchant"; phone?: string | null; email?: string | null },
+): Promise<string | null> {
+  const secret = getSessionSecret(env);
+  if (!secret) return null;
+  const ttl = claims.role === "admin" ? ADMIN_SESSION_TTL_SECONDS : MERCHANT_SESSION_TTL_SECONDS;
+  const payload = bytesToBase64Url(
+    new TextEncoder().encode(
+      JSON.stringify({
+        sub: claims.sub,
+        role: claims.role,
+        phone: claims.phone || null,
+        email: claims.email || null,
+        exp: Math.floor(Date.now() / 1000) + ttl,
+      }),
+    ),
+  );
+  const key = await getSessionKey(secret, "sign");
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${SESSION_PREFIX}.${payload}`),
+  );
+  return `${SESSION_PREFIX}.${payload}.${bytesToBase64Url(new Uint8Array(sig))}`;
+}
+
+function issueAdminSessionToken(
+  env: AppEnv,
+  subject: string,
+  email?: string | null,
+): Promise<string | null> {
+  return issueSessionToken(env, { sub: subject, role: "admin", email });
+}
+
+async function readSessionToken(token: string, secret: string): Promise<Session | null> {
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] !== SESSION_PREFIX) return null;
+  const [, payload, signature] = parts as [string, string, string];
+  const sigBytes = base64UrlToBytes(signature);
+  const payloadBytes = base64UrlToBytes(payload);
+  if (!sigBytes || !payloadBytes) return null;
+  const key = await getSessionKey(secret, "verify");
+  const valid = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    sigBytes as BufferSource,
+    new TextEncoder().encode(`${SESSION_PREFIX}.${payload}`),
+  );
+  if (!valid) return null;
+  try {
+    const c = JSON.parse(new TextDecoder().decode(payloadBytes)) as {
+      sub?: string;
+      role?: string;
+      phone?: string | null;
+      email?: string | null;
+      exp?: number;
+    };
+    if (typeof c.exp !== "number" || c.exp <= Date.now() / 1000) return null;
+    if (!c.sub || (c.role !== "admin" && c.role !== "merchant")) return null;
+    return { sub: c.sub, role: c.role, phone: c.phone || null, email: c.email || null };
+  } catch {
+    return null;
+  }
+}
+
+/** Verified session from `Authorization: Bearer` (or `x-admin-key`); null if absent or invalid. */
+async function getSession(request: Request, env?: AppEnv): Promise<Session | null> {
+  const secret = getSessionSecret(env);
+  if (!secret) return null;
   const bearer = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  const header = (request.headers.get("x-admin-key") || "").trim();
+  for (const val of [bearer, header]) {
+    if (!val.startsWith(`${SESSION_PREFIX}.`)) continue;
+    const session = await readSessionToken(val, secret);
+    if (session) return session;
+  }
+  return null;
+}
 
-  const candidates = [authHeader, authParam, bearer].filter(Boolean);
+/** Every identifier the caller is known by, in the forms legacy rows store them. */
+function sessionIdentities(session: Session): Set<string> {
+  const ids = new Set<string>([session.sub]);
+  if (session.phone) {
+    const p = session.phone.trim();
+    ids.add(p);
+    ids.add(p.replace(/^\+/, ""));
+    ids.add(p.replace(/^\+?250/, "0"));
+  }
+  if (session.email) ids.add(session.email.toLowerCase());
+  return ids;
+}
 
-  return candidates.some((val) => {
-    // 1. Secret match (if configured in env)
-    if (configuredSecret && val.toLowerCase() === configuredSecret.toLowerCase()) return true;
-    // 2. Active admin bearer token match
-    if (activeAdminTokens.has(val)) return true;
-    // 3. Admin email match from in-memory admin list
-    const lower = val.toLowerCase();
-    if (memAdmins.has(lower)) return true;
-    // 4. Default permanent super-admin
-    if (lower === "jeanniyonkuru29@gmail.com" || lower === "valensbikorimana70@gmail.com")
-      return true;
-    // 5. Fallback maintenance token
-    if (val === "ishyura2026") return true;
+function ownsRecord(
+  session: Session,
+  row: { owner_id?: string | null; phone_number?: string | null; merchant_id?: string | null },
+): boolean {
+  const ids = sessionIdentities(session);
+  return [row.owner_id, row.phone_number, row.merchant_id].some((v) => Boolean(v) && ids.has(v!));
+}
+
+/**
+ * Accepts either a signed admin session token or the ADMIN_SECRET itself (break-glass),
+ * via `x-admin-key` or `Authorization: Bearer`. `allowQueryToken` additionally accepts a signed
+ * session token (never the raw secret) in `?key=` for plain browser downloads that cannot set headers.
+ */
+async function verifyAdminAuth(
+  request: Request,
+  env?: AppEnv,
+  opts: { allowQueryToken?: boolean } = {},
+): Promise<boolean> {
+  const adminSecret = getAdminSecret(env);
+  const sessionSecret = getSessionSecret(env);
+  if (!adminSecret && !sessionSecret) return false;
+
+  const header = (request.headers.get("x-admin-key") || "").trim();
+  const bearer = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  const query = opts.allowQueryToken
+    ? (new URL(request.url).searchParams.get("key") || "").trim()
+    : "";
+
+  const isAdminToken = async (val: string) => {
+    if (!sessionSecret) return false;
+    return (await readSessionToken(val, sessionSecret))?.role === "admin";
+  };
+
+  for (const val of [header, bearer]) {
+    if (!val) continue;
+    if (adminSecret && constantTimeEqual(val, adminSecret)) return true;
+    if (await isAdminToken(val)) return true;
+  }
+  return query ? isAdminToken(query) : false;
+}
+
+/** PBKDF2-SHA256 hash: `pbkdf2$<iterations>$<salt>$<hash>` (Workers cap iterations at 100k). */
+const PBKDF2_ITERATIONS = 100_000;
+
+async function derivePasswordHash(
+  password: string,
+  salt: Uint8Array,
+  iterations: number,
+): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: salt as BufferSource, iterations },
+    key,
+    256,
+  );
+  return bytesToBase64Url(new Uint8Array(bits));
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await derivePasswordHash(password, salt, PBKDF2_ITERATIONS);
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${hash}`;
+}
+
+async function verifyPassword(
+  password: string,
+  stored: string | null | undefined,
+): Promise<boolean> {
+  if (!stored) return false;
+  const [scheme, iter, saltB64, hash] = stored.split("$");
+  if (scheme !== "pbkdf2" || !iter || !saltB64 || !hash) return false;
+  const salt = base64UrlToBytes(saltB64);
+  const iterations = Number(iter);
+  if (!salt || !Number.isInteger(iterations) || iterations < 1 || iterations > 100_000) {
     return false;
-  });
+  }
+  return constantTimeEqual(await derivePasswordHash(password, salt, iterations), hash);
+}
+
+let merchantColumnsChecked = false;
+/**
+ * The merchants table created by migration 0001 lacks columns the app relies on
+ * (password_hash, business_name, role). Add whichever are missing, once per isolate.
+ */
+async function ensureMerchantColumns(db: D1Database): Promise<void> {
+  if (merchantColumnsChecked) return;
+  const columns: Array<[string, string]> = [
+    ["password_hash", "TEXT"],
+    ["business_name", "TEXT"],
+    ["role", "TEXT DEFAULT 'merchant'"],
+  ];
+  for (const [name, type] of columns) {
+    try {
+      await db.prepare(`SELECT ${name} FROM merchants LIMIT 1`).first();
+    } catch {
+      try {
+        await db.exec(`ALTER TABLE merchants ADD COLUMN ${name} ${type}`);
+      } catch {
+        // column raced into existence or table missing; ensureD1Tables handles the latter
+      }
+    }
+  }
+  merchantColumnsChecked = true;
+}
+
+// ----------------------------------------------------
+// RATE LIMITING (fixed window, D1-backed so it holds across Worker isolates)
+// ----------------------------------------------------
+const OTP_VERIFY_MAX_FAILURES = 5; // per phone, per window; the code is burned when reached
+const OTP_VERIFY_IP_MAX_FAILURES = 20; // per IP, per window
+const OTP_VERIFY_WINDOW_MS = 15 * 60 * 1000;
+const OTP_REQUEST_MAX = 5; // SMS sends per phone per window
+const OTP_REQUEST_IP_MAX = 20; // SMS sends per IP per window
+const OTP_REQUEST_WINDOW_MS = 60 * 60 * 1000;
+const PASSWORD_LOGIN_MAX_FAILURES = 5; // per account identifier, per window
+const PASSWORD_LOGIN_IP_MAX_FAILURES = 20; // per IP, per window
+const PASSWORD_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+
+/** What each purchasable entitlement costs. The server decides the amount; clients never do. */
+const ENTITLEMENT_PRICES: Record<string, number> = {
+  offline_qr_generation: MONETIZATION_PRICES.extra_offline_generation,
+  pdf_download: MONETIZATION_PRICES.pdf_download,
+  pro_monthly: MONETIZATION_PRICES.pro_monthly,
+};
+const MAX_PENDING_PAYMENT_REQUESTS = 5;
+const ORDER_WINDOW_MS = 60 * 60 * 1000;
+const ORDER_MAX_PER_PHONE = 5;
+const ORDER_MAX_PER_IP = 20;
+
+const memRateLimits = new Map<string, { count: number; start: number }>();
+let rateLimitTableReady = false;
+
+async function ensureRateLimitTable(db: D1Database): Promise<void> {
+  if (rateLimitTableReady) return;
+  await db.exec(
+    "CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, window_start INTEGER NOT NULL);",
+  );
+  rateLimitTableReady = true;
+}
+
+/** Current usage of a window; an expired window counts as empty. */
+async function rateLimitPeek(
+  env: AppEnv,
+  key: string,
+  windowMs: number,
+): Promise<{ count: number; retryAfterSec: number }> {
+  const now = Date.now();
+  let row: { count: number; start: number } | null = null;
+  if (env.DB) {
+    await ensureRateLimitTable(env.DB);
+    const r = await env.DB.prepare("SELECT count, window_start FROM rate_limits WHERE key = ?")
+      .bind(key)
+      .first<{ count: number; window_start: number }>();
+    if (r) row = { count: r.count, start: r.window_start };
+  } else {
+    row = memRateLimits.get(key) || null;
+  }
+  if (!row || now - row.start >= windowMs) return { count: 0, retryAfterSec: 0 };
+  return {
+    count: row.count,
+    retryAfterSec: Math.max(1, Math.ceil((row.start + windowMs - now) / 1000)),
+  };
+}
+
+/** Records one hit and returns the new count for the window. */
+async function rateLimitHit(env: AppEnv, key: string, windowMs: number): Promise<number> {
+  const now = Date.now();
+  if (env.DB) {
+    await ensureRateLimitTable(env.DB);
+    await env.DB.prepare(
+      "INSERT INTO rate_limits (key, count, window_start) VALUES (?, 1, ?) " +
+        "ON CONFLICT(key) DO UPDATE SET " +
+        "count = CASE WHEN ? - window_start >= ? THEN 1 ELSE count + 1 END, " +
+        "window_start = CASE WHEN ? - window_start >= ? THEN ? ELSE window_start END",
+    )
+      .bind(key, now, now, windowMs, now, windowMs, now)
+      .run();
+    const r = await env.DB.prepare("SELECT count FROM rate_limits WHERE key = ?")
+      .bind(key)
+      .first<{ count: number }>();
+    return r?.count ?? 1;
+  }
+  const cur = memRateLimits.get(key);
+  if (!cur || now - cur.start >= windowMs) {
+    memRateLimits.set(key, { count: 1, start: now });
+    return 1;
+  }
+  cur.count += 1;
+  return cur.count;
+}
+
+async function rateLimitReset(env: AppEnv, key: string): Promise<void> {
+  if (env.DB) {
+    await ensureRateLimitTable(env.DB);
+    await env.DB.prepare("DELETE FROM rate_limits WHERE key = ?").bind(key).run();
+  } else {
+    memRateLimits.delete(key);
+  }
+}
+
+function tooManyAttempts(retryAfterSec: number, detail: string): Response {
+  const res = jsonResponse({ error: "RATE_LIMITED", detail, retry_after: retryAfterSec }, 429);
+  res.headers.set("Retry-After", String(retryAfterSec));
+  return res;
+}
+
+function clientIp(request: Request): string {
+  return (request.headers.get("CF-Connecting-IP") || "").trim();
+}
+
+/** Admin identity comes from the database when attached, otherwise the in-memory seed list. */
+async function isAdminIdentity(
+  env: AppEnv,
+  who: { email?: string | null; phones?: string[] },
+): Promise<boolean> {
+  const email = (who.email || "").trim().toLowerCase();
+  const phones = (who.phones || []).filter(Boolean);
+  if (env.DB) {
+    try {
+      const conditions: string[] = [];
+      const binds: string[] = [];
+      if (email) {
+        conditions.push("email = ?");
+        binds.push(email);
+      }
+      for (const p of phones) {
+        conditions.push("phone_number = ?");
+        binds.push(p);
+      }
+      if (!conditions.length) return false;
+      const row = await env.DB.prepare(
+        `SELECT id FROM system_admins WHERE ${conditions.join(" OR ")} LIMIT 1`,
+      )
+        .bind(...binds)
+        .first();
+      return Boolean(row);
+    } catch {
+      // table unavailable: fall through to the in-memory list
+    }
+  }
+  if (email && memAdmins.has(email)) return true;
+  for (const a of memAdmins.values()) {
+    if (a.phone_number && phones.includes(a.phone_number)) return true;
+  }
+  return false;
+}
+
+/** Confirms a Google identity server-side; the client-supplied email alone is never trusted. */
+async function verifyGoogleIdentity(
+  env: AppEnv,
+  creds: { id_token?: string; access_token?: string },
+): Promise<{ email: string; sub: string } | null> {
+  const param = creds.id_token
+    ? `id_token=${encodeURIComponent(creds.id_token)}`
+    : creds.access_token
+      ? `access_token=${encodeURIComponent(creds.access_token)}`
+      : "";
+  if (!param) return null;
+  try {
+    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?${param}`);
+    if (!res.ok) return null;
+    const info = (await res.json()) as {
+      aud?: string;
+      azp?: string;
+      email?: string;
+      email_verified?: string | boolean;
+      sub?: string;
+      user_id?: string;
+    };
+    const allowed = [DEFAULT_GOOGLE_CLIENT_ID, ...(env.GOOGLE_CLIENT_IDS || "").split(",")]
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const aud = info.aud || info.azp || "";
+    if (!allowed.includes(aud)) {
+      console.warn(
+        `Google token audience not allowed: ${aud}. Set GOOGLE_CLIENT_IDS to permit it.`,
+      );
+      return null;
+    }
+    const verified = info.email_verified === true || info.email_verified === "true";
+    if (!info.email || !verified) return null;
+    return { email: info.email.trim().toLowerCase(), sub: info.sub || info.user_id || "" };
+  } catch {
+    return null;
+  }
+}
+
+function adminAuthUnavailable(): Response {
+  return jsonResponse(
+    {
+      detail:
+        "Sign-in is unavailable: ADMIN_SECRET (or SESSION_SECRET) is not configured (min 16 characters). Set it with `wrangler secret put ADMIN_SECRET`.",
+    },
+    503,
+  );
 }
 
 let d1Initialized = false;
@@ -640,6 +1088,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
   const env = (rawEnv || {}) as AppEnv;
   if (env.DB) {
     await ensureD1Tables(env.DB);
+    await ensureMerchantColumns(env.DB);
   }
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api/, "");
@@ -759,6 +1208,25 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       const e164Phone = formatToE164(rawPhone);
+
+      // Cap sends per phone and per IP: stops SMS-cost abuse and keeps guess windows short.
+      const reqPhoneKey = `otp-request:${e164Phone}`;
+      const reqIp = clientIp(request);
+      const reqIpKey = reqIp ? `otp-request-ip:${reqIp}` : "";
+      const reqPhoneCount = await rateLimitHit(env, reqPhoneKey, OTP_REQUEST_WINDOW_MS);
+      const reqIpCount = reqIpKey ? await rateLimitHit(env, reqIpKey, OTP_REQUEST_WINDOW_MS) : 0;
+      if (reqPhoneCount > OTP_REQUEST_MAX || reqIpCount > OTP_REQUEST_IP_MAX) {
+        const wait = await rateLimitPeek(
+          env,
+          reqPhoneCount > OTP_REQUEST_MAX ? reqPhoneKey : reqIpKey,
+          OTP_REQUEST_WINDOW_MS,
+        );
+        return tooManyAttempts(
+          wait.retryAfterSec || 60,
+          "Too many verification codes requested. Please wait before trying again.",
+        );
+      }
+
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
       if (env.DB) {
@@ -820,8 +1288,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         error: smsResult.error,
         isTrialNotice: smsResult.isTrialNotice,
         phone_normalized: e164Phone,
-        test_code: "123456",
-        generated_code: !smsResult.success ? otp : undefined,
+        // Dev only (ALLOW_TEST_OTP=true): expose the fixed test code and the generated code.
+        ...(env.ALLOW_TEST_OTP === "true"
+          ? { test_code: "123456", generated_code: !smsResult.success ? otp : undefined }
+          : {}),
       });
     }
 
@@ -838,18 +1308,58 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       const e164Phone = formatToE164(rawPhone);
       const otp = (body.otp || "").trim();
 
-      // Master demo/test OTP fallback is always accepted
-      let valid = otp === "123456";
+      // Guess limiting: after OTP_VERIFY_MAX_FAILURES wrong codes the phone is locked for the
+      // window and the pending code is destroyed, so it cannot be brute-forced across windows.
+      const verPhoneKey = `otp-verify:${e164Phone}`;
+      const verIp = clientIp(request);
+      const verIpKey = verIp ? `otp-verify-ip:${verIp}` : "";
+      const phoneUse = await rateLimitPeek(env, verPhoneKey, OTP_VERIFY_WINDOW_MS);
+      const ipUse = verIpKey
+        ? await rateLimitPeek(env, verIpKey, OTP_VERIFY_WINDOW_MS)
+        : { count: 0, retryAfterSec: 0 };
+      if (phoneUse.count >= OTP_VERIFY_MAX_FAILURES || ipUse.count >= OTP_VERIFY_IP_MAX_FAILURES) {
+        return tooManyAttempts(
+          Math.max(phoneUse.retryAfterSec, ipUse.retryAfterSec) || 60,
+          "Too many incorrect codes. Please wait, then request a new code.",
+        );
+      }
+      const rejectOtp = async (): Promise<Response> => {
+        const phoneFailures = await rateLimitHit(env, verPhoneKey, OTP_VERIFY_WINDOW_MS);
+        if (verIpKey) await rateLimitHit(env, verIpKey, OTP_VERIFY_WINDOW_MS);
+        if (phoneFailures >= OTP_VERIFY_MAX_FAILURES) {
+          if (env.DB) {
+            await env.DB.prepare("DELETE FROM otps WHERE phone_number = ? OR phone_number = ?")
+              .bind(e164Phone, cleanDigits)
+              .run();
+          }
+          memOtps.delete(e164Phone);
+          memOtps.delete(cleanDigits);
+          return tooManyAttempts(
+            OTP_VERIFY_WINDOW_MS / 1000,
+            "Too many incorrect codes. Please request a new code.",
+          );
+        }
+        return jsonResponse({ detail: "Invalid verification code." }, 401);
+      };
+
+      const otpIsAdmin = await isAdminIdentity(env, { phones: [e164Phone, cleanDigits] });
+      // The fixed test OTP only exists when ALLOW_TEST_OTP=true (local dev), and never for admins.
+      let valid = !otpIsAdmin && env.ALLOW_TEST_OTP === "true" && otp === "123456";
 
       if (env.DB) {
         const row = await env.DB.prepare(
-          "SELECT code FROM otps WHERE phone_number = ? OR phone_number = ? ORDER BY expires_at DESC",
+          "SELECT code, expires_at FROM otps WHERE phone_number = ? OR phone_number = ? ORDER BY expires_at DESC",
         )
           .bind(e164Phone, cleanDigits)
-          .first<{ code: string }>();
+          .first<{ code: string; expires_at?: string | null }>();
 
-        if (row && row.code === otp) {
+        const otpFresh = !row?.expires_at || new Date(row.expires_at).getTime() > Date.now();
+        if (row && otpFresh && otp && constantTimeEqual(row.code, otp)) {
           valid = true;
+          // Single use: a verified code cannot be replayed.
+          await env.DB.prepare("DELETE FROM otps WHERE phone_number = ? OR phone_number = ?")
+            .bind(e164Phone, cleanDigits)
+            .run();
         }
 
         if (!valid) {
@@ -863,9 +1373,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         }
 
         if (!valid) {
-          return jsonResponse({ detail: "Invalid verification code." }, 401);
+          return rejectOtp();
         }
 
+        await rateLimitReset(env, verPhoneKey);
         const merchant = await env.DB.prepare(
           "SELECT id, phone_number, is_fully_registered FROM merchants WHERE phone_number = ? OR phone_number = ?",
         )
@@ -873,15 +1384,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           .first<{ id: string; phone_number: string; is_fully_registered: number }>();
 
         const userId = merchant?.id || crypto.randomUUID();
-        const token = `d1-jwt-${userId}-${Date.now()}`;
-
-        let role: "admin" | "merchant" = "merchant";
-        if (memAdmins.has(e164Phone) || memAdmins.has(cleanDigits)) {
-          role = "admin";
-        }
-        if (role === "admin") {
-          activeAdminTokens.add(token);
-        }
+        const role: "admin" | "merchant" = otpIsAdmin ? "admin" : "merchant";
+        const token = await issueSessionToken(env, { sub: userId, role, phone: e164Phone });
+        if (!token) return adminAuthUnavailable();
 
         return jsonResponse({
           access_token: token,
@@ -895,7 +1400,11 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
       // Memory fallback
       const memOtp = memOtps.get(e164Phone) || memOtps.get(cleanDigits);
-      if (memOtp && memOtp === otp) valid = true;
+      if (memOtp && otp && constantTimeEqual(memOtp, otp)) {
+        valid = true;
+        memOtps.delete(e164Phone);
+        memOtps.delete(cleanDigits);
+      }
 
       if (!valid) {
         const twilioConfig = await loadMergedTwilioConfig(env);
@@ -908,9 +1417,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       if (!valid) {
-        return jsonResponse({ detail: "Invalid verification code." }, 401);
+        return rejectOtp();
       }
 
+      await rateLimitReset(env, verPhoneKey);
       const merchant = memMerchants.get(e164Phone) ||
         memMerchants.get(cleanDigits) || {
           id: `m-${Date.now()}`,
@@ -922,12 +1432,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         };
       memMerchants.set(e164Phone, merchant);
 
-      const memToken = `mem-jwt-${merchant.id}`;
-      let memRole: "admin" | "merchant" = "merchant";
-      if (memAdmins.has(e164Phone) || memAdmins.has(cleanDigits)) {
-        memRole = "admin";
-        activeAdminTokens.add(memToken);
-      }
+      const memRole: "admin" | "merchant" = otpIsAdmin ? "admin" : "merchant";
+      const memToken = await issueSessionToken(env, {
+        sub: merchant.id,
+        role: memRole,
+        phone: merchant.phone_number,
+      });
+      if (!memToken) return adminAuthUnavailable();
 
       return jsonResponse({
         access_token: memToken,
@@ -948,41 +1459,41 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         name?: string;
         sub?: string;
         phone_number?: string;
+        id_token?: string;
+        access_token?: string;
       };
 
-      const email = (body.email || "").trim().toLowerCase();
-      if (!email) {
-        return jsonResponse({ detail: "Google account email is required." }, 400);
+      // The email is only trusted once Google confirms it for a token issued to this app.
+      const verified = await verifyGoogleIdentity(env, {
+        id_token: body.id_token,
+        access_token: body.access_token,
+      });
+      if (!verified) {
+        return jsonResponse({ detail: "Google sign-in could not be verified." }, 401);
+      }
+      const email = verified.email;
+      if (body.email && body.email.trim().toLowerCase() !== email) {
+        return jsonResponse(
+          { detail: "Google account does not match the verified identity." },
+          401,
+        );
       }
 
       const businessName = (body.name || email.split("@")[0] || "Merchant").trim();
-      const fallbackPhone = body.phone_number ? formatToE164(body.phone_number) : `g-${email}`;
+      // A client-supplied phone number is never trusted here: it could point at someone else's account.
+      const fallbackPhone = `g-${email}`;
       const now = new Date().toISOString();
 
-      let isAdmin =
-        memAdmins.has(email) ||
-        email === "jeanniyonkuru29@gmail.com" ||
-        email === "valensbikorimana70@gmail.com";
+      const isAdmin = await isAdminIdentity(env, { email });
 
       if (env.DB) {
-        if (!isAdmin) {
-          try {
-            const adminRow = await env.DB.prepare("SELECT email FROM system_admins WHERE email = ?")
-              .bind(email)
-              .first();
-            if (adminRow) isAdmin = true;
-          } catch {
-            // ignore
-          }
-        }
-
         const merchant = await env.DB.prepare(
           "SELECT id, phone_number, email, business_name FROM merchants WHERE email = ? OR phone_number = ?",
         )
           .bind(email, fallbackPhone)
           .first<{ id: string; phone_number: string; email: string; business_name: string }>();
 
-        const merchantId = merchant?.id || body.sub || crypto.randomUUID();
+        const merchantId = merchant?.id || verified.sub || crypto.randomUUID();
         const phoneToUse = merchant?.phone_number || fallbackPhone;
         const role = isAdmin ? "admin" : "merchant";
 
@@ -995,11 +1506,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           .bind(merchantId, phoneToUse, email, businessName, role, now)
           .run();
 
-        const token = `d1-google-jwt-${merchantId}-${Date.now()}`;
-        if (isAdmin) {
-          activeAdminTokens.add(token);
-          activeAdminTokens.add(email);
-        }
+        const token = await issueSessionToken(env, {
+          sub: merchantId,
+          role,
+          phone: phoneToUse,
+          email,
+        });
+        if (!token) return adminAuthUnavailable();
 
         return jsonResponse({
           access_token: token,
@@ -1015,7 +1528,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       // Memory fallback
-      const merchantId = body.sub || `g-${Date.now()}`;
+      const merchantId = verified.sub || `g-${Date.now()}`;
       const merchant = {
         id: merchantId,
         phone_number: fallbackPhone,
@@ -1028,11 +1541,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       };
       memMerchants.set(fallbackPhone, merchant);
 
-      const memToken = `mem-google-jwt-${merchantId}`;
-      if (isAdmin) {
-        activeAdminTokens.add(memToken);
-        activeAdminTokens.add(email);
-      }
+      const memToken = await issueSessionToken(env, {
+        sub: merchantId,
+        role: isAdmin ? "admin" : "merchant",
+        phone: merchant.phone_number,
+        email,
+      });
+      if (!memToken) return adminAuthUnavailable();
 
       return jsonResponse({
         access_token: memToken,
@@ -1066,7 +1581,46 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       const cleanPhone = formatToE164(identifier);
       const cleanEmail = identifier.toLowerCase();
 
+      // Guess limiting: failures (wrong password, unknown account, no password set) count against
+      // the identifier and the client IP, and block further attempts until the window passes.
+      const pwdKey = `pwd-login:${identifier.includes("@") ? cleanEmail : cleanPhone}`;
+      const pwdIp = clientIp(request);
+      const pwdIpKey = pwdIp ? `pwd-login-ip:${pwdIp}` : "";
+      const pwdUse = await rateLimitPeek(env, pwdKey, PASSWORD_LOGIN_WINDOW_MS);
+      const pwdIpUse = pwdIpKey
+        ? await rateLimitPeek(env, pwdIpKey, PASSWORD_LOGIN_WINDOW_MS)
+        : { count: 0, retryAfterSec: 0 };
+      if (
+        pwdUse.count >= PASSWORD_LOGIN_MAX_FAILURES ||
+        pwdIpUse.count >= PASSWORD_LOGIN_IP_MAX_FAILURES
+      ) {
+        return tooManyAttempts(
+          Math.max(pwdUse.retryAfterSec, pwdIpUse.retryAfterSec) || 60,
+          "Too many failed sign-in attempts. Please wait a few minutes, or sign in with OTP or Google.",
+        );
+      }
+      const rejectPassword = async (): Promise<Response> => {
+        const failures = await rateLimitHit(env, pwdKey, PASSWORD_LOGIN_WINDOW_MS);
+        if (pwdIpKey) await rateLimitHit(env, pwdIpKey, PASSWORD_LOGIN_WINDOW_MS);
+        if (failures >= PASSWORD_LOGIN_MAX_FAILURES) {
+          return tooManyAttempts(
+            PASSWORD_LOGIN_WINDOW_MS / 1000,
+            "Too many failed sign-in attempts. Please wait a few minutes, or sign in with OTP or Google.",
+          );
+        }
+        // One generic answer for unknown account / wrong password / no password set,
+        // so the endpoint cannot be used to find out which phones or emails are registered.
+        return jsonResponse(
+          {
+            detail:
+              "Incorrect phone/email or password. If you have not set a password, please sign in with OTP or Google.",
+          },
+          401,
+        );
+      };
+
       if (env.DB) {
+        await ensureMerchantColumns(env.DB);
         const merchant = await env.DB.prepare(
           "SELECT id, phone_number, email, business_name, password_hash FROM merchants WHERE phone_number = ? OR phone_number = ? OR email = ?",
         )
@@ -1076,34 +1630,30 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             phone_number: string;
             email: string;
             business_name: string;
-            password_hash: string;
+            password_hash: string | null;
           }>();
 
         if (!merchant) {
-          return jsonResponse(
-            {
-              detail:
-                "No account found with this phone or email. Please sign in with OTP or Google first.",
-            },
-            404,
-          );
+          // Spend the same hashing time as a real check so response time does not reveal the account.
+          await derivePasswordHash(password, new Uint8Array(16), PBKDF2_ITERATIONS);
+          return rejectPassword();
         }
 
-        if (merchant.password_hash && merchant.password_hash !== password) {
-          return jsonResponse({ detail: "Incorrect password. Please try again or use OTP." }, 401);
+        // An account with no password set cannot use password login (previously ANY password worked).
+        if (!(await verifyPassword(password, merchant.password_hash))) {
+          return rejectPassword();
         }
+        await rateLimitReset(env, pwdKey);
 
-        const isAdmin =
-          (merchant.email &&
-            (memAdmins.has(merchant.email.toLowerCase()) ||
-              merchant.email.toLowerCase() === "jeanniyonkuru29@gmail.com")) ||
-          memAdmins.has(merchant.phone_number);
-
-        const token = `d1-pwd-jwt-${merchant.id}-${Date.now()}`;
-        if (isAdmin) {
-          activeAdminTokens.add(token);
-          if (merchant.email) activeAdminTokens.add(merchant.email.toLowerCase());
-        }
+        // Password login never yields an admin session: the email on a merchant row is
+        // self-declared (unverified), so admins must sign in with OTP or Google.
+        const token = await issueSessionToken(env, {
+          sub: merchant.id,
+          role: "merchant",
+          phone: merchant.phone_number,
+          email: merchant.email,
+        });
+        if (!token) return adminAuthUnavailable();
 
         return jsonResponse({
           access_token: token,
@@ -1112,115 +1662,114 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           phone_number: merchant.phone_number,
           email: merchant.email,
           business_name: merchant.business_name,
-          role: isAdmin ? "admin" : "merchant",
+          role: "merchant",
           is_fully_registered: true,
         });
       }
 
-      // Memory fallback
-      const merchant =
-        memMerchants.get(cleanPhone) ||
-        memMerchants.get(identifier) ||
-        Array.from(memMerchants.values()).find((m) => m.email === cleanEmail);
-
-      if (!merchant) {
-        return jsonResponse({ detail: "No account found. Please sign in with OTP first." }, 404);
-      }
-
-      const isAdmin =
-        (merchant.email &&
-          (memAdmins.has(merchant.email.toLowerCase()) ||
-            merchant.email.toLowerCase() === "jeanniyonkuru29@gmail.com")) ||
-        memAdmins.has(merchant.phone_number);
-
-      const memToken = `mem-pwd-jwt-${merchant.id}`;
-      if (isAdmin) {
-        activeAdminTokens.add(memToken);
-        if (merchant.email) activeAdminTokens.add(merchant.email.toLowerCase());
-      }
-
-      return jsonResponse({
-        access_token: memToken,
-        token_type: "bearer",
-        user_id: merchant.id,
-        phone_number: merchant.phone_number,
-        email: merchant.email,
-        role: isAdmin ? "admin" : "merchant",
-        is_fully_registered: true,
-      });
+      // Memory fallback: the in-memory store keeps no passwords, so password login cannot succeed.
+      return jsonResponse(
+        { detail: "Password login is unavailable without the database. Please use OTP or Google." },
+        401,
+      );
     }
 
     // ----------------------------------------------------
     // 2D. AUTH: Upgrade or Update Profile
     // ----------------------------------------------------
     if (path === "/auth/upgrade" && request.method === "POST") {
+      // Only the signed-in merchant can change their own account; identity comes from the session.
+      const session = await getSession(request, env);
+      if (!session) {
+        return jsonResponse({ detail: "Please sign in to update your account." }, 401);
+      }
+
       const body = (await request.json().catch(() => ({}))) as {
-        user_id?: string;
-        phone_number?: string;
         email?: string;
         password?: string;
         business_name?: string;
       };
 
-      const e164Phone = body.phone_number ? formatToE164(body.phone_number) : "";
-      const email = (body.email || "").trim();
+      const email = (body.email || "").trim().toLowerCase();
+      const password = (body.password || "").trim();
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        return jsonResponse({ detail: "Please enter a valid email address." }, 400);
+      }
+      if (password && password.length < 8) {
+        return jsonResponse({ detail: "Password must be at least 8 characters." }, 400);
+      }
       const now = new Date().toISOString();
 
       if (env.DB) {
-        let merchant = null;
-        if (body.user_id) {
-          merchant = await env.DB.prepare("SELECT * FROM merchants WHERE id = ?")
-            .bind(body.user_id)
-            .first<{ id: string; phone_number: string }>();
-        }
-        if (!merchant && e164Phone) {
-          merchant = await env.DB.prepare("SELECT * FROM merchants WHERE phone_number = ?")
-            .bind(e164Phone)
-            .first<{ id: string; phone_number: string }>();
-        }
-
-        const merchantId = merchant?.id || body.user_id || crypto.randomUUID();
-        const phoneToUse = merchant?.phone_number || e164Phone || "verified-merchant";
-
-        await env.DB.prepare(
-          "INSERT INTO merchants (id, phone_number, email, is_fully_registered, last_active_at) " +
-            "VALUES (?, ?, ?, 1, ?) " +
-            "ON CONFLICT(phone_number) DO UPDATE SET " +
-            "email = excluded.email, is_fully_registered = 1, last_active_at = excluded.last_active_at",
+        await ensureMerchantColumns(env.DB);
+        const merchant = await env.DB.prepare(
+          "SELECT id, phone_number, email FROM merchants WHERE id = ?",
         )
-          .bind(merchantId, phoneToUse, email || null, now)
+          .bind(session.sub)
+          .first<{ id: string; phone_number: string; email: string | null }>();
+        if (!merchant) {
+          return jsonResponse({ detail: "Account not found." }, 404);
+        }
+
+        if (email) {
+          const taken = await env.DB.prepare("SELECT id FROM merchants WHERE email = ? AND id != ?")
+            .bind(email, merchant.id)
+            .first();
+          if (taken) {
+            return jsonResponse({ detail: "That email is already used by another account." }, 409);
+          }
+        }
+
+        const passwordHash = password ? await hashPassword(password) : null;
+        await env.DB.prepare(
+          "UPDATE merchants SET email = COALESCE(?, email), password_hash = COALESCE(?, password_hash), " +
+            "is_fully_registered = 1, last_active_at = ? WHERE id = ?",
+        )
+          .bind(email || null, passwordHash, now, merchant.id)
           .run();
 
-        const token = `d1-jwt-${merchantId}-${Date.now()}`;
+        const finalEmail = email || merchant.email || null;
+        const token = await issueSessionToken(env, {
+          sub: merchant.id,
+          role: session.role,
+          phone: merchant.phone_number,
+          email: finalEmail,
+        });
+        if (!token) return adminAuthUnavailable();
         return jsonResponse({
           success: true,
           access_token: token,
           token_type: "bearer",
-          user_id: merchantId,
-          phone_number: phoneToUse,
-          email: email,
+          user_id: merchant.id,
+          phone_number: merchant.phone_number,
+          email: finalEmail,
           is_fully_registered: true,
         });
       }
 
       // Memory fallback
-      const merchant = {
-        id: body.user_id || `m-${Date.now()}`,
-        phone_number: e164Phone,
-        is_fully_registered: true,
-        email: email,
-        created_at: now,
-        last_active_at: now,
-      };
-      if (e164Phone) memMerchants.set(e164Phone, merchant);
+      const memMerchant = Array.from(memMerchants.values()).find((m) => m.id === session.sub);
+      if (!memMerchant) {
+        return jsonResponse({ detail: "Account not found." }, 404);
+      }
+      if (email) memMerchant.email = email;
+      memMerchant.is_fully_registered = true;
+      memMerchant.last_active_at = now;
 
+      const memToken = await issueSessionToken(env, {
+        sub: memMerchant.id,
+        role: session.role,
+        phone: memMerchant.phone_number,
+        email: memMerchant.email,
+      });
+      if (!memToken) return adminAuthUnavailable();
       return jsonResponse({
         success: true,
-        access_token: `mem-jwt-${merchant.id}`,
+        access_token: memToken,
         token_type: "bearer",
-        user_id: merchant.id,
-        phone_number: merchant.phone_number,
-        email: email,
+        user_id: memMerchant.id,
+        phone_number: memMerchant.phone_number,
+        email: memMerchant.email,
         is_fully_registered: true,
       });
     }
@@ -1229,6 +1778,18 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 2E. QR DEDUPLICATION & SINGLE GENERATION CHECK (O(1))
     // ----------------------------------------------------
     if (path === "/qr/check-exists" && request.method === "GET") {
+      const existsSession = await getSession(request, env);
+      const existsAdmin = await verifyAdminAuth(request, env);
+      const shape = <T extends { owner_id?: string | null; phone_number?: string | null }>(
+        row: T,
+      ): Partial<T> =>
+        existsAdmin || (existsSession && ownsRecord(existsSession, row))
+          ? row
+          : {
+              ...row,
+              owner_id: undefined,
+              phone_number: undefined,
+            };
       const dialCodeParam = (url.searchParams.get("dial_code") || "").trim();
       const cleanTarget = dialCodeParam.replace(/[^0-9*#]/g, "");
 
@@ -1247,7 +1808,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           if (row) {
             return jsonResponse({
               exists: true,
-              existing: row,
+              existing: shape(row),
               message: `Payment QR already registered for ${row.business_name} (${row.network}).`,
             });
           }
@@ -1264,7 +1825,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             if (row) {
               return jsonResponse({
                 exists: true,
-                existing: row,
+                existing: shape(row),
                 message: `Payment QR already registered for ${row.business_name} (${row.network}).`,
               });
             }
@@ -1284,7 +1845,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       if (match) {
         return jsonResponse({
           exists: true,
-          existing: match,
+          existing: shape(match),
           message: `Payment QR already registered for ${match.business_name} (${match.network}).`,
         });
       }
@@ -1298,9 +1859,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       (path === "/merchants/entitlements" || path === "/api/merchants/entitlements") &&
       request.method === "GET"
     ) {
+      // Identity comes from the session; only an admin may look up another merchant.
+      const session = await getSession(request, env);
+      const adminReq = await verifyAdminAuth(request, env);
       const merchantIdParam = (url.searchParams.get("merchant_id") || "").trim();
-      const bearer = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
-      const merchantId = merchantIdParam || bearer || "unassigned";
+      let merchantId = "unassigned";
+      if (adminReq) merchantId = merchantIdParam || session?.sub || "unassigned";
+      else if (session) merchantId = session.sub;
 
       if (!merchantId || merchantId === "unassigned") {
         return jsonResponse(
@@ -1318,8 +1883,11 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       if (env.DB) {
         try {
           await ensurePaymentDomainSchema(env.DB);
-          const phoneParam = (url.searchParams.get("phone") || url.searchParams.get("phone_number") || "").trim();
-          const cleanPhone = phoneParam || (merchantId.replace(/[^0-9+]/g, "").length >= 8 ? merchantId : "");
+          const phoneParam = adminReq
+            ? (url.searchParams.get("phone") || url.searchParams.get("phone_number") || "").trim()
+            : session?.phone || "";
+          const cleanPhone =
+            phoneParam || (merchantId.replace(/[^0-9+]/g, "").length >= 8 ? merchantId : "");
           const e164 = cleanPhone ? formatToE164(cleanPhone) : "";
 
           const rows = await env.DB.prepare(
@@ -1366,7 +1934,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           const pastCountRow = await env.DB.prepare(
             "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR owner_id = ? OR phone_number = ? OR phone_number = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
           )
-            .bind(merchantId, cleanPhone || merchantId, merchantId, cleanPhone || merchantId, e164 || merchantId)
+            .bind(
+              merchantId,
+              cleanPhone || merchantId,
+              merchantId,
+              cleanPhone || merchantId,
+              e164 || merchantId,
+            )
             .first<{ count: number }>();
           const actualOfflineCount = pastCountRow?.count || 0;
           if (actualOfflineCount > offlineConsumed) {
@@ -1433,19 +2007,34 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         evidence_notes?: string;
       };
 
-      const merchantId = (body.merchant_id || "").trim();
-      const merchantPhone = (body.merchant_phone || "").trim();
+      // The submitting merchant is the signed-in session, never a body field.
+      const session = await getSession(request, env);
+      if (!session) {
+        return jsonResponse({ detail: "Please sign in to submit a payment request." }, 401);
+      }
+      const merchantId = session.sub;
+      const merchantPhone = session.phone || "";
       const requestedEntitlement = body.requested_entitlement;
-      const amount = Number(body.amount);
       const referenceCode = (body.reference_code || "").trim().toUpperCase();
-      const evidenceNotes = (body.evidence_notes || "").trim();
+      const evidenceNotes = (body.evidence_notes || "").trim().slice(0, 500);
 
-      if (!merchantId || !requestedEntitlement || !amount || !referenceCode) {
+      if (!requestedEntitlement || !referenceCode) {
         return jsonResponse(
-          { detail: "Merchant ID, requested entitlement, amount, and reference code are required." },
+          { detail: "Requested entitlement and reference code are required." },
           400,
         );
       }
+      if (!Object.prototype.hasOwnProperty.call(ENTITLEMENT_PRICES, requestedEntitlement)) {
+        return jsonResponse({ detail: "Unknown product requested." }, 400);
+      }
+      if (!/^[A-Z0-9][A-Z0-9_\-./ ]{3,63}$/.test(referenceCode)) {
+        return jsonResponse(
+          { detail: "Reference code must be 4-64 letters, digits or - _ . /" },
+          400,
+        );
+      }
+      // The price is fixed server-side; any amount in the request is ignored.
+      const amount = ENTITLEMENT_PRICES[requestedEntitlement]!;
 
       const id = `payreq_${crypto.randomUUID()}`;
       const now = new Date().toISOString();
@@ -1453,6 +2042,19 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       if (env.DB) {
         try {
           await ensurePaymentDomainSchema(env.DB);
+          const pendingRow = await env.DB.prepare(
+            "SELECT count(*) AS count FROM payment_requests WHERE merchant_id = ? AND status = 'pending'",
+          )
+            .bind(merchantId)
+            .first<{ count: number }>();
+          if ((pendingRow?.count ?? 0) >= MAX_PENDING_PAYMENT_REQUESTS) {
+            return jsonResponse(
+              {
+                detail: `You already have ${MAX_PENDING_PAYMENT_REQUESTS} requests awaiting review. Please wait for them to be processed.`,
+              },
+              429,
+            );
+          }
           const existing = await env.DB.prepare(
             "SELECT id FROM payment_requests WHERE reference_code = ? OR request_reference = ? OR submitted_reference = ? LIMIT 1",
           )
@@ -1477,7 +2079,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 "merchant_id, merchant_phone, product_type, requested_entitlement, " +
                 "amount, currency, payment_method, proof_notes, evidence_notes, " +
                 "status, created_at, updated_at" +
-              ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'RWF', 'rwanda_momo', ?, ?, 'pending', ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'RWF', 'rwanda_momo', ?, ?, 'pending', ?, ?)",
             )
               .bind(
                 id,
@@ -1500,7 +2102,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             await env.DB.prepare(
               "INSERT INTO payment_requests (" +
                 "id, merchant_id, merchant_phone, requested_entitlement, amount, currency, reference_code, status, evidence_notes, created_at, updated_at" +
-              ") VALUES (?, ?, ?, ?, ?, 'RWF', ?, 'pending', ?, ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, 'RWF', ?, 'pending', ?, ?, ?)",
             )
               .bind(
                 id,
@@ -1541,6 +2143,17 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       // In-memory fallback
+      if (
+        memPaymentRequests.filter((p) => p.merchant_id === merchantId && p.status === "pending")
+          .length >= MAX_PENDING_PAYMENT_REQUESTS
+      ) {
+        return jsonResponse(
+          {
+            detail: `You already have ${MAX_PENDING_PAYMENT_REQUESTS} requests awaiting review. Please wait for them to be processed.`,
+          },
+          429,
+        );
+      }
       const dup = memPaymentRequests.find(
         (p) => p.reference_code.toUpperCase() === referenceCode.toUpperCase(),
       );
@@ -1575,34 +2188,57 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       (path === "/payment-requests" || path === "/api/payment-requests") &&
       request.method === "GET"
     ) {
-      const merchantId = (url.searchParams.get("merchant_id") || "").trim();
+      const session = await getSession(request, env);
+      const adminReq = await verifyAdminAuth(request, env);
+      if (!session && !adminReq) {
+        return jsonResponse({ detail: "Please sign in to view payment requests." }, 401);
+      }
+      const merchantId = adminReq
+        ? (url.searchParams.get("merchant_id") || "").trim()
+        : session!.sub;
+      const now = new Date().toISOString();
       if (env.DB) {
         try {
           await ensurePaymentDomainSchema(env.DB);
-          const cleanPhone = merchantId.replace(/[^0-9+]/g, "").length >= 8 ? merchantId : "";
+          const cleanPhone =
+            (!adminReq && session?.phone) ||
+            (merchantId.replace(/[^0-9+]/g, "").length >= 8 ? merchantId : "");
           const e164 = cleanPhone ? formatToE164(cleanPhone) : "";
 
           const query = merchantId
             ? "SELECT * FROM payment_requests WHERE merchant_id = ? OR merchant_phone = ? OR merchant_phone = ? ORDER BY created_at DESC"
             : "SELECT * FROM payment_requests ORDER BY created_at DESC";
           const stmt = merchantId
-            ? env.DB.prepare(query).bind(merchantId, merchantId, e164 || merchantId)
+            ? env.DB.prepare(query).bind(merchantId, cleanPhone || merchantId, e164 || merchantId)
             : env.DB.prepare(query);
           const rows = await stmt.all<Record<string, unknown>>();
           const mapped = (rows.results || []).map((r) => ({
             id: String(r.id || ""),
             merchant_id: String(r.merchant_id || ""),
             merchant_phone: String(r.merchant_phone || ""),
-            requested_entitlement: String(r.requested_entitlement || r.product_type || "offline_qr_generation"),
+            requested_entitlement: String(
+              r.requested_entitlement || r.product_type || "offline_qr_generation",
+            ),
             amount: Number(r.amount || 0),
             currency: String(r.currency || "RWF"),
-            reference_code: String(r.reference_code || r.request_reference || r.submitted_reference || ""),
-            status: (String(r.status || "pending").toLowerCase() as "pending" | "approved" | "rejected"),
-            evidence_notes: r.evidence_notes ? String(r.evidence_notes) : (r.proof_notes ? String(r.proof_notes) : null),
+            reference_code: String(
+              r.reference_code || r.request_reference || r.submitted_reference || "",
+            ),
+            status: String(r.status || "pending").toLowerCase() as
+              "pending" | "approved" | "rejected",
+            evidence_notes: r.evidence_notes
+              ? String(r.evidence_notes)
+              : r.proof_notes
+                ? String(r.proof_notes)
+                : null,
             admin_notes: r.admin_notes ? String(r.admin_notes) : null,
             reviewed_by: r.reviewed_by ? String(r.reviewed_by) : null,
             reviewed_at: r.reviewed_at ? String(r.reviewed_at) : null,
-            rejection_reason: r.admin_notes ? String(r.admin_notes) : (r.rejection_reason ? String(r.rejection_reason) : null),
+            rejection_reason: r.admin_notes
+              ? String(r.admin_notes)
+              : r.rejection_reason
+                ? String(r.rejection_reason)
+                : null,
             created_at: String(r.created_at || now),
             updated_at: String(r.updated_at || now),
           }));
@@ -1631,11 +2267,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       (path === "/admin/payment-requests" || path === "/api/admin/payment-requests") &&
       request.method === "GET"
     ) {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Admin authorization required." }, 403);
       }
 
       const statusFilter = url.searchParams.get("status");
+      const now = new Date().toISOString();
       if (env.DB) {
         try {
           await ensurePaymentDomainSchema(env.DB);
@@ -1650,16 +2287,29 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             id: String(r.id || ""),
             merchant_id: String(r.merchant_id || ""),
             merchant_phone: String(r.merchant_phone || ""),
-            requested_entitlement: String(r.requested_entitlement || r.product_type || "offline_qr_generation"),
+            requested_entitlement: String(
+              r.requested_entitlement || r.product_type || "offline_qr_generation",
+            ),
             amount: Number(r.amount || 0),
             currency: String(r.currency || "RWF"),
-            reference_code: String(r.reference_code || r.request_reference || r.submitted_reference || ""),
-            status: (String(r.status || "pending").toLowerCase() as "pending" | "approved" | "rejected"),
-            evidence_notes: r.evidence_notes ? String(r.evidence_notes) : (r.proof_notes ? String(r.proof_notes) : null),
+            reference_code: String(
+              r.reference_code || r.request_reference || r.submitted_reference || "",
+            ),
+            status: String(r.status || "pending").toLowerCase() as
+              "pending" | "approved" | "rejected",
+            evidence_notes: r.evidence_notes
+              ? String(r.evidence_notes)
+              : r.proof_notes
+                ? String(r.proof_notes)
+                : null,
             admin_notes: r.admin_notes ? String(r.admin_notes) : null,
             reviewed_by: r.reviewed_by ? String(r.reviewed_by) : null,
             reviewed_at: r.reviewed_at ? String(r.reviewed_at) : null,
-            rejection_reason: r.admin_notes ? String(r.admin_notes) : (r.rejection_reason ? String(r.rejection_reason) : null),
+            rejection_reason: r.admin_notes
+              ? String(r.admin_notes)
+              : r.rejection_reason
+                ? String(r.rejection_reason)
+                : null,
             created_at: String(r.created_at || now),
             updated_at: String(r.updated_at || now),
           }));
@@ -1680,7 +2330,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         path === "/api/admin/payment-requests/review") &&
       request.method === "POST"
     ) {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Admin authorization required." }, 403);
       }
 
@@ -1702,7 +2352,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       const now = new Date().toISOString();
-      const reviewer = (request.headers.get("x-admin-key") || "admin").trim();
+      // Record who reviewed without ever storing the credential itself (a session token or the admin key).
+      const reviewSession = await getSession(request, env);
+      const reviewer = reviewSession?.email || reviewSession?.sub || "admin-key";
 
       if (env.DB) {
         try {
@@ -1722,23 +2374,25 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           }
 
           if (action === "approve") {
-            // Atomic status update
-            await env.DB.prepare(
-              "UPDATE payment_requests SET status = 'approved', reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+            // Atomic claim: only one concurrent approval can flip pending -> approved,
+            // so a request can never grant its entitlement twice.
+            const claimed = await env.DB.prepare(
+              "UPDATE payment_requests SET status = 'approved', reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending' RETURNING id",
             )
               .bind(reviewer, now, now, requestId)
-              .run();
+              .first<{ id: string }>();
+            if (!claimed) {
+              return jsonResponse({ detail: "Payment request was already reviewed." }, 409);
+            }
 
             // Grant entitlement
             const mid = existing.merchant_id;
-            const rawReqType =
-              existing.requested_entitlement || existing.product_type || "";
+            const rawReqType = existing.requested_entitlement || existing.product_type || "";
             const isProReq =
               rawReqType === "pro_monthly" ||
               rawReqType === "pro_subscription" ||
               rawReqType === "dynamic_pro_subscription";
-            const isPdfReq =
-              rawReqType === "pdf_download" || rawReqType === "pdf_export";
+            const isPdfReq = rawReqType === "pdf_download" || rawReqType === "pdf_export";
 
             if (isProReq) {
               const existingRow = await env.DB.prepare(
@@ -1902,8 +2556,25 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       path === "/qr/delete" ||
       path === "/qr-codes/quick-bill"
     ) {
+      // Who is calling: an admin, a signed-in merchant, or nobody.
+      const qrSession = await getSession(request, env);
+      const qrAdmin = await verifyAdminAuth(request, env);
+      const qrDenied = (row: {
+        owner_id?: string | null;
+        phone_number?: string | null;
+      }): Response | null => {
+        if (qrAdmin) return null;
+        if (!qrSession) return jsonResponse({ detail: "Please sign in to manage QR codes." }, 401);
+        return ownsRecord(qrSession, row)
+          ? null
+          : jsonResponse({ detail: "You do not have access to this QR code." }, 403);
+      };
+
       // Quick bill update endpoint for PRO merchants
       if (path === "/qr-codes/quick-bill" && request.method === "POST") {
+        if (!qrAdmin && !qrSession) {
+          return jsonResponse({ detail: "Please sign in to manage QR codes." }, 401);
+        }
         const quickBody = (await request.json().catch(() => ({}))) as {
           id?: string;
           amount?: number | null;
@@ -1933,6 +2604,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           if (!current) {
             return jsonResponse({ detail: "QR code not found." }, 404);
           }
+          const quickDenied = qrDenied(current);
+          if (quickDenied) return quickDenied;
 
           const finalItem = newItem !== undefined ? newItem : current.item_name;
           await env.DB.prepare("UPDATE qr_codes SET amount = ?, item_name = ? WHERE id = ?")
@@ -1964,6 +2637,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         if (!memItem) {
           return jsonResponse({ detail: "QR code not found." }, 404);
         }
+        const memQuickDenied = qrDenied(memItem);
+        if (memQuickDenied) return memQuickDenied;
         memItem.amount = newAmount;
         memItem.config_version = (memItem.config_version || 1) + 1;
         memItem.payment_mode = inferPaymentMode(newAmount);
@@ -1998,16 +2673,33 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         const dialCode = rawDialCode;
         const cleanTarget = rawDialCode.replace(/[^0-9*#]/g, "");
         const codeDigits = extractMerchantOrAccountCode(rawDialCode);
-        const phone = body.phone_number || body.owner_id || "unassigned";
-        const ownerId = body.owner_id || body.phone_number || phone;
+        let phone = body.phone_number || body.owner_id || "unassigned";
+        let ownerId = body.owner_id || body.phone_number || phone;
         const isDynamic = body.is_dynamic ? 1 : 0;
         const itemName = body.item_name || null;
         const numAmount =
           typeof body.amount === "number" && !isNaN(body.amount) ? body.amount : null;
 
         // Check if requester has Admin credentials
-        const isAdmin = verifyAdminAuth(request, env);
+        const isAdmin = qrAdmin;
         const authHeader = (request.headers.get("Authorization") || "").trim();
+
+        // A merchant can only create stands for themselves: ownership comes from the session,
+        // not from owner_id / phone_number in the request body.
+        if (!isAdmin) {
+          if (!qrSession) {
+            return jsonResponse(
+              {
+                error: "UNAUTHORIZED",
+                detail:
+                  "Authentication is required to generate payment QR codes. Please sign in or create an account.",
+              },
+              401,
+            );
+          }
+          ownerId = qrSession.sub;
+          phone = qrSession.phone || qrSession.sub;
+        }
 
         // Enforce Authentication: unauthenticated guests cannot create QR codes
         if (
@@ -2155,9 +2847,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 .bind(ownerId, phone, e164 || phone)
                 .first<{ expires_at?: string | null; valid_until?: string | null }>();
               const expiry = proRow?.expires_at || proRow?.valid_until;
-              const proActive = Boolean(
-                expiry && new Date(expiry).getTime() > Date.now(),
-              );
+              const proActive = Boolean(expiry && new Date(expiry).getTime() > Date.now());
               if (!proActive) {
                 const pendingPro = await env.DB.prepare(
                   "SELECT reference_code FROM payment_requests WHERE (merchant_id = ? OR merchant_id = ? OR merchant_phone = ? OR merchant_phone = ?) AND status = 'pending' AND (requested_entitlement = 'pro_monthly' OR requested_entitlement = 'pro_subscription' OR product_type = 'pro_subscription') ORDER BY created_at DESC LIMIT 1",
@@ -2427,7 +3117,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             const existingMemCount = memQrCodes.filter(
               (q) => (q.owner_id === ownerId || q.phone_number === phone) && !q.is_dynamic,
             ).length;
-            const off = mEnts.get("offline_qr_generation") || { granted_count: 1, consumed_count: 0 };
+            const off = mEnts.get("offline_qr_generation") || {
+              granted_count: 1,
+              consumed_count: 0,
+            };
             const granted = Math.max(1, off.granted_count);
             if (existingMemCount >= granted) {
               return jsonResponse(
@@ -2490,6 +3183,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         if (!body.id) {
           return jsonResponse({ detail: "QR code ID required." }, 400);
         }
+        if (!qrAdmin && !qrSession) {
+          return jsonResponse({ detail: "Please sign in to manage QR codes." }, 401);
+        }
 
         const rawDial = (body.dial_code || "").trim();
         const businessName = (body.business_name || "").trim();
@@ -2502,6 +3198,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           if (!current) {
             return jsonResponse({ detail: "QR Code not found." }, 404);
           }
+          const patchDenied = qrDenied(current);
+          if (patchDenied) return patchDenied;
 
           const updatedName = businessName || current.business_name;
           const updatedNet = body.network || current.network;
@@ -2582,6 +3280,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         if (!item) {
           return jsonResponse({ detail: "QR code not found." }, 404);
         }
+        const memPatchDenied = qrDenied(item);
+        if (memPatchDenied) return memPatchDenied;
         if (businessName) item.business_name = businessName;
         if (body.network) item.network = body.network;
         if (body.payment_type) item.payment_type = body.payment_type;
@@ -2601,8 +3301,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       if (request.method === "GET") {
-        const ownerParam = url.searchParams.get("owner_id");
-        const phoneParam = url.searchParams.get("phone_number");
+        // Admins may list everything (optionally filtered); merchants only ever see their own.
+        if (!qrAdmin && !qrSession) {
+          return jsonResponse({ detail: "Please sign in to view your QR codes." }, 401);
+        }
+        const ownerParam = qrAdmin ? url.searchParams.get("owner_id") : qrSession!.sub;
+        const phoneParam = qrAdmin ? url.searchParams.get("phone_number") : qrSession!.phone;
 
         if (env.DB) {
           try {
@@ -2655,6 +3359,19 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         }
         if (!id) {
           return jsonResponse({ detail: "QR code ID required." }, 400);
+        }
+        if (!qrAdmin && !qrSession) {
+          return jsonResponse({ detail: "Please sign in to manage QR codes." }, 401);
+        }
+
+        const deleteTarget = env.DB
+          ? await env.DB.prepare("SELECT owner_id, phone_number FROM qr_codes WHERE id = ?")
+              .bind(id)
+              .first<{ owner_id?: string | null; phone_number?: string | null }>()
+          : memQrCodes.find((q) => q.id === id);
+        if (deleteTarget) {
+          const deleteDenied = qrDenied(deleteTarget);
+          if (deleteDenied) return deleteDenied;
         }
 
         if (env.DB) {
@@ -2728,7 +3445,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       if (request.method === "GET") {
-        if (!verifyAdminAuth(request, env)) {
+        if (!(await verifyAdminAuth(request, env))) {
           return jsonResponse({ detail: "Unauthorized admin access." }, 401);
         }
 
@@ -2758,7 +3475,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       const businessName = (body.business_name || "Payment Card").trim();
       const network = (body.network || "Mobile Money").trim();
       const dialCode = (body.dial_code || "*182#").trim();
-      const phone = (body.phone_number || "guest").trim();
+      // Entitlements are charged to the signed-in merchant only; a body phone could burn someone else's quota.
+      const dlSession = await getSession(request, env);
+      const phone = (dlSession?.sub || "guest").trim();
       const fileFormat = (body.file_format || "png").trim();
 
       if (env.DB) {
@@ -2833,16 +3552,41 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         dial_code?: string;
       };
 
-      const customerName = (body.customer_name || "").trim();
-      const customerPhone = (body.customer_phone || "").trim();
-      const businessName = (body.business_name || "").trim();
-      const deliveryLocation = (body.delivery_location || "").trim();
+      const customerName = (body.customer_name || "").trim().slice(0, 100);
+      const customerPhone = (body.customer_phone || "").trim().slice(0, 32);
+      const businessName = (body.business_name || "").trim().slice(0, 120);
+      const deliveryLocation = (body.delivery_location || "").trim().slice(0, 300);
       const itemType = (body.item_type || "acrylic_stand").trim();
-      const quantity = Math.max(1, body.quantity || 1);
-      const totalPrice = body.total_price || 5000;
-      const notes = (body.notes || "").trim() || null;
-      const network = (body.network || "").trim() || null;
-      const dialCode = (body.dial_code || "").trim() || null;
+      const notes = (body.notes || "").trim().slice(0, 1000) || null;
+      const network = (body.network || "").trim().slice(0, 40) || null;
+      const dialCode = (body.dial_code || "").trim().slice(0, 64) || null;
+
+      // The catalog decides what an order costs; total_price from the client is ignored.
+      if (!isCatalogItem(itemType)) {
+        return jsonResponse({ detail: "Unknown product." }, 400);
+      }
+      const quantity = body.quantity === undefined ? 1 : Number(body.quantity);
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_ORDER_QUANTITY) {
+        return jsonResponse(
+          { detail: `Quantity must be a whole number from 1 to ${MAX_ORDER_QUANTITY}.` },
+          400,
+        );
+      }
+      const totalPrice = ORDER_UNIT_PRICES[itemType] * quantity;
+
+      // Checkout is open to guests, so cap how many orders one phone / IP can place per hour.
+      const orderIp = clientIp(request);
+      const orderPhoneCount = await rateLimitHit(
+        env,
+        `order:${customerPhone.replace(/[^0-9+]/g, "")}`,
+        ORDER_WINDOW_MS,
+      );
+      const orderIpCount = orderIp
+        ? await rateLimitHit(env, `order-ip:${orderIp}`, ORDER_WINDOW_MS)
+        : 0;
+      if (orderPhoneCount > ORDER_MAX_PER_PHONE || orderIpCount > ORDER_MAX_PER_IP) {
+        return tooManyAttempts(3600, "Too many orders placed recently. Please try again later.");
+      }
 
       if (!customerName || !customerPhone || !deliveryLocation) {
         return jsonResponse(
@@ -2852,7 +3596,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
 
       const id = crypto.randomUUID();
-      const orderNumber = `ISH-${Math.floor(100000 + Math.random() * 900000)}`;
+      const newOrderNumber = () =>
+        `ISH-${100000 + (crypto.getRandomValues(new Uint32Array(1))[0]! % 900000)}`;
+      let orderNumber = newOrderNumber();
       const now = new Date().toISOString();
       const createdOrder: MemOrder = {
         id,
@@ -2873,28 +3619,42 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       };
 
       if (env.DB) {
-        try {
-          await env.DB.prepare(
-            "INSERT INTO orders (id, order_number, customer_name, customer_phone, business_name, delivery_location, item_type, quantity, total_price, notes, network, dial_code, status) " +
-              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
-          )
-            .bind(
-              id,
-              orderNumber,
-              customerName,
-              customerPhone,
-              businessName,
-              deliveryLocation,
-              itemType,
-              quantity,
-              totalPrice,
-              notes,
-              network,
-              dialCode,
+        // A customer must never be told "order placed" when nothing was saved: retry on an
+        // order-number collision, and report a failure otherwise.
+        let saved = false;
+        for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+          try {
+            await env.DB.prepare(
+              "INSERT INTO orders (id, order_number, customer_name, customer_phone, business_name, delivery_location, item_type, quantity, total_price, notes, network, dial_code, status) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
             )
-            .run();
-        } catch (e) {
-          console.warn("D1 order insertion warning:", e);
+              .bind(
+                id,
+                orderNumber,
+                customerName,
+                customerPhone,
+                businessName,
+                deliveryLocation,
+                itemType,
+                quantity,
+                totalPrice,
+                notes,
+                network,
+                dialCode,
+              )
+              .run();
+            saved = true;
+          } catch (e) {
+            console.warn("D1 order insertion warning:", e);
+            orderNumber = newOrderNumber();
+            createdOrder.order_number = orderNumber;
+          }
+        }
+        if (!saved) {
+          return jsonResponse(
+            { detail: "We could not save your order right now. Please try again." },
+            503,
+          );
         }
       } else {
         memOrders.unshift(createdOrder);
@@ -2910,14 +3670,35 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     if (path === "/orders" && request.method === "GET") {
-      const phoneParam = url.searchParams.get("phone");
+      // Orders contain customer names, phones and addresses: admins see all, merchants only their own.
+      const ordersAdmin = await verifyAdminAuth(request, env);
+      const ordersSession = ordersAdmin ? null : await getSession(request, env);
+      if (!ordersAdmin && !ordersSession) {
+        return jsonResponse({ detail: "Please sign in to view orders." }, 401);
+      }
+      const adminPhone = ordersAdmin ? url.searchParams.get("phone") : null;
+      // Orders store the phone as typed (+250…, 250…, 07…), so match every form of the session phone.
+      const ownPhones = ordersSession
+        ? Array.from(sessionIdentities(ordersSession)).filter((v) => /^\+?\d{8,}$/.test(v))
+        : [];
+      if (ordersSession && ownPhones.length === 0) return jsonResponse([]);
+
       if (env.DB) {
         try {
-          if (phoneParam) {
+          if (ordersSession) {
+            const marks = ownPhones.map(() => "?").join(", ");
+            const rows = await env.DB.prepare(
+              `SELECT * FROM orders WHERE customer_phone IN (${marks}) ORDER BY created_at DESC LIMIT 50`,
+            )
+              .bind(...ownPhones)
+              .all();
+            return jsonResponse(rows.results || []);
+          }
+          if (adminPhone) {
             const rows = await env.DB.prepare(
               "SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 50",
             )
-              .bind(phoneParam)
+              .bind(adminPhone)
               .all();
             return jsonResponse(rows.results || []);
           }
@@ -2926,12 +3707,15 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           ).all();
           return jsonResponse(rows.results || []);
         } catch {
-          return jsonResponse(memOrders);
+          // fall through to the in-memory list, still scoped to the caller
         }
       }
 
-      if (phoneParam) {
-        return jsonResponse(memOrders.filter((o) => o.customer_phone === phoneParam));
+      if (ordersSession) {
+        return jsonResponse(memOrders.filter((o) => ownPhones.includes(o.customer_phone)));
+      }
+      if (adminPhone) {
+        return jsonResponse(memOrders.filter((o) => o.customer_phone === adminPhone));
       }
       return jsonResponse(memOrders);
     }
@@ -2940,7 +3724,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 5. ADMIN: Stats & Reporting
     // ----------------------------------------------------
     if (path === "/admin/stats" && request.method === "GET") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3062,7 +3846,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 6. ADMIN: Merchants List
     // ----------------------------------------------------
     if (path === "/admin/merchants" && request.method === "GET") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3099,7 +3883,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 7. ADMIN: QR Codes CRUD & Unlock/Delete
     // ----------------------------------------------------
     if (path === "/admin/qr-codes" || path === "/admin/qr-codes/delete") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3372,7 +4156,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 7B. ADMINS MANAGEMENT (Database-Backed RBAC)
     // ----------------------------------------------------
     if (path === "/admin/admins") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3424,7 +4208,6 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           created_at: now,
         };
         memAdmins.set(email, newAdmin);
-        activeAdminTokens.add(email);
 
         return jsonResponse({
           success: true,
@@ -3457,7 +4240,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     }
 
     if (path === "/admin/check-auth" && request.method === "GET") {
-      const isAuth = verifyAdminAuth(request, env);
+      const isAuth = await verifyAdminAuth(request, env);
       if (!isAuth) {
         return jsonResponse({ authenticated: false, detail: "Unauthorized admin access." }, 401);
       }
@@ -3468,7 +4251,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 8. ADMIN: Inquiries List & Status Update
     // ----------------------------------------------------
     if (path === "/admin/inquiries") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3515,7 +4298,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 8B. ADMIN: Orders List & Status Update
     // ----------------------------------------------------
     if (path === "/admin/orders") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3566,7 +4349,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 8C. ADMIN: Download Events List
     // ----------------------------------------------------
     if (path === "/admin/downloads" && request.method === "GET") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3590,7 +4373,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 9. ADMIN: CSV Export
     // ----------------------------------------------------
     if (path === "/admin/export" && request.method === "GET") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env, { allowQueryToken: true }))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3689,7 +4472,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 8D. ADMIN: System Settings & Twilio Dynamic Config
     // ----------------------------------------------------
     if (path === "/admin/settings") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 
@@ -3744,7 +4527,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
     // 8E. ADMIN: Test SMS Dispatch
     // ----------------------------------------------------
     if (path === "/admin/test-sms" && request.method === "POST") {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return jsonResponse({ detail: "Unauthorized admin access." }, 401);
       }
 

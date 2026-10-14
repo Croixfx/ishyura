@@ -94,6 +94,7 @@ export function AppSidebar({
           email: googleRes.email,
           name: googleRes.name || googleRes.email.split("@")[0],
           sub: googleRes.uid,
+          accessToken: googleRes.accessToken,
         });
         setCurrentUser(user);
         if (onUserChange) onUserChange(user);

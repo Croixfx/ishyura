@@ -77,20 +77,14 @@ export interface StandPayloads {
 
 export type ProductMode = "offline" | "online";
 
-export type EntitlementType =
-  | "offline_generation"
-  | "pdf_download"
-  | "pro_subscription";
+export type EntitlementType = "offline_generation" | "pdf_download" | "pro_subscription";
 
 export type EntitlementStatus = "active" | "expired" | "revoked";
 
 export type PaymentRequestStatus = "pending" | "approved" | "rejected";
 
 export type PaymentRequestProductType =
-  | "offline_generation"
-  | "pdf_download"
-  | "pro_subscription"
-  | "physical_stand";
+  "offline_generation" | "pdf_download" | "pro_subscription" | "physical_stand";
 
 export interface MerchantEntitlementRecord {
   id: string;
@@ -136,7 +130,6 @@ export interface EntitlementEventRecord {
 
 export const MONETIZATION_PRICES = {
   extra_offline_generation: 2000, // 2,000 RWF per additional direct USSD QR
-  pdf_download: 1000,             // 1,000 RWF per high-res PDF print card export
-  pro_monthly: 5000,              // 5,000 RWF / month for Dynamic PRO Smart Stands & live bills
+  pdf_download: 1000, // 1,000 RWF per high-res PDF print card export
+  pro_monthly: 5000, // 5,000 RWF / month for Dynamic PRO Smart Stands & live bills
 } as const;
-

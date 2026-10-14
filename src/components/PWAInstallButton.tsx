@@ -81,7 +81,8 @@ export const PWAInstallButton: React.FC<{
                   </span>
                   <p>
                     Tap the <strong className="text-foreground">Share</strong> icon (
-                    <Share2 className="inline size-3 text-primary mx-0.5" />) at the bottom of Safari.
+                    <Share2 className="inline size-3 text-primary mx-0.5" />) at the bottom of
+                    Safari.
                   </p>
                 </div>
                 <div className="flex items-start gap-2.5">
@@ -89,7 +90,8 @@ export const PWAInstallButton: React.FC<{
                     2
                   </span>
                   <p>
-                    Scroll down and tap <strong className="text-foreground">Add to Home Screen</strong>.
+                    Scroll down and tap{" "}
+                    <strong className="text-foreground">Add to Home Screen</strong>.
                   </p>
                 </div>
                 <div className="flex items-start gap-2.5">
@@ -97,7 +99,8 @@ export const PWAInstallButton: React.FC<{
                     3
                   </span>
                   <p>
-                    Tap <strong className="text-foreground">Add</strong> in the top right. Ishyura will appear on your home screen!
+                    Tap <strong className="text-foreground">Add</strong> in the top right. Ishyura
+                    will appear on your home screen!
                   </p>
                 </div>
               </div>
@@ -109,7 +112,8 @@ export const PWAInstallButton: React.FC<{
                     1
                   </span>
                   <p>
-                    Tap the <strong className="text-foreground">Menu icon (⋮)</strong> in your browser's top-right corner.
+                    Tap the <strong className="text-foreground">Menu icon (⋮)</strong> in your
+                    browser's top-right corner.
                   </p>
                 </div>
                 <div className="flex items-start gap-2.5">
@@ -117,7 +121,8 @@ export const PWAInstallButton: React.FC<{
                     2
                   </span>
                   <p>
-                    Select <strong className="text-foreground">Install app</strong> or <strong className="text-foreground">Add to Home screen</strong>.
+                    Select <strong className="text-foreground">Install app</strong> or{" "}
+                    <strong className="text-foreground">Add to Home screen</strong>.
                   </p>
                 </div>
                 <div className="flex items-start gap-2.5">
@@ -125,7 +130,8 @@ export const PWAInstallButton: React.FC<{
                     3
                   </span>
                   <p>
-                    Confirm <strong className="text-foreground">Install</strong>. Ishyura will open as a full standalone app.
+                    Confirm <strong className="text-foreground">Install</strong>. Ishyura will open
+                    as a full standalone app.
                   </p>
                 </div>
               </div>

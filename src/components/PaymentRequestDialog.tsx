@@ -125,7 +125,8 @@ export function PaymentRequestDialog({
             <div className="space-y-1">
               <h3 className="font-bold text-sm text-foreground">Payment Request Submitted!</h3>
               <p className="text-xs text-muted-foreground max-w-xs mx-auto">
-                Reference <strong>{referenceCode}</strong> has been logged. Ishyura administrators review and approve requests promptly.
+                Reference <strong>{referenceCode}</strong> has been logged. Ishyura administrators
+                review and approve requests promptly.
               </p>
             </div>
             <Button onClick={handleClose} className="rounded-xl text-xs font-bold w-full">
@@ -145,10 +146,14 @@ export function PaymentRequestDialog({
             <div className="p-3.5 rounded-xl border border-border/80 bg-muted/20 flex items-center justify-between">
               <div>
                 <span className="text-xs font-semibold text-foreground">Applicable Fee</span>
-                <p className="text-[11px] text-muted-foreground">Standard Rwanda merchant pricing</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Standard Rwanda merchant pricing
+                </p>
               </div>
               <div className="text-right">
-                <span className="text-base font-black text-foreground">{price.toLocaleString()} RWF</span>
+                <span className="text-base font-black text-foreground">
+                  {price.toLocaleString()} RWF
+                </span>
               </div>
             </div>
 
@@ -157,10 +162,13 @@ export function PaymentRequestDialog({
               <p className="font-bold text-foreground">How to Pay:</p>
               <div className="space-y-1 text-muted-foreground text-[11px] leading-relaxed">
                 <div>
-                  • <strong>MTN MoMo:</strong> Pay to MoMo Merchant code: <code className="bg-muted px-1 py-0.5 rounded font-bold">234567</code> (Ishyura Rwanda)
+                  • <strong>MTN MoMo:</strong> Pay to MoMo Merchant code:{" "}
+                  <code className="bg-muted px-1 py-0.5 rounded font-bold">234567</code> (Ishyura
+                  Rwanda)
                 </div>
                 <div>
-                  • <strong>Airtel Money:</strong> Pay to Till number: <code className="bg-muted px-1 py-0.5 rounded font-bold">123456</code>
+                  • <strong>Airtel Money:</strong> Pay to Till number:{" "}
+                  <code className="bg-muted px-1 py-0.5 rounded font-bold">123456</code>
                 </div>
               </div>
             </div>
@@ -198,7 +206,13 @@ export function PaymentRequestDialog({
             </div>
 
             <div className="pt-2 flex items-center justify-end gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={handleClose} className="rounded-xl text-xs">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleClose}
+                className="rounded-xl text-xs"
+              >
                 Cancel
               </Button>
               <Button
@@ -207,7 +221,11 @@ export function PaymentRequestDialog({
                 disabled={loading}
                 className="rounded-xl text-xs font-bold bg-foreground text-background hover:bg-foreground/90 gap-1.5"
               >
-                {loading ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowRight className="size-3.5" />}
+                {loading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <ArrowRight className="size-3.5" />
+                )}
                 <span>Submit for Verification</span>
               </Button>
             </div>

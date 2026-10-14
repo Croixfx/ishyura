@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MONETIZATION_PRICES } from "@/lib/payment";
+import { ORDER_UNIT_PRICES } from "@/lib/order-catalog";
 import { ScrollProgressiveSection } from "@/components/ui/ScrollProgressiveSection";
 
 interface PublicLandingViewProps {
@@ -53,9 +54,9 @@ export function PublicLandingView({
               </h1>
 
               <p className="max-w-2xl mx-auto lg:mx-0 text-sm sm:text-base text-muted-foreground leading-relaxed">
-                Professional payment QR codes, laser-cut acrylic tabletop stands, and contactless NFC
-                tap points for Rwandan merchants. Works natively with MTN MoMo, Airtel Money, and
-                Equity Bank eKash.
+                Professional payment QR codes, laser-cut acrylic tabletop stands, and contactless
+                NFC tap points for Rwandan merchants. Works natively with MTN MoMo, Airtel Money,
+                and Equity Bank eKash.
               </p>
 
               <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3 pt-2">
@@ -70,7 +71,9 @@ export function PublicLandingView({
                 <button
                   type="button"
                   onClick={() => {
-                    document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" });
+                    document
+                      .getElementById("hardware-section")
+                      ?.scrollIntoView({ behavior: "smooth" });
                   }}
                   className="w-full sm:w-auto inline-flex items-center justify-center h-12 px-6 rounded-xl font-semibold text-sm border border-border/80 bg-card hover:bg-muted/60 transition-colors cursor-pointer"
                 >
@@ -114,7 +117,10 @@ export function PublicLandingView({
                         airtel
                       </div>
                     </div>
-                    <Badge variant="secondary" className="text-[10px] font-bold tracking-wider uppercase">
+                    <Badge
+                      variant="secondary"
+                      className="text-[10px] font-bold tracking-wider uppercase"
+                    >
                       Sample Stand Preview
                     </Badge>
                   </div>
@@ -218,7 +224,10 @@ export function PublicLandingView({
       </section>
 
       {/* 2. Product Offerings: Ishyura Offline vs. Ishyura Online */}
-      <ScrollProgressiveSection id="products" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
+      <ScrollProgressiveSection
+        id="products"
+        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15"
+      >
         <div className="mx-auto max-w-5xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -228,7 +237,8 @@ export function PublicLandingView({
               Two Tailored Products for Rwanda Merchants
             </h2>
             <p className="text-xs sm:text-sm text-muted-foreground">
-              Choose between direct offline telecom USSD or a flexible, dynamic Cloudflare edge payment page.
+              Choose between direct offline telecom USSD or a flexible, dynamic Cloudflare edge
+              payment page.
             </p>
           </div>
 
@@ -246,7 +256,9 @@ export function PublicLandingView({
                 </div>
 
                 <div>
-                  <h3 className="text-xl sm:text-2xl font-black text-foreground">Ishyura Offline</h3>
+                  <h3 className="text-xl sm:text-2xl font-black text-foreground">
+                    Ishyura Offline
+                  </h3>
                   <p className="text-xs sm:text-sm text-muted-foreground mt-2 leading-relaxed font-medium">
                     Accept payments directly through USSD. No Ishyura webpage required.
                   </p>
@@ -256,31 +268,41 @@ export function PublicLandingView({
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">Direct USSD QR Generation:</strong> Encodes an instant telecom dial string (<code className="text-[11px] bg-muted px-1.5 py-0.5 rounded font-mono text-foreground">*182*8*1*...#</code>) that opens the phone dialer directly.
+                      <strong className="text-foreground">Direct USSD QR Generation:</strong>{" "}
+                      Encodes an instant telecom dial string (
+                      <code className="text-[11px] bg-muted px-1.5 py-0.5 rounded font-mono text-foreground">
+                        *182*8*1*...#
+                      </code>
+                      ) that opens the phone dialer directly.
                     </span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">Zero Customer Internet:</strong> Customers can pay without mobile data or internet access.
+                      <strong className="text-foreground">Zero Customer Internet:</strong> Customers
+                      can pay without mobile data or internet access.
                     </span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">Amount Flexibility:</strong> Predefined fixed amount or customer-entered amount through the provider menu.
+                      <strong className="text-foreground">Amount Flexibility:</strong> Predefined
+                      fixed amount or customer-entered amount through the provider menu.
                     </span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">1 Included Output:</strong> Free initial QR &amp; PDF download for registered merchants; additional outputs require a modest top-up.
+                      <strong className="text-foreground">1 Included Output:</strong> Free initial
+                      QR &amp; PDF download for registered merchants; additional outputs require a
+                      modest top-up.
                     </span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-emerald-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">Hardware &amp; NFC Ready:</strong> Optional laser-cut acrylic stands and NFC rewrite cards.
+                      <strong className="text-foreground">Hardware &amp; NFC Ready:</strong>{" "}
+                      Optional laser-cut acrylic stands and NFC rewrite cards.
                     </span>
                   </div>
                 </div>
@@ -323,31 +345,38 @@ export function PublicLandingView({
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">HTTPS Edge Payment URL:</strong> QR code opens an instant Ishyura payment sheet hosted on Cloudflare edge.
+                      <strong className="text-foreground">HTTPS Edge Payment URL:</strong> QR code
+                      opens an instant Ishyura payment sheet hosted on Cloudflare edge.
                     </span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">Remotely Editable Bills:</strong> Update prices or item names anytime from your phone without reprinting your counter stands.
+                      <strong className="text-foreground">Remotely Editable Bills:</strong> Update
+                      prices or item names anytime from your phone without reprinting your counter
+                      stands.
                     </span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">Web-Based Amount Entry:</strong> Customer can enter the bill amount directly on your store checkout page.
+                      <strong className="text-foreground">Web-Based Amount Entry:</strong> Customer
+                      can enter the bill amount directly on your store checkout page.
                     </span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">Engagement Analytics:</strong> Track page visits and scan trends over time. <em>(Note: visits do not prove payment).</em>
+                      <strong className="text-foreground">Engagement Analytics:</strong> Track page
+                      visits and scan trends over time.{" "}
+                      <em>(Note: visits do not prove payment).</em>
                     </span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="size-4 text-sky-500 shrink-0 mt-0.5" />
                     <span>
-                      <strong className="text-foreground">PRO Subscriptions:</strong> Verified PRO entitlement for {MONETIZATION_PRICES.pro_monthly.toLocaleString()} RWF/month.
+                      <strong className="text-foreground">PRO Subscriptions:</strong> Verified PRO
+                      entitlement for {MONETIZATION_PRICES.pro_monthly.toLocaleString()} RWF/month.
                     </span>
                   </div>
                 </div>
@@ -371,7 +400,10 @@ export function PublicLandingView({
       </ScrollProgressiveSection>
 
       {/* 3. How Payment Initiation Works */}
-      <ScrollProgressiveSection id="how-it-works" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60">
+      <ScrollProgressiveSection
+        id="how-it-works"
+        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60"
+      >
         <div className="mx-auto max-w-5xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -392,7 +424,8 @@ export function PublicLandingView({
               </div>
               <h3 className="font-extrabold text-base text-foreground">Scan or Tap</h3>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Customer aims their smartphone camera at your high-contrast QR code or taps their NFC-enabled smartphone against your acrylic counter stand.
+                Customer aims their smartphone camera at your high-contrast QR code or taps their
+                NFC-enabled smartphone against your acrylic counter stand.
               </p>
             </div>
 
@@ -402,8 +435,13 @@ export function PublicLandingView({
               </div>
               <h3 className="font-extrabold text-base text-foreground">Instant Launch</h3>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                <strong>Offline:</strong> Phone immediately launches the telecom USSD dialer (<code className="text-[11px] bg-muted px-1 py-0.5 rounded font-mono">*182*8*1*...#</code>). <br />
-                <strong>Online:</strong> Phone opens high-speed payment page with your live counter bill.
+                <strong>Offline:</strong> Phone immediately launches the telecom USSD dialer (
+                <code className="text-[11px] bg-muted px-1 py-0.5 rounded font-mono">
+                  *182*8*1*...#
+                </code>
+                ). <br />
+                <strong>Online:</strong> Phone opens high-speed payment page with your live counter
+                bill.
               </p>
             </div>
 
@@ -413,7 +451,8 @@ export function PublicLandingView({
               </div>
               <h3 className="font-extrabold text-base text-foreground">Confirm with PIN</h3>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Customer reviews the merchant name and confirms the payment with their private MoMo or Airtel PIN. Funds transfer immediately to your account.
+                Customer reviews the merchant name and confirms the payment with their private MoMo
+                or Airtel PIN. Funds transfer immediately to your account.
               </p>
             </div>
           </div>
@@ -421,7 +460,10 @@ export function PublicLandingView({
       </ScrollProgressiveSection>
 
       {/* 4. Physical Stands & Counter Hardware */}
-      <ScrollProgressiveSection id="hardware-section" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
+      <ScrollProgressiveSection
+        id="hardware-section"
+        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15"
+      >
         <div className="mx-auto max-w-5xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -431,7 +473,8 @@ export function PublicLandingView({
               Physical Stands &amp; Counter Hardware
             </h2>
             <p className="text-xs sm:text-sm text-muted-foreground">
-              Laser-cut acrylic tabletop stands and waterproof vinyl stickers engineered for busy Kigali shops and restaurants.
+              Laser-cut acrylic tabletop stands and waterproof vinyl stickers engineered for busy
+              Kigali shops and restaurants.
             </p>
           </div>
 
@@ -442,15 +485,20 @@ export function PublicLandingView({
                 <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
                   <Store className="size-6" />
                 </div>
-                <h3 className="font-extrabold text-base text-foreground">A6 Tabletop Acrylic Stand</h3>
+                <h3 className="font-extrabold text-base text-foreground">
+                  A6 Tabletop Acrylic Stand
+                </h3>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Laser-cut crystal-clear acrylic L-stand. Protects your payment card from spills, grease, and wear on busy retail counters.
+                  Laser-cut crystal-clear acrylic L-stand. Protects your payment card from spills,
+                  grease, and wear on busy retail counters.
                 </p>
               </div>
               <div className="pt-4 border-t border-border/60 flex items-center justify-between">
                 <div>
                   <span className="text-lg font-black text-foreground">5,000 RWF</span>
-                  <span className="text-[10px] text-muted-foreground block">Delivered in Kigali</span>
+                  <span className="text-[10px] text-muted-foreground block">
+                    Delivered in Kigali
+                  </span>
                 </div>
                 <Badge variant="outline" className="text-[10px] font-bold">
                   Popular
@@ -464,14 +512,19 @@ export function PublicLandingView({
                 <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
                   <Package className="size-6" />
                 </div>
-                <h3 className="font-extrabold text-base text-foreground">Pack of 5 Vinyl Stickers</h3>
+                <h3 className="font-extrabold text-base text-foreground">
+                  Pack of 5 Vinyl Stickers
+                </h3>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Heavy-duty laminated vinyl stickers. Waterproof and weather-resistant for windows, cash registers, and takeaway counters.
+                  Heavy-duty laminated vinyl stickers. Waterproof and weather-resistant for windows,
+                  cash registers, and takeaway counters.
                 </p>
               </div>
               <div className="pt-4 border-t border-border/60 flex items-center justify-between">
                 <div>
-                  <span className="text-lg font-black text-foreground">3,000 RWF</span>
+                  <span className="text-lg font-black text-foreground">
+                    {ORDER_UNIT_PRICES.vinyl_stickers.toLocaleString()} RWF
+                  </span>
                   <span className="text-[10px] text-muted-foreground block">Pack of 5 units</span>
                 </div>
                 <Badge variant="outline" className="text-[10px] font-bold">
@@ -486,9 +539,12 @@ export function PublicLandingView({
                 <div className="size-11 rounded-xl bg-foreground/5 text-foreground flex items-center justify-center font-bold">
                   <Sparkles className="size-6" />
                 </div>
-                <h3 className="font-extrabold text-base text-foreground">Engraved Hardwood Stand</h3>
+                <h3 className="font-extrabold text-base text-foreground">
+                  Engraved Hardwood Stand
+                </h3>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Solid polished hardwood stand with laser-engraved business branding. Ideal for boutique cafes, hotels, and upscale dining.
+                  Solid polished hardwood stand with laser-engraved business branding. Ideal for
+                  boutique cafes, hotels, and upscale dining.
                 </p>
               </div>
               <div className="pt-4 border-t border-border/60 flex items-center justify-between">
@@ -508,14 +564,18 @@ export function PublicLandingView({
               📦 Physical stands can be ordered directly from your merchant studio
             </p>
             <p className="text-[11px] text-muted-foreground">
-              Delivered within Kigali in 24-48 hours via fast moto courier. Payment on delivery or via Mobile Money.
+              Delivered within Kigali in 24-48 hours via fast moto courier. Payment on delivery or
+              via Mobile Money.
             </p>
           </div>
         </div>
       </ScrollProgressiveSection>
 
       {/* 5. Clear, Transparent Pricing */}
-      <ScrollProgressiveSection id="pricing" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60">
+      <ScrollProgressiveSection
+        id="pricing"
+        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60"
+      >
         <div className="mx-auto max-w-5xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -540,7 +600,9 @@ export function PublicLandingView({
                 <h3 className="font-extrabold text-base text-foreground">Starter Merchant</h3>
                 <div className="pt-1">
                   <span className="text-2xl font-black text-foreground">0 RWF</span>
-                  <span className="text-xs text-muted-foreground block">Free upon registration</span>
+                  <span className="text-xs text-muted-foreground block">
+                    Free upon registration
+                  </span>
                 </div>
                 <div className="pt-3 border-t border-border/50 space-y-2 text-xs text-muted-foreground">
                   <div className="flex items-center gap-2">
@@ -576,7 +638,9 @@ export function PublicLandingView({
                   <span className="text-2xl font-black text-foreground">
                     {MONETIZATION_PRICES.extra_offline_generation.toLocaleString()} RWF
                   </span>
-                  <span className="text-xs text-muted-foreground block">Per extra card generation</span>
+                  <span className="text-xs text-muted-foreground block">
+                    Per extra card generation
+                  </span>
                 </div>
                 <div className="pt-3 border-t border-border/50 space-y-2 text-xs text-muted-foreground">
                   <div className="flex items-center gap-2">
@@ -613,7 +677,9 @@ export function PublicLandingView({
                   <span className="text-2xl font-black text-foreground">
                     {MONETIZATION_PRICES.pdf_download.toLocaleString()} RWF
                   </span>
-                  <span className="text-xs text-muted-foreground block">Per print-ready PDF export</span>
+                  <span className="text-xs text-muted-foreground block">
+                    Per print-ready PDF export
+                  </span>
                 </div>
                 <div className="pt-3 border-t border-border/50 space-y-2 text-xs text-muted-foreground">
                   <div className="flex items-center gap-2">
@@ -642,7 +708,10 @@ export function PublicLandingView({
             {/* 4. PRO Monthly */}
             <div className="rounded-2xl border-2 border-primary/50 bg-primary/5 p-6 flex flex-col justify-between space-y-5 shadow-md">
               <div className="space-y-3">
-                <Badge variant="default" className="text-[10px] font-bold bg-primary text-primary-foreground">
+                <Badge
+                  variant="default"
+                  className="text-[10px] font-bold bg-primary text-primary-foreground"
+                >
                   PRO Plan
                 </Badge>
                 <h3 className="font-extrabold text-base text-foreground">Ishyura Online PRO</h3>
@@ -679,7 +748,10 @@ export function PublicLandingView({
       </ScrollProgressiveSection>
 
       {/* 6. Frequently Asked Questions (FAQ) */}
-      <ScrollProgressiveSection id="faq" className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15">
+      <ScrollProgressiveSection
+        id="faq"
+        className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 border-b border-border/60 bg-muted/15"
+      >
         <div className="mx-auto max-w-4xl space-y-12">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
@@ -697,10 +769,18 @@ export function PublicLandingView({
             <div className="p-6 rounded-2xl border border-border/80 bg-card space-y-2">
               <h4 className="font-extrabold text-sm sm:text-base text-foreground flex items-center gap-2">
                 <HelpCircle className="size-4 text-primary shrink-0" />
-                <span>Does a customer need an internet connection to pay with Ishyura Offline?</span>
+                <span>
+                  Does a customer need an internet connection to pay with Ishyura Offline?
+                </span>
               </h4>
               <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                <strong>No!</strong> Ishyura Offline encodes the telecom USSD dial string (<code className="text-[11px] bg-muted px-1.5 py-0.5 rounded font-mono text-foreground">*182*8*1*...#</code>) directly into the QR pattern. When a customer scans with an iPhone or Android camera, it opens their phone dialer instantly without connecting to any webpage or using mobile data.
+                <strong>No!</strong> Ishyura Offline encodes the telecom USSD dial string (
+                <code className="text-[11px] bg-muted px-1.5 py-0.5 rounded font-mono text-foreground">
+                  *182*8*1*...#
+                </code>
+                ) directly into the QR pattern. When a customer scans with an iPhone or Android
+                camera, it opens their phone dialer instantly without connecting to any webpage or
+                using mobile data.
               </p>
             </div>
 
@@ -710,7 +790,9 @@ export function PublicLandingView({
                 <span>Which payment networks in Rwanda are supported?</span>
               </h4>
               <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                Ishyura supports <strong>MTN Mobile Money (MoMo Pay)</strong>, <strong>Airtel Money</strong>, and <strong>Equity Bank eKash</strong>. You can generate dedicated counter cards for any of these providers.
+                Ishyura supports <strong>MTN Mobile Money (MoMo Pay)</strong>,{" "}
+                <strong>Airtel Money</strong>, and <strong>Equity Bank eKash</strong>. You can
+                generate dedicated counter cards for any of these providers.
               </p>
             </div>
 
@@ -720,7 +802,11 @@ export function PublicLandingView({
                 <span>How do I order tabletop acrylic stands in Kigali?</span>
               </h4>
               <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                Simply sign in or create a merchant account. In the Hardware Store section, select your desired stand (A6 Acrylic Stand for 5,000 RWF or Vinyl Stickers for 3,000 RWF). We deliver directly to your shop in Kigali via moto courier within 24 to 48 hours.
+                Simply sign in or create a merchant account. In the Hardware Store section, select
+                your desired stand (A6 Acrylic Stand for{" "}
+                {ORDER_UNIT_PRICES.acrylic_stand.toLocaleString()} RWF or Vinyl Stickers for{" "}
+                {ORDER_UNIT_PRICES.vinyl_stickers.toLocaleString()} RWF). We deliver directly to
+                your shop in Kigali via moto courier within 24 to 48 hours.
               </p>
             </div>
 
@@ -730,7 +816,11 @@ export function PublicLandingView({
                 <span>Can I change my price after printing the card?</span>
               </h4>
               <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                With <strong>Ishyura Online (PRO)</strong>, yes! The QR code points to your Cloudflare edge pay page which you can edit remotely from your phone anytime without reprinting your physical stand. For <strong>Ishyura Offline</strong>, you can create a card with a customer-entered amount where the customer enters the amount on their phone keypad.
+                With <strong>Ishyura Online (PRO)</strong>, yes! The QR code points to your
+                Cloudflare edge pay page which you can edit remotely from your phone anytime without
+                reprinting your physical stand. For <strong>Ishyura Offline</strong>, you can create
+                a card with a customer-entered amount where the customer enters the amount on their
+                phone keypad.
               </p>
             </div>
 
@@ -740,7 +830,8 @@ export function PublicLandingView({
                 <span>Is the first QR code and PDF really included?</span>
               </h4>
               <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed pl-6">
-                Yes! Every registered merchant receives one included initial offline USSD QR card and high-resolution PDF download to get started right away.
+                Yes! Every registered merchant receives one included initial offline USSD QR card
+                and high-resolution PDF download to get started right away.
               </p>
             </div>
           </div>
@@ -754,7 +845,8 @@ export function PublicLandingView({
             Ready to Modernize Your Counter?
           </h2>
           <p className="text-xs sm:text-sm text-muted-foreground max-w-md mx-auto leading-relaxed">
-            Create your merchant account to select your product and generate your official Rwandan payment tent card today.
+            Create your merchant account to select your product and generate your official Rwandan
+            payment tent card today.
           </p>
         </div>
         <div className="pt-2">
@@ -787,28 +879,36 @@ export function PublicLandingView({
           <div className="flex flex-wrap items-center justify-center gap-6 font-medium">
             <button
               type="button"
-              onClick={() => document.getElementById("products")?.scrollIntoView({ behavior: "smooth" })}
+              onClick={() =>
+                document.getElementById("products")?.scrollIntoView({ behavior: "smooth" })
+              }
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               Products
             </button>
             <button
               type="button"
-              onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}
+              onClick={() =>
+                document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })
+              }
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               How It Works
             </button>
             <button
               type="button"
-              onClick={() => document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" })}
+              onClick={() =>
+                document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" })
+              }
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               Hardware
             </button>
             <button
               type="button"
-              onClick={() => document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" })}
+              onClick={() =>
+                document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" })
+              }
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               Pricing

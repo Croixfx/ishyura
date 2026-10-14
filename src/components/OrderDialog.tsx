@@ -23,6 +23,7 @@ import {
   Radio,
 } from "lucide-react";
 import { IshyuraClient, type OrderItemType, type OrderPayload } from "@/lib/ishyura-client";
+import { ORDER_UNIT_PRICES, MAX_ORDER_QUANTITY } from "@/lib/order-catalog";
 
 export interface OrderDialogProps {
   open: boolean;
@@ -49,7 +50,7 @@ const PRODUCTS: ProductOption[] = [
   {
     id: "acrylic_stand",
     title: "Premium Acrylic Counter Stand",
-    priceRwf: 5000,
+    priceRwf: ORDER_UNIT_PRICES.acrylic_stand,
     badge: "Most Popular",
     popular: true,
     description: "Sleek, transparent, scratch-resistant A6 L-shape counter display.",
@@ -63,7 +64,7 @@ const PRODUCTS: ProductOption[] = [
   {
     id: "vinyl_stickers",
     title: "Pack of 5 Waterproof Vinyl Stickers",
-    priceRwf: 3500,
+    priceRwf: ORDER_UNIT_PRICES.vinyl_stickers,
     badge: "Weatherproof",
     description: "UV-laminated outdoor grade decals for counters, doors, glass & delivery boxes.",
     features: [
@@ -76,7 +77,7 @@ const PRODUCTS: ProductOption[] = [
   {
     id: "smart_nfc_stand",
     title: "Smart Acrylic Stand (QR + Tap)",
-    priceRwf: 8000,
+    priceRwf: ORDER_UNIT_PRICES.smart_nfc_stand,
     badge: "Next-Gen",
     description: "The ultimate modern stand. Customers can scan the QR code OR tap capable phones.",
     features: [
@@ -89,14 +90,14 @@ const PRODUCTS: ProductOption[] = [
   {
     id: "pro_bundle",
     title: "Merchant Pro Starter Kit",
-    priceRwf: 9500,
-    badge: "Best Value",
+    priceRwf: ORDER_UNIT_PRICES.pro_bundle,
+    badge: "Complete Kit",
     description: "1x Premium Acrylic Stand + 5x Waterproof Stickers + Counter Mat decal.",
     features: [
       "1x Acrylic Stand for the main checkout counter",
       "5x Heavy-duty Vinyl Decals for doors and windows",
       "Priority same-day processing in Kigali",
-      "Save 2,500 RWF compared to buying separately",
+      "Everything delivered together in a single order",
     ],
   },
 ];
@@ -341,7 +342,12 @@ export function OrderDialog({
                     <span>NFC Programming &amp; Paid Rewriting Service</span>
                   </p>
                   <p className="text-[11px] leading-relaxed text-muted-foreground dark:text-sky-200">
-                    We pre-program the embedded contactless chip with your {selectedProductMode === "online" ? "online payment page" : "cellular USSD dial string"}. If your shop details or phone numbers change in the future, physical NFC rewriting service is available for 1,000 RWF.
+                    We pre-program the embedded contactless chip with your{" "}
+                    {selectedProductMode === "online"
+                      ? "online payment page"
+                      : "cellular USSD dial string"}
+                    . If your shop details or phone numbers change in the future, physical NFC
+                    rewriting service is available for 1,000 RWF.
                   </p>
                 </div>
               )}
@@ -370,7 +376,7 @@ export function OrderDialog({
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setQuantity(quantity + 1)}
+                  onClick={() => setQuantity(Math.min(MAX_ORDER_QUANTITY, quantity + 1))}
                   className="h-8 w-8 p-0"
                 >
                   +

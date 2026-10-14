@@ -284,7 +284,10 @@ export async function ensurePaymentDomainSchema(db: BootstrapDatabase): Promise<
       SELECT 1 FROM merchant_entitlements e
       WHERE e.merchant_id = m.id AND e.entitlement_type = 'offline_generation'
     )`;
-  await db.prepare(backfillGenerations).run().catch(() => {});
+  await db
+    .prepare(backfillGenerations)
+    .run()
+    .catch(() => {});
 
   const backfillPdfs = `INSERT OR IGNORE INTO merchant_entitlements (
       id, merchant_id, entitlement_type, granted_count, consumed_count, status, created_at, updated_at
@@ -303,5 +306,8 @@ export async function ensurePaymentDomainSchema(db: BootstrapDatabase): Promise<
       SELECT 1 FROM merchant_entitlements e
       WHERE e.merchant_id = m.id AND e.entitlement_type = 'pdf_download'
     )`;
-  await db.prepare(backfillPdfs).run().catch(() => {});
+  await db
+    .prepare(backfillPdfs)
+    .run()
+    .catch(() => {});
 }

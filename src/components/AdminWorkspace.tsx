@@ -69,7 +69,7 @@ interface AdminWorkspaceProps {
 }
 
 export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWorkspaceProps) {
-  const adminKey = currentUser.access_token || currentUser.email || "ishyura2026";
+  const adminKey = currentUser.access_token || IshyuraClient.getToken() || "";
 
   // Data states
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -1386,7 +1386,8 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                 <Sparkles className="size-8 mx-auto text-muted-foreground/40" />
                 <p className="text-sm font-bold text-foreground">No payment requests found</p>
                 <p className="text-xs text-muted-foreground">
-                  When merchants submit MoMo/Airtel transaction reference codes for extra QR generations, PDFs, or PRO subscriptions, they appear here for verification.
+                  When merchants submit MoMo/Airtel transaction reference codes for extra QR
+                  generations, PDFs, or PRO subscriptions, they appear here for verification.
                 </p>
               </div>
             ) : (
@@ -1428,7 +1429,10 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                           <td className="p-3 font-mono font-bold text-foreground">
                             {r.amount.toLocaleString()} {r.currency || "RWF"}
                           </td>
-                          <td className="p-3 text-muted-foreground max-w-xs truncate" title={r.evidence_notes || ""}>
+                          <td
+                            className="p-3 text-muted-foreground max-w-xs truncate"
+                            title={r.evidence_notes || ""}
+                          >
                             {r.evidence_notes || "—"}
                           </td>
                           <td className="p-3 text-muted-foreground text-[11px]">

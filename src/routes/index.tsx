@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { AppLayout } from "@/components/AppLayout";
+import { ORDER_UNIT_PRICES } from "@/lib/order-catalog";
 import { PaymentQrCode } from "@/components/PaymentQrCode";
 import {
   Download,
@@ -307,19 +308,22 @@ function Index() {
     }
   };
 
-  const fetchPaymentRequests = useCallback(async (merchantId?: string) => {
-    const mid = merchantId || currentUser?.id || currentUser?.phone_number;
-    if (!mid) return;
-    setPaymentRequestsLoading(true);
-    try {
-      const data = await IshyuraClient.listPaymentRequests(mid);
-      setPaymentRequests(data);
-    } catch (e) {
-      console.warn("Failed to load payment requests:", e);
-    } finally {
-      setPaymentRequestsLoading(false);
-    }
-  }, [currentUser]);
+  const fetchPaymentRequests = useCallback(
+    async (merchantId?: string) => {
+      const mid = merchantId || currentUser?.id || currentUser?.phone_number;
+      if (!mid) return;
+      setPaymentRequestsLoading(true);
+      try {
+        const data = await IshyuraClient.listPaymentRequests(mid);
+        setPaymentRequests(data);
+      } catch (e) {
+        console.warn("Failed to load payment requests:", e);
+      } finally {
+        setPaymentRequestsLoading(false);
+      }
+    },
+    [currentUser],
+  );
 
   const pendingRequests = useMemo(
     () => paymentRequests.filter((r) => r.status === "pending"),
@@ -547,7 +551,7 @@ function Index() {
         if (!searchParams.tab || searchParams.tab === "generator") {
           setActiveTab("inquiries");
         }
-        const key = user.access_token || user.email || "ishyura2026";
+        const key = user.access_token || IshyuraClient.getToken() || "";
         IshyuraClient.getAdminStats(key)
           .then((s) => {
             if (s) {
@@ -615,7 +619,12 @@ function Index() {
                           payload.given_name ||
                           email.split("@")[0]) as string;
                         const sub = (payload.sub || "") as string;
-                        IshyuraClient.signInWithGoogle({ email, name, sub })
+                        IshyuraClient.signInWithGoogle({
+                          email,
+                          name,
+                          sub,
+                          idToken: response.credential,
+                        })
                           .then((u) => {
                             setCurrentUser(u);
                             if (isAdminUser(u)) {
@@ -901,7 +910,10 @@ function Index() {
               ? 0
               : 1;
 
-        if (availableOffline <= 0 || (existingOfflineCount >= 1 && grantedOffline <= existingOfflineCount)) {
+        if (
+          availableOffline <= 0 ||
+          (existingOfflineCount >= 1 && grantedOffline <= existingOfflineCount)
+        ) {
           setConfirmedData(null);
           setPaymentRequestType("offline_qr_generation");
           const pendingOffline = pendingRequests.find(
@@ -1007,7 +1019,8 @@ function Index() {
           if (availableOfflineQuota > 0) {
             const offlineRecord: QRCodeRecord = {
               id:
-                cardData.id || `offline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                cardData.id ||
+                `offline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
               owner_id: currentUser?.id || "offline_owner",
               phone_number: currentUser?.phone_number || cardData.sanitizedInput,
               business_name: cardData.businessName,
@@ -1021,7 +1034,10 @@ function Index() {
               created_at: new Date().toISOString(),
             };
             setConfirmedData(cardData);
-            setQrHistory((prev) => [offlineRecord, ...prev.filter((q) => q.id !== offlineRecord.id)]);
+            setQrHistory((prev) => [
+              offlineRecord,
+              ...prev.filter((q) => q.id !== offlineRecord.id),
+            ]);
             try {
               const pending = JSON.parse(
                 localStorage.getItem("ishyura_pending_offline_sync") || "[]",
@@ -1055,7 +1071,8 @@ function Index() {
           // Online error: strictly block preview and notify
           setConfirmedData(null);
           setLockedNotice(
-            errorObj?.message || "Failed to generate QR code. Verification or entitlement required.",
+            errorObj?.message ||
+              "Failed to generate QR code. Verification or entitlement required.",
           );
         }
       })
@@ -1392,6 +1409,7 @@ function Index() {
         email: googleRes.email,
         name: displayName,
         sub: googleRes.uid,
+        accessToken: googleRes.accessToken,
       });
 
       setCurrentUser(user);
@@ -1742,25 +1760,27 @@ function Index() {
                         <p className="text-[11px] text-muted-foreground leading-relaxed">
                           {deliveryInfo?.detail ||
                             deliveryInfo?.error ||
-                            "Ready for verification. Enter code below or use instant access code."}
+                            "Could not send the SMS. Please try again in a moment."}
                         </p>
-                        <div className="pt-1.5 flex items-center justify-between gap-2 border-t border-amber-500/20">
-                          <div className="text-[11px] text-foreground font-medium">
-                            Instant access code:{" "}
-                            <code className="bg-background/80 px-1.5 py-0.5 rounded font-mono font-bold text-primary">
-                              123456
-                            </code>
+                        {deliveryInfo?.test_code && (
+                          <div className="pt-1.5 flex items-center justify-between gap-2 border-t border-amber-500/20">
+                            <div className="text-[11px] text-foreground font-medium">
+                              Dev access code:{" "}
+                              <code className="bg-background/80 px-1.5 py-0.5 rounded font-mono font-bold text-primary">
+                                {deliveryInfo.test_code}
+                              </code>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => setOtpCode(deliveryInfo.test_code ?? "")}
+                              className="h-7 text-[11px] font-semibold px-2.5"
+                            >
+                              Auto-fill
+                            </Button>
                           </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setOtpCode("123456")}
-                            className="h-7 text-[11px] font-semibold px-2.5"
-                          >
-                            Auto-fill 123456
-                          </Button>
-                        </div>
+                        )}
                       </div>
                     )}
 
@@ -1769,13 +1789,15 @@ function Index() {
                         <Label className="text-xs font-semibold">
                           Enter 6-Digit Verification Code
                         </Label>
-                        <button
-                          type="button"
-                          onClick={() => setOtpCode("123456")}
-                          className="text-[11px] text-primary hover:underline font-medium"
-                        >
-                          Use test code (123456)
-                        </button>
+                        {deliveryInfo?.test_code && (
+                          <button
+                            type="button"
+                            onClick={() => setOtpCode(deliveryInfo.test_code ?? "")}
+                            className="text-[11px] text-primary hover:underline font-medium"
+                          >
+                            Use test code ({deliveryInfo.test_code})
+                          </button>
+                        )}
                       </div>
                       <div className="flex gap-2">
                         <Input
@@ -1930,7 +1952,9 @@ function Index() {
                   Laser-cut L-stand with your QR &amp; logo
                 </p>
               </div>
-              <span className="text-xs font-extrabold text-foreground tabular-nums">7,500 RWF</span>
+              <span className="text-xs font-extrabold text-foreground tabular-nums">
+                {ORDER_UNIT_PRICES.acrylic_stand.toLocaleString()} RWF
+              </span>
             </div>
 
             <div className="p-3 rounded-xl border border-border/70 bg-card/60 flex items-center justify-between">
@@ -1938,7 +1962,9 @@ function Index() {
                 <p className="text-xs font-bold text-foreground">Pack of 5 Vinyl Stickers</p>
                 <p className="text-[11px] text-muted-foreground">Waterproof &amp; UV resistant</p>
               </div>
-              <span className="text-xs font-extrabold text-foreground tabular-nums">4,500 RWF</span>
+              <span className="text-xs font-extrabold text-foreground tabular-nums">
+                {ORDER_UNIT_PRICES.vinyl_stickers.toLocaleString()} RWF
+              </span>
             </div>
           </div>
 
@@ -1952,7 +1978,9 @@ function Index() {
               }}
             >
               <Package className="size-3.5" />
-              <span>Order Tabletop Stand (7,500 RWF)</span>
+              <span>
+                Order Tabletop Stand ({ORDER_UNIT_PRICES.acrylic_stand.toLocaleString()} RWF)
+              </span>
             </Button>
             <Button
               variant="ghost"
@@ -1982,7 +2010,9 @@ function Index() {
         network={confirmedData?.network || network}
         dialCode={confirmedData?.ussdString || draftUssdString}
         preselectedProduct={selectedProductForOrder}
-        selectedProductMode={selectedProductMode || (confirmedData?.isDynamic ? "online" : "offline")}
+        selectedProductMode={
+          selectedProductMode || (confirmedData?.isDynamic ? "online" : "offline")
+        }
       />
 
       <PaymentRequestDialog
@@ -2406,13 +2436,13 @@ function Index() {
           onOpenInquiry={() => setInquiryDialogOpen(true)}
         />
       ) : isAdmin &&
-      (activeTab === "inquiries" ||
-        activeTab === "orders" ||
-        activeTab === "qrs" ||
-        activeTab === "merchants" ||
-        activeTab === "admins" ||
-        activeTab === "logs" ||
-        activeTab === "approvals") ? (
+        (activeTab === "inquiries" ||
+          activeTab === "orders" ||
+          activeTab === "qrs" ||
+          activeTab === "merchants" ||
+          activeTab === "admins" ||
+          activeTab === "logs" ||
+          activeTab === "approvals") ? (
         <div className="p-4 sm:p-6 lg:p-8">
           <AdminWorkspace
             activeTab={activeTab}
@@ -2454,9 +2484,13 @@ function Index() {
             >
               <QrCode className="size-3.5" />
               <span>Saved QR Tent Cards</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                recordsSubTab === "cards" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
-              }`}>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  recordsSubTab === "cards"
+                    ? "bg-primary-foreground/20 text-primary-foreground"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
                 {qrHistory.length}
               </span>
             </button>
@@ -2476,9 +2510,13 @@ function Index() {
                   {pendingRequests.length} Pending
                 </span>
               ) : (
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                  recordsSubTab === "payments" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
-                }`}>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    recordsSubTab === "payments"
+                      ? "bg-primary-foreground/20 text-primary-foreground"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
                   {paymentRequests.length}
                 </span>
               )}
@@ -2489,9 +2527,12 @@ function Index() {
             <div className="space-y-4">
               <div className="p-4 rounded-2xl border border-border/80 bg-card/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
                 <div>
-                  <h3 className="text-xs font-bold text-foreground">Submitted Payment Verification</h3>
+                  <h3 className="text-xs font-bold text-foreground">
+                    Submitted Payment Verification
+                  </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    View the review status of payments submitted for extra offline generations or PRO features.
+                    View the review status of payments submitted for extra offline generations or
+                    PRO features.
                   </p>
                 </div>
                 <Button
@@ -2501,12 +2542,16 @@ function Index() {
                   onClick={() => {
                     if (currentUser) {
                       fetchPaymentRequests(currentUser.id || currentUser.phone_number);
-                      IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number).then(setEntitlements);
+                      IshyuraClient.getEntitlements(
+                        currentUser.id || currentUser.phone_number,
+                      ).then(setEntitlements);
                     }
                   }}
                   className="w-full sm:w-auto h-8 text-xs font-semibold rounded-xl border-border/80 hover:bg-muted"
                 >
-                  <RotateCw className={`size-3.5 mr-1.5 ${paymentRequestsLoading ? "animate-spin" : ""}`} />
+                  <RotateCw
+                    className={`size-3.5 mr-1.5 ${paymentRequestsLoading ? "animate-spin" : ""}`}
+                  />
                   <span>Refresh Status</span>
                 </Button>
               </div>
@@ -2514,7 +2559,10 @@ function Index() {
               {paymentRequestsLoading ? (
                 <div className="space-y-3">
                   {[1, 2].map((i) => (
-                    <div key={i} className="p-5 rounded-2xl border border-border/60 bg-card/40 space-y-3 animate-pulse">
+                    <div
+                      key={i}
+                      className="p-5 rounded-2xl border border-border/60 bg-card/40 space-y-3 animate-pulse"
+                    >
                       <div className="h-4 w-48 bg-muted rounded" />
                       <div className="h-6 w-32 bg-muted rounded-full" />
                     </div>
@@ -2525,7 +2573,8 @@ function Index() {
                   <Clock className="size-10 text-muted-foreground/40 mx-auto" />
                   <p className="text-sm font-bold text-foreground">No payment submissions yet</p>
                   <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
-                    When you top up for additional offline generations or PRO subscriptions, your reference numbers and administrator approval status will show here.
+                    When you top up for additional offline generations or PRO subscriptions, your
+                    reference numbers and administrator approval status will show here.
                   </p>
                   <Button
                     size="sm"
@@ -2602,7 +2651,9 @@ function Index() {
 
                       {req.evidence_notes && (
                         <div className="p-3 rounded-xl bg-muted/40 border border-border/40 text-xs text-muted-foreground">
-                          <span className="font-semibold text-foreground mr-1.5">Submitted Notes / Transaction ID:</span>
+                          <span className="font-semibold text-foreground mr-1.5">
+                            Submitted Notes / Transaction ID:
+                          </span>
                           <span>{req.evidence_notes}</span>
                         </div>
                       )}
@@ -2631,282 +2682,283 @@ function Index() {
             </div>
           ) : (
             <>
-          {/* Toast Message for Customer Actions */}
-          {customerToastMsg && (
-            <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in-50">
-              <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
-              <span>{customerToastMsg}</span>
-            </div>
-          )}
-
-          {/* Saved Payment Records Notice */}
-          <div className="p-4 rounded-2xl border border-sky-500/30 bg-sky-500/10 flex items-start gap-3">
-            <Sparkles className="size-5 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <h4 className="text-xs font-bold text-foreground">Saved Payment Records</h4>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Your payment codes are active and ready. If you ever lose your counter card or
-                phone, you can reprint or download your official counter tent cards below at any
-                time, edit details, or release the code.
-              </p>
-            </div>
-          </div>
-
-          {recordsLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {[1, 2, 3, 4].map((n) => (
-                <div
-                  key={n}
-                  className="p-5 rounded-2xl border border-border/60 bg-card/40 space-y-4 animate-pulse"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-2 flex-1">
-                      <Skeleton className="h-5 w-40 rounded-lg" />
-                      <Skeleton className="h-3.5 w-24 rounded" />
-                    </div>
-                    <Skeleton className="h-6 w-16 rounded-full" />
-                  </div>
-                  <div className="p-3 rounded-xl bg-muted/20 flex items-center justify-between">
-                    <Skeleton className="h-4 w-28 rounded" />
-                    <Skeleton className="h-4 w-16 rounded" />
-                  </div>
-                  <div className="flex items-center justify-between pt-2 border-t border-border/40">
-                    <Skeleton className="h-8 w-24 rounded-xl" />
-                    <div className="flex gap-2">
-                      <Skeleton className="h-8 w-8 rounded-xl" />
-                      <Skeleton className="h-8 w-8 rounded-xl" />
-                    </div>
-                  </div>
+              {/* Toast Message for Customer Actions */}
+              {customerToastMsg && (
+                <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in-50">
+                  <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                  <span>{customerToastMsg}</span>
                 </div>
-              ))}
-            </div>
-          ) : qrHistory.length === 0 ? (
-            <div className="p-12 rounded-3xl border border-dashed border-border/80 text-center bg-card/30 space-y-3">
-              <History className="size-10 text-muted-foreground/40 mx-auto" />
-              <p className="text-sm font-bold text-foreground">No payment cards on record</p>
-              <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-                Generate your first official payment QR tent card to have it archived securely here.
-              </p>
-              <Button
-                size="sm"
-                onClick={() => setActiveTab("generator")}
-                className="text-xs font-bold rounded-xl mt-2"
-              >
-                Create Payment QR
-              </Button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {qrHistory.map((qr) => (
-                <div
-                  key={qr.id}
-                  className="p-5 rounded-2xl border border-border/80 bg-card/60 space-y-4 shadow-sm hover:border-border transition-all"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-extrabold text-base text-foreground truncate">
-                          {qr.business_name || qr.description || "Merchant Store"}
-                        </h3>
-                        {Boolean(qr.is_dynamic) && (
-                          <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 border border-amber-500/35 px-2 py-0.5 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400 shrink-0">
-                            <Sparkles className="size-2.5" />
-                            PRO DYNAMIC
-                          </span>
-                        )}
+              )}
+
+              {/* Saved Payment Records Notice */}
+              <div className="p-4 rounded-2xl border border-sky-500/30 bg-sky-500/10 flex items-start gap-3">
+                <Sparkles className="size-5 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="text-xs font-bold text-foreground">Saved Payment Records</h4>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Your payment codes are active and ready. If you ever lose your counter card or
+                    phone, you can reprint or download your official counter tent cards below at any
+                    time, edit details, or release the code.
+                  </p>
+                </div>
+              </div>
+
+              {recordsLoading ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[1, 2, 3, 4].map((n) => (
+                    <div
+                      key={n}
+                      className="p-5 rounded-2xl border border-border/60 bg-card/40 space-y-4 animate-pulse"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-2 flex-1">
+                          <Skeleton className="h-5 w-40 rounded-lg" />
+                          <Skeleton className="h-3.5 w-24 rounded" />
+                        </div>
+                        <Skeleton className="h-6 w-16 rounded-full" />
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 mt-1">
-                        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-primary/10 text-primary">
-                          {qr.network || "Mobile Money"}
-                        </span>
-                        {qr.amount && (
-                          <span className="text-[10px] font-black px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-                            {qr.amount.toLocaleString()} RWF
-                          </span>
-                        )}
-                        <span className="text-[11px] text-muted-foreground">
-                          {new Date(qr.created_at).toLocaleDateString("en-GB", {
-                            day: "numeric",
-                            month: "short",
-                            year: "numeric",
-                          })}
-                        </span>
+                      <div className="p-3 rounded-xl bg-muted/20 flex items-center justify-between">
+                        <Skeleton className="h-4 w-28 rounded" />
+                        <Skeleton className="h-4 w-16 rounded" />
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                        <Skeleton className="h-8 w-24 rounded-xl" />
+                        <div className="flex gap-2">
+                          <Skeleton className="h-8 w-8 rounded-xl" />
+                          <Skeleton className="h-8 w-8 rounded-xl" />
+                        </div>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
-                      Active
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-muted/40 border border-border/40 text-xs flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold text-muted-foreground uppercase">
-                        {qr.payment_type === "momo_code" ? "Merchant Code:" : "Phone:"}
-                      </span>
-                      <span className="font-mono font-black text-foreground">
-                        {extractMerchantOrAccountCode(qr.dial_code, qr.phone_number)}
-                      </span>
-                    </div>
-                    <span className="font-mono text-[11px] text-muted-foreground truncate ml-2">
-                      {qr.dial_code}
-                    </span>
-                  </div>
-
-                  {Boolean(qr.is_dynamic) && (
-                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-bold flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
-                          <Zap className="size-3.5" />
-                          Live Stand Bill (Print Once):
-                        </span>
-                        <span className="font-mono font-black text-foreground">
-                          {qr.amount
-                            ? `${qr.amount.toLocaleString()} RWF`
-                            : "Open (Customer Enters)"}
+                  ))}
+                </div>
+              ) : qrHistory.length === 0 ? (
+                <div className="p-12 rounded-3xl border border-dashed border-border/80 text-center bg-card/30 space-y-3">
+                  <History className="size-10 text-muted-foreground/40 mx-auto" />
+                  <p className="text-sm font-bold text-foreground">No payment cards on record</p>
+                  <p className="text-xs text-muted-foreground max-w-sm mx-auto">
+                    Generate your first official payment QR tent card to have it archived securely
+                    here.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={() => setActiveTab("generator")}
+                    className="text-xs font-bold rounded-xl mt-2"
+                  >
+                    Create Payment QR
+                  </Button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {qrHistory.map((qr) => (
+                    <div
+                      key={qr.id}
+                      className="p-5 rounded-2xl border border-border/80 bg-card/60 space-y-4 shadow-sm hover:border-border transition-all"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-extrabold text-base text-foreground truncate">
+                              {qr.business_name || qr.description || "Merchant Store"}
+                            </h3>
+                            {Boolean(qr.is_dynamic) && (
+                              <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 border border-amber-500/35 px-2 py-0.5 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400 shrink-0">
+                                <Sparkles className="size-2.5" />
+                                PRO DYNAMIC
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-primary/10 text-primary">
+                              {qr.network || "Mobile Money"}
+                            </span>
+                            {qr.amount && (
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                                {qr.amount.toLocaleString()} RWF
+                              </span>
+                            )}
+                            <span className="text-[11px] text-muted-foreground">
+                              {new Date(qr.created_at).toLocaleDateString("en-GB", {
+                                day: "numeric",
+                                month: "short",
+                                year: "numeric",
+                              })}
+                            </span>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
+                          Active
                         </span>
                       </div>
 
-                      {/* Quick inline updater */}
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          inputMode="numeric"
-                          placeholder={qr.amount ? String(qr.amount) : "Set new bill amount..."}
-                          defaultValue=""
-                          id={`quick-bill-${qr.id}`}
-                          className="h-8 text-xs font-mono font-bold bg-background/80"
-                        />
-                        <Button
-                          size="sm"
-                          onClick={() => {
-                            const inputEl = document.getElementById(
-                              `quick-bill-${qr.id}`,
-                            ) as HTMLInputElement | null;
-                            const val = inputEl?.value?.trim();
-                            if (val) {
-                              handleQuickBillUpdate(qr.id, parseFloat(val));
-                              if (inputEl) inputEl.value = "";
-                            }
-                          }}
-                          className="h-8 text-xs font-bold rounded-lg px-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 shrink-0"
-                        >
-                          Set Bill
-                        </Button>
-                        {qr.amount ? (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleQuickBillUpdate(qr.id, null)}
-                            className="h-8 text-[11px] text-muted-foreground hover:text-foreground px-2"
-                            title="Clear to open customer entry"
-                          >
-                            Reset
-                          </Button>
-                        ) : null}
+                      <div className="p-3 rounded-xl bg-muted/40 border border-border/40 text-xs flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold text-muted-foreground uppercase">
+                            {qr.payment_type === "momo_code" ? "Merchant Code:" : "Phone:"}
+                          </span>
+                          <span className="font-mono font-black text-foreground">
+                            {extractMerchantOrAccountCode(qr.dial_code, qr.phone_number)}
+                          </span>
+                        </div>
+                        <span className="font-mono text-[11px] text-muted-foreground truncate ml-2">
+                          {qr.dial_code}
+                        </span>
                       </div>
 
-                      {quickBillToast?.id === qr.id && (
-                        <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 animate-in fade-in-50">
-                          <CheckCircle2 className="size-3.5" />
-                          <span>{quickBillToast.message}</span>
+                      {Boolean(qr.is_dynamic) && (
+                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2.5">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-bold flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+                              <Zap className="size-3.5" />
+                              Live Stand Bill (Print Once):
+                            </span>
+                            <span className="font-mono font-black text-foreground">
+                              {qr.amount
+                                ? `${qr.amount.toLocaleString()} RWF`
+                                : "Open (Customer Enters)"}
+                            </span>
+                          </div>
+
+                          {/* Quick inline updater */}
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              inputMode="numeric"
+                              placeholder={qr.amount ? String(qr.amount) : "Set new bill amount..."}
+                              defaultValue=""
+                              id={`quick-bill-${qr.id}`}
+                              className="h-8 text-xs font-mono font-bold bg-background/80"
+                            />
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                const inputEl = document.getElementById(
+                                  `quick-bill-${qr.id}`,
+                                ) as HTMLInputElement | null;
+                                const val = inputEl?.value?.trim();
+                                if (val) {
+                                  handleQuickBillUpdate(qr.id, parseFloat(val));
+                                  if (inputEl) inputEl.value = "";
+                                }
+                              }}
+                              className="h-8 text-xs font-bold rounded-lg px-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 shrink-0"
+                            >
+                              Set Bill
+                            </Button>
+                            {qr.amount ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleQuickBillUpdate(qr.id, null)}
+                                className="h-8 text-[11px] text-muted-foreground hover:text-foreground px-2"
+                                title="Clear to open customer entry"
+                              >
+                                Reset
+                              </Button>
+                            ) : null}
+                          </div>
+
+                          {quickBillToast?.id === qr.id && (
+                            <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 animate-in fade-in-50">
+                              <CheckCircle2 className="size-3.5" />
+                              <span>{quickBillToast.message}</span>
+                            </div>
+                          )}
                         </div>
                       )}
-                    </div>
-                  )}
 
-                  <div className="pt-2.5 border-t border-border/40 flex flex-wrap items-center justify-between gap-1.5">
-                    {/* Direct Print / Download Counter Card (Key feature for lost QR recovery!) */}
-                    <Button
-                      size="sm"
-                      onClick={() => setSelectedQrForCustomerPrint(qr)}
-                      className="h-8 text-xs font-bold gap-1 rounded-xl bg-primary text-primary-foreground shadow-xs shrink-0"
-                      title="Preview, download high-res PNG or print official counter card"
-                    >
-                      <Printer className="size-3.5" />
-                      <span>Print / Download</span>
-                    </Button>
+                      <div className="pt-2.5 border-t border-border/40 flex flex-wrap items-center justify-between gap-1.5">
+                        {/* Direct Print / Download Counter Card (Key feature for lost QR recovery!) */}
+                        <Button
+                          size="sm"
+                          onClick={() => setSelectedQrForCustomerPrint(qr)}
+                          className="h-8 text-xs font-bold gap-1 rounded-xl bg-primary text-primary-foreground shadow-xs shrink-0"
+                          title="Preview, download high-res PNG or print official counter card"
+                        >
+                          <Printer className="size-3.5" />
+                          <span>Print / Download</span>
+                        </Button>
 
-                    {qr.is_dynamic ? (
-                      <>
+                        {qr.is_dynamic ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const url = getDynamicPayUrl(qr.id);
+                                setScanPreviewUrl(url);
+                              }}
+                              className="h-8 text-xs font-bold gap-1 rounded-xl border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary"
+                              title="Test 1-tap customer pay sheet"
+                            >
+                              <Zap className="size-3.5" />
+                              <span>Test Pay</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleOpenEditDestination(qr)}
+                              className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
+                              title="Update recipient number or price without reprinting"
+                            >
+                              <Edit3 className="size-3.5" />
+                              <span>Edit</span>
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setBusinessName(qr.business_name || "");
+                              setNetwork((qr.network as Network) || "MTN MoMo");
+                              setPaymentType((qr.payment_type as PaymentType) || "momo_code");
+                              const digits = extractMerchantOrAccountCode(
+                                qr.dial_code,
+                                qr.phone_number,
+                              );
+                              setAccountValue(digits);
+                              setActiveTab("generator");
+                            }}
+                            className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
+                            title="Open in generator to customize"
+                          >
+                            <RotateCcw className="size-3.5" />
+                            <span>Generator</span>
+                          </Button>
+                        )}
+
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={() => {
-                            const url = getDynamicPayUrl(qr.id);
-                            setScanPreviewUrl(url);
+                            setSelectedProductForOrder("acrylic_stand");
+                            setOrderDialogOpen(true);
                           }}
-                          className="h-8 text-xs font-bold gap-1 rounded-xl border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary"
-                          title="Test 1-tap customer pay sheet"
+                          className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
                         >
-                          <Zap className="size-3.5" />
-                          <span>Test Pay</span>
+                          <Package className="size-3.5" />
+                          <span>Order Stand</span>
                         </Button>
+
+                        {/* Delete Card & Unlock Code */}
                         <Button
                           size="sm"
-                          variant="outline"
-                          onClick={() => handleOpenEditDestination(qr)}
-                          className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
-                          title="Update recipient number or price without reprinting"
+                          variant="ghost"
+                          onClick={() => setDeleteConfirmCustomerQr(qr)}
+                          className="h-8 text-xs font-semibold text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-xl px-2"
+                          title="Delete card and release duplicate lock so you can print again"
                         >
-                          <Edit3 className="size-3.5" />
-                          <span>Edit</span>
+                          <Trash2 className="size-3.5" />
+                          <span className="sr-only sm:not-sr-only sm:inline">Delete</span>
                         </Button>
-                      </>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setBusinessName(qr.business_name || "");
-                          setNetwork((qr.network as Network) || "MTN MoMo");
-                          setPaymentType((qr.payment_type as PaymentType) || "momo_code");
-                          const digits = extractMerchantOrAccountCode(
-                            qr.dial_code,
-                            qr.phone_number,
-                          );
-                          setAccountValue(digits);
-                          setActiveTab("generator");
-                        }}
-                        className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
-                        title="Open in generator to customize"
-                      >
-                        <RotateCcw className="size-3.5" />
-                        <span>Generator</span>
-                      </Button>
-                    )}
-
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setSelectedProductForOrder("acrylic_stand");
-                        setOrderDialogOpen(true);
-                      }}
-                      className="h-8 text-xs font-semibold gap-1 rounded-xl border-border/80 hover:bg-muted"
-                    >
-                      <Package className="size-3.5" />
-                      <span>Order Stand</span>
-                    </Button>
-
-                    {/* Delete Card & Unlock Code */}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setDeleteConfirmCustomerQr(qr)}
-                      className="h-8 text-xs font-semibold text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-xl px-2"
-                      title="Delete card and release duplicate lock so you can print again"
-                    >
-                      <Trash2 className="size-3.5" />
-                      <span className="sr-only sm:not-sr-only sm:inline">Delete</span>
-                    </Button>
-                  </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
-        </>
-      )}
-    </div>
+        </div>
       ) : activeTab === "store" ? (
         <div className="mx-auto max-w-4xl px-4 pt-6 pb-20 sm:px-6 space-y-6">
           <div className="border-b border-border/60 pb-5">
@@ -2936,7 +2988,9 @@ function Index() {
               </div>
               <div className="space-y-2 pt-2 border-t border-border/40">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-lg font-black text-foreground">5,000 RWF</span>
+                  <span className="text-lg font-black text-foreground">
+                    {ORDER_UNIT_PRICES.acrylic_stand.toLocaleString()} RWF
+                  </span>
                   <span className="text-[10px] text-muted-foreground">Kigali Delivery</span>
                 </div>
                 <Button
@@ -2960,13 +3014,16 @@ function Index() {
                 <div>
                   <h3 className="font-bold text-sm text-foreground">Smart Stand (QR + Tap)</h3>
                   <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                    Contactless NFC chip + high-resolution QR print. Zero charging needed. Contactless rewriting service (1,000 RWF).
+                    Contactless NFC chip + high-resolution QR print. Zero charging needed.
+                    Contactless rewriting service (1,000 RWF).
                   </p>
                 </div>
               </div>
               <div className="space-y-2 pt-2 border-t border-border/40">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-lg font-black text-foreground">8,000 RWF</span>
+                  <span className="text-lg font-black text-foreground">
+                    {ORDER_UNIT_PRICES.smart_nfc_stand.toLocaleString()} RWF
+                  </span>
                   <span className="text-[10px] text-muted-foreground">NFC Contactless</span>
                 </div>
                 <Button
@@ -2997,7 +3054,9 @@ function Index() {
               </div>
               <div className="space-y-2 pt-2 border-t border-border/40">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-lg font-black text-foreground">3,000 RWF</span>
+                  <span className="text-lg font-black text-foreground">
+                    {ORDER_UNIT_PRICES.vinyl_stickers.toLocaleString()} RWF
+                  </span>
                   <span className="text-[10px] text-muted-foreground">5x Pack</span>
                 </div>
                 <Button
@@ -3020,7 +3079,7 @@ function Index() {
                     <Sparkles className="size-6" />
                   </div>
                   <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-primary text-primary-foreground">
-                    Best Value
+                    Complete Kit
                   </span>
                 </div>
                 <div>
@@ -3033,8 +3092,10 @@ function Index() {
               </div>
               <div className="space-y-2 pt-2 border-t border-border/40">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-lg font-black text-foreground">7,500 RWF</span>
-                  <span className="text-[10px] line-through text-muted-foreground">8,000 RWF</span>
+                  <span className="text-lg font-black text-foreground">
+                    {ORDER_UNIT_PRICES.pro_bundle.toLocaleString()} RWF
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">Complete set</span>
                 </div>
                 <Button
                   onClick={() => {
@@ -3164,11 +3225,14 @@ function Index() {
                           Payment Submission Pending Review
                         </span>
                         <code className="text-[11px] font-mono font-bold bg-background/80 px-2 py-0.5 rounded border border-border/60">
-                          {pendingRequests[0].reference_code}
+                          {pendingRequests[0]?.reference_code}
                         </code>
                       </div>
                       <p className="text-xs text-muted-foreground leading-relaxed">
-                        Submitted for {getEntitlementTitle(pendingRequests[0].requested_entitlement)} ({pendingRequests[0].amount.toLocaleString()} {pendingRequests[0].currency}). Administrator approval is in progress.
+                        Submitted for{" "}
+                        {getEntitlementTitle(pendingRequests[0]?.requested_entitlement ?? "")} (
+                        {(pendingRequests[0]?.amount ?? 0).toLocaleString()}{" "}
+                        {pendingRequests[0]?.currency}). Administrator approval is in progress.
                       </p>
                     </div>
                   </div>
@@ -3321,7 +3385,10 @@ function Index() {
                         </Badge>
                       </div>
                       <p className="text-[11px] text-muted-foreground leading-relaxed">
-                        Encodes direct telecom dial string (<code className="bg-muted px-1 py-0.5 rounded">*182*8*1*...#</code>). Customer phone immediately opens the native telecom dialer. Zero mobile data needed.
+                        Encodes direct telecom dial string (
+                        <code className="bg-muted px-1 py-0.5 rounded">*182*8*1*...#</code>).
+                        Customer phone immediately opens the native telecom dialer. Zero mobile data
+                        needed.
                       </p>
                     </div>
                   ) : (
@@ -3333,12 +3400,17 @@ function Index() {
                             Ishyura Online Mode (Edge Payment Page)
                           </span>
                         </div>
-                        <Badge variant={entitlements?.is_pro ? "default" : "outline"} className="text-[10px]">
+                        <Badge
+                          variant={entitlements?.is_pro ? "default" : "outline"}
+                          className="text-[10px]"
+                        >
                           {entitlements?.is_pro ? "PRO Active" : "5,000 RWF / month"}
                         </Badge>
                       </div>
                       <p className="text-[11px] text-muted-foreground leading-relaxed">
-                        Encodes an HTTPS payment URL hosted on Cloudflare edge. You can update this bill or amount remotely from your phone without reprinting your physical stand.
+                        Encodes an HTTPS payment URL hosted on Cloudflare edge. You can update this
+                        bill or amount remotely from your phone without reprinting your physical
+                        stand.
                       </p>
                     </div>
                   )}
@@ -4195,11 +4267,16 @@ function Index() {
                           <span className="size-2 rounded-full bg-amber-500 animate-ping" />
                           <span>Payment Pending Review</span>
                         </Badge>
-                        <h3 className="text-base font-bold text-foreground">Verification in Progress</h3>
+                        <h3 className="text-base font-bold text-foreground">
+                          Verification in Progress
+                        </h3>
                         <p className="text-xs text-muted-foreground leading-relaxed">
                           Your payment submission with reference{" "}
-                          <strong className="font-mono text-foreground">{pendingRequests[0].reference_code}</strong>{" "}
-                          is currently awaiting administrator verification. Once verified, this feature unlocks automatically.
+                          <strong className="font-mono text-foreground">
+                            {pendingRequests[0]?.reference_code}
+                          </strong>{" "}
+                          is currently awaiting administrator verification. Once verified, this
+                          feature unlocks automatically.
                         </p>
                       </div>
                       <div className="w-full space-y-2 pt-1">
@@ -4222,12 +4299,16 @@ function Index() {
                           onClick={() => {
                             if (currentUser) {
                               fetchPaymentRequests(currentUser.id || currentUser.phone_number);
-                              IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number).then(setEntitlements);
+                              IshyuraClient.getEntitlements(
+                                currentUser.id || currentUser.phone_number,
+                              ).then(setEntitlements);
                             }
                           }}
                           className="w-full text-xs font-semibold gap-1 text-muted-foreground hover:text-foreground"
                         >
-                          <RotateCw className={`size-3 ${paymentRequestsLoading ? "animate-spin" : ""}`} />
+                          <RotateCw
+                            className={`size-3 ${paymentRequestsLoading ? "animate-spin" : ""}`}
+                          />
                           <span>Refresh Approval Status</span>
                         </Button>
                       </div>
@@ -4238,7 +4319,9 @@ function Index() {
                         <Lock className="size-7" />
                       </div>
                       <div className="space-y-1.5">
-                        <h3 className="text-base font-bold text-foreground">Entitlement Required</h3>
+                        <h3 className="text-base font-bold text-foreground">
+                          Entitlement Required
+                        </h3>
                         <p className="text-xs text-muted-foreground leading-relaxed">
                           {lockedNotice}
                         </p>

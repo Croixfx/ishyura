@@ -23,9 +23,8 @@ export function isKnownAdminEmail(email?: string | null): boolean {
 
 export function isAdminUser(user: UserProfile | null | undefined): boolean {
   if (!user) return false;
-  if (user.role === "admin") return true;
-  if (isKnownAdminEmail(user.email)) return true;
-  return false;
+  // Role is assigned from the server's login response; an email address alone proves nothing.
+  return user.role === "admin";
 }
 
 export interface AuthTokenResponse {
@@ -60,7 +59,15 @@ export interface PaymentRequestRecord {
   id: string;
   merchant_id: string;
   merchant_phone: string;
-  requested_entitlement: "offline_qr_generation" | "pdf_download" | "pro_monthly";
+  // Includes legacy/DB aliases (migration 0003 uses offline_generation / pro_subscription).
+  requested_entitlement:
+    | "offline_qr_generation"
+    | "offline_generation"
+    | "pdf_download"
+    | "pdf_export"
+    | "pro_monthly"
+    | "pro_subscription"
+    | "dynamic_pro_subscription";
   amount: number;
   currency: string;
   reference_code: string;
@@ -304,6 +311,7 @@ export class IshyuraClient {
     phone_normalized?: string;
   }> {
     const cleanPhone = phoneNumber.replace(/[^0-9+]/g, "").trim();
+    let rejection: Error | null = null;
 
     try {
       const res = await fetch(getApiEndpoint("auth/request-otp"), {
@@ -314,9 +322,16 @@ export class IshyuraClient {
       if (res.ok) {
         return await res.json();
       }
+      if (res.status === 429) {
+        const err = await res.json().catch(() => ({}));
+        rejection = new Error(
+          (err as { detail?: string }).detail || "Too many requests. Please wait and try again.",
+        );
+      }
     } catch {
       // Network/offline fallback
     }
+    if (rejection) throw rejection;
 
     // Local client fallback
     const dummyOtp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -341,6 +356,7 @@ export class IshyuraClient {
 
   static async verifyOtp(phoneNumber: string, otp: string): Promise<AuthTokenResponse> {
     const cleanPhone = phoneNumber.replace(/[^0-9+]/g, "").trim();
+    let rejection: Error | null = null;
 
     try {
       const res = await fetch(getApiEndpoint("auth/verify-otp"), {
@@ -350,8 +366,7 @@ export class IshyuraClient {
       });
       if (res.ok) {
         const data: AuthTokenResponse = await res.json();
-        const role: "admin" | "merchant" =
-          data.role === "admin" || isKnownAdminEmail(data.email) ? "admin" : "merchant";
+        const role: "admin" | "merchant" = data.role === "admin" ? "admin" : "merchant";
         this.setSession(data.access_token, {
           id: data.user_id,
           phone_number: data.phone_number,
@@ -365,9 +380,14 @@ export class IshyuraClient {
           role,
         };
       }
+      if (res.status === 401 || res.status === 429 || res.status === 503) {
+        const err = await res.json().catch(() => ({}));
+        rejection = new Error((err as { detail?: string }).detail || "Invalid verification code.");
+      }
     } catch {
-      // Local fallback
+      // Network failure: local fallback below
     }
+    if (rejection) throw rejection;
 
     const storedOtp = sessionStorage.getItem(`pending_otp_${cleanPhone}`);
     if (storedOtp && storedOtp !== otp.trim() && otp.trim() !== "123456") {
@@ -387,7 +407,8 @@ export class IshyuraClient {
       };
     }
 
-    const role: "admin" | "merchant" = isKnownAdminEmail(user.email) ? "admin" : "merchant";
+    // Offline fallback is never an admin session; admin access needs a server-issued token.
+    const role: "admin" | "merchant" = "merchant";
     user.role = role;
 
     const token = `jwt-${user.id}-${Date.now()}`;
@@ -408,8 +429,12 @@ export class IshyuraClient {
     email: string;
     name?: string;
     sub?: string;
+    /** Google ID token (One Tap) or OAuth access token; the server verifies it with Google. */
+    idToken?: string;
+    accessToken?: string;
   }): Promise<UserProfile> {
     const email = profile.email.trim().toLowerCase();
+    let rejection: Error | null = null;
     try {
       const res = await fetch(getApiEndpoint("auth/google"), {
         method: "POST",
@@ -418,13 +443,20 @@ export class IshyuraClient {
           email,
           name: profile.name,
           sub: profile.sub,
+          id_token: profile.idToken,
+          access_token: profile.accessToken,
         }),
       });
 
-      if (res.ok) {
+      if (res.status === 401 || res.status === 503) {
+        const err = await res.json().catch(() => ({}));
+        rejection = new Error(
+          (err as { detail?: string }).detail || "Google sign-in could not be verified.",
+        );
+      } else if (res.ok) {
         const data = await res.json();
-        const role: "admin" | "merchant" =
-          data.role === "admin" || isKnownAdminEmail(data.email || email) ? "admin" : "merchant";
+        // The role is decided by the server only.
+        const role: "admin" | "merchant" = data.role === "admin" ? "admin" : "merchant";
         const user: UserProfile = {
           id: data.user_id,
           phone_number: data.phone_number || email,
@@ -437,16 +469,17 @@ export class IshyuraClient {
         return user;
       }
     } catch {
-      // Local fallback
+      // Network failure: local fallback below
     }
+    if (rejection) throw rejection;
 
-    const localRole: "admin" | "merchant" = isKnownAdminEmail(email) ? "admin" : "merchant";
+    // Offline fallback is never an admin session; admin access needs a server-issued token.
     const localUser: UserProfile = {
       id: profile.sub || `g-${Date.now()}`,
       phone_number: email,
       email: email,
       name: profile.name || email.split("@")[0],
-      role: localRole,
+      role: "merchant",
       is_fully_registered: true,
     };
     this.setSession(`jwt-google-${localUser.id}`, localUser);
@@ -467,8 +500,7 @@ export class IshyuraClient {
     }
 
     const data = await res.json();
-    const role: "admin" | "merchant" =
-      data.role === "admin" || isKnownAdminEmail(data.email || identifier) ? "admin" : "merchant";
+    const role: "admin" | "merchant" = data.role === "admin" ? "admin" : "merchant";
     const user: UserProfile = {
       id: data.user_id,
       phone_number: data.phone_number,
@@ -793,6 +825,10 @@ export class IshyuraClient {
         },
         body: JSON.stringify({ id, ...updates }),
       });
+      if (res.status === 401 || res.status === 403) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { detail?: string }).detail || "You cannot edit this QR code.");
+      }
       if (res.ok) {
         const updated: QRCodeRecord = await res.json();
         const existingList = this.getLocalQrList();
@@ -983,9 +1019,13 @@ export class IshyuraClient {
     file_format?: "png" | "pdf";
   }): Promise<void> {
     try {
+      const token = this.getToken();
       await fetch(getApiEndpoint("downloads/track"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           business_name: data.business_name || "Payment Card",
           network: data.network,
@@ -1045,7 +1085,10 @@ export class IshyuraClient {
 
   static async listOrders(): Promise<OrderRecord[]> {
     try {
-      const res = await fetch(getApiEndpoint("orders"));
+      const token = this.getToken();
+      const res = await fetch(getApiEndpoint("orders"), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (res.ok) {
         return await res.json();
       }
@@ -1069,17 +1112,13 @@ export class IshyuraClient {
   // ------------------------------------------------------------------
   static getEffectiveAdminKey(providedKey?: string): string {
     if (providedKey && providedKey.trim()) return providedKey.trim();
-    const user = this.getSavedUser();
-    if (user?.email && isKnownAdminEmail(user.email)) return user.email.trim();
-    if (user?.email) return user.email.trim();
-    const token = this.getToken();
-    if (token) return token;
-    return "ishyura2026";
+    // Only the server-issued admin session token is ever sent; an email is not a credential.
+    return this.getToken() || "";
   }
 
   static async getAdminStats(adminKey?: string): Promise<AdminStats> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/stats?key=${encodeURIComponent(cleanKey)}`), {
+    const res = await fetch(getApiEndpoint(`admin/stats`), {
       headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
@@ -1091,7 +1130,7 @@ export class IshyuraClient {
 
   static async getAdminMerchants(adminKey?: string): Promise<MerchantRecord[]> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/merchants?key=${encodeURIComponent(cleanKey)}`), {
+    const res = await fetch(getApiEndpoint(`admin/merchants`), {
       headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
@@ -1103,7 +1142,7 @@ export class IshyuraClient {
 
   static async getAdminQrCodes(adminKey?: string): Promise<QRCodeRecord[]> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/qr-codes?key=${encodeURIComponent(cleanKey)}`), {
+    const res = await fetch(getApiEndpoint(`admin/qr-codes`), {
       headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
@@ -1115,7 +1154,7 @@ export class IshyuraClient {
 
   static async getAdminInquiries(adminKey?: string): Promise<InquiryRecord[]> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/inquiries?key=${encodeURIComponent(cleanKey)}`), {
+    const res = await fetch(getApiEndpoint(`admin/inquiries`), {
       headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
@@ -1146,7 +1185,7 @@ export class IshyuraClient {
 
   static async getAdminOrders(adminKey?: string): Promise<OrderRecord[]> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/orders?key=${encodeURIComponent(cleanKey)}`), {
+    const res = await fetch(getApiEndpoint(`admin/orders`), {
       headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
@@ -1173,7 +1212,7 @@ export class IshyuraClient {
 
   static async getAdminDownloads(adminKey?: string): Promise<DownloadEventRecord[]> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/downloads?key=${encodeURIComponent(cleanKey)}`), {
+    const res = await fetch(getApiEndpoint(`admin/downloads`), {
       headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
@@ -1201,7 +1240,7 @@ export class IshyuraClient {
     };
   }> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/settings?key=${encodeURIComponent(cleanKey)}`), {
+    const res = await fetch(getApiEndpoint(`admin/settings`), {
       headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {
@@ -1371,7 +1410,7 @@ export class IshyuraClient {
 
   static async getAdminAdmins(adminKey?: string): Promise<AdminUserRecord[]> {
     const cleanKey = this.getEffectiveAdminKey(adminKey);
-    const res = await fetch(getApiEndpoint(`admin/admins?key=${encodeURIComponent(cleanKey)}`), {
+    const res = await fetch(getApiEndpoint(`admin/admins`), {
       headers: { "x-admin-key": cleanKey },
     });
     if (!res.ok) {

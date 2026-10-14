@@ -38,6 +38,7 @@ import {
   type UserProfile,
 } from "@/lib/ishyura-client";
 import { signInWithGoogleReal } from "@/lib/firebase-auth";
+import { ORDER_UNIT_PRICES, MAX_ORDER_QUANTITY } from "@/lib/order-catalog";
 
 export const Route = createFileRoute("/orders")({
   head: () => ({
@@ -74,7 +75,7 @@ const PHYSICAL_PRODUCTS: Array<{
     tagline: "Crystal-clear acrylic stand for retail & restaurant counters",
     description:
       "Durable 3mm clear acrylic with high-resolution UV print of your MTN MoMo / Airtel Money QR code & USSD dial numbers. Scratch-resistant and waterproof.",
-    price: 7500,
+    price: ORDER_UNIT_PRICES.acrylic_stand,
     material: "3mm Cast Acrylic & UV Print",
     deliveryTime: "Same-Day in Kigali (2-4 hrs)",
     popular: true,
@@ -92,7 +93,7 @@ const PHYSICAL_PRODUCTS: Array<{
     tagline: "Heavy-duty laminated stickers for counters, glass & moto-taxis",
     description:
       "Pack of 5 waterproof, weather-resistant vinyl stickers designed to stick on glass counters, cash registers, delivery vehicles, and moto helmets.",
-    price: 4500,
+    price: ORDER_UNIT_PRICES.vinyl_stickers,
     material: "Gloss Laminated Outdoor Vinyl",
     deliveryTime: "Same-Day in Kigali",
     features: [
@@ -109,7 +110,7 @@ const PHYSICAL_PRODUCTS: Array<{
     tagline: "Customers can scan QR or simply tap their smartphone",
     description:
       "Embedded NTAG215 smart chip allows customers with modern smartphones to simply tap the stand or scan the high-definition QR code to dial payment.",
-    price: 18000,
+    price: ORDER_UNIT_PRICES.smart_nfc_stand,
     material: "Matte Black Acrylic + Embedded NFC",
     deliveryTime: "24-48 Hours",
     features: [
@@ -122,18 +123,18 @@ const PHYSICAL_PRODUCTS: Array<{
   {
     id: "pro_bundle",
     title: "Merchant Pro Starter Bundle",
-    badge: "Best Value",
+    badge: "Complete Kit",
     tagline: "All-in-one payment signage kit for new shops & restaurants",
     description:
       "Everything your shop needs: 1x Acrylic Tent Stand + 5x Waterproof Counter Stickers + 2x Laminated Staff Badges with payment QR codes.",
-    price: 22000,
+    price: ORDER_UNIT_PRICES.pro_bundle,
     material: "Complete Multi-Material Kit",
     deliveryTime: "Same-Day in Kigali",
     features: [
       "1x Premium Acrylic Counter Stand",
       "5x Waterproof Vinyl Counter Stickers",
       "2x Staff Lanyard Cards with QR Codes",
-      "Save 8,000 RWF compared to ordering separately",
+      "Everything delivered together in a single order",
     ],
   },
   {
@@ -143,7 +144,7 @@ const PHYSICAL_PRODUCTS: Array<{
     tagline: "Laser-engraved mahogany wood or brushed aluminum stand",
     description:
       "High-end bespoke stand customized with your full restaurant/hotel logo, dual SIM merchant codes, and custom dimensions.",
-    price: 28000,
+    price: ORDER_UNIT_PRICES.custom,
     material: "Solid Mahogany / Brushed Aluminum",
     deliveryTime: "48-72 Hours",
     features: [
@@ -557,7 +558,7 @@ export function OrdersPage() {
                           <span className="px-4 text-xs font-bold tabular-nums">{quantity}</span>
                           <button
                             type="button"
-                            onClick={() => setQuantity((q) => q + 1)}
+                            onClick={() => setQuantity((q) => Math.min(MAX_ORDER_QUANTITY, q + 1))}
                             className="px-3 py-2 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
                           >
                             <Plus className="size-3.5" />

@@ -1,13 +1,5 @@
 import React from "react";
-import {
-  QrCode,
-  Radio,
-  CheckCircle2,
-  ArrowRight,
-  ShieldCheck,
-  Zap,
-  Sparkles,
-} from "lucide-react";
+import { QrCode, Radio, CheckCircle2, ArrowRight, ShieldCheck, Zap, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { type MerchantEntitlementsResponse } from "@/lib/ishyura-client";
@@ -28,7 +20,7 @@ export function ProductSelector({
   const offlineAvailable =
     availableOffline !== undefined
       ? availableOffline
-      : entitlements?.offline_generations?.available ?? 1;
+      : (entitlements?.offline_generations?.available ?? 1);
   const isPro = Boolean(entitlements?.is_pro);
 
   return (
@@ -50,14 +42,23 @@ export function ProductSelector({
         {entitlements && (
           <div className="inline-flex flex-wrap items-center justify-center gap-3 pt-2 text-xs text-muted-foreground bg-muted/30 border border-border/60 px-4 py-2 rounded-xl">
             <div className="flex items-center gap-1.5">
-              <span className={`size-2 rounded-full ${offlineAvailable > 0 ? "bg-emerald-500" : "bg-amber-500"}`} />
+              <span
+                className={`size-2 rounded-full ${offlineAvailable > 0 ? "bg-emerald-500" : "bg-amber-500"}`}
+              />
               <span>
-                Offline Quota: <strong>{offlineAvailable > 0 ? `${offlineAvailable} available` : "0 left (2,000 RWF / extra)"}</strong>
+                Offline Quota:{" "}
+                <strong>
+                  {offlineAvailable > 0
+                    ? `${offlineAvailable} available`
+                    : "0 left (2,000 RWF / extra)"}
+                </strong>
               </span>
             </div>
             <span className="text-border">·</span>
             <div className="flex items-center gap-1.5">
-              <span className={`size-2 rounded-full ${isPro ? "bg-emerald-500" : "bg-muted-foreground"}`} />
+              <span
+                className={`size-2 rounded-full ${isPro ? "bg-emerald-500" : "bg-muted-foreground"}`}
+              />
               <span>
                 PRO Plan: <strong>{isPro ? "Active" : "Standard"}</strong>
               </span>
