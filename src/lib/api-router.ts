@@ -264,6 +264,48 @@ const memDownloads: MemDownload[] = [
   },
 ];
 
+/** What the merchant had typed in when they were asked to pay first; the QR is created from it once approved. */
+interface QrDraft {
+  business_name: string;
+  network: string;
+  payment_type: string;
+  dial_code: string;
+  amount: number | null;
+  item_name: string | null;
+  is_dynamic: boolean;
+}
+
+function sanitizeDraft(input: unknown): QrDraft | null {
+  if (!input || typeof input !== "object") return null;
+  const d = input as Record<string, unknown>;
+  const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const businessName = str(d.business_name, 120);
+  const dialCode = str(d.dial_code, 64);
+  if (!businessName || !dialCode) return null;
+  const amount =
+    typeof d.amount === "number" && Number.isSafeInteger(d.amount) && d.amount > 0
+      ? d.amount
+      : null;
+  return {
+    business_name: businessName,
+    network: str(d.network, 40) || "MTN MoMo",
+    payment_type: str(d.payment_type, 30) || "momo_code",
+    dial_code: dialCode,
+    amount,
+    item_name: str(d.item_name, 120) || null,
+    is_dynamic: Boolean(d.is_dynamic),
+  };
+}
+
+function parseDraftJson(raw: unknown): QrDraft | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    return sanitizeDraft(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 interface MemPaymentRequest {
   id: string;
   merchant_id: string;
@@ -281,6 +323,8 @@ interface MemPaymentRequest {
   currency: string;
   reference_code: string;
   status: "pending" | "approved" | "rejected";
+  draft?: QrDraft | null;
+  fulfilled_qr_id?: string | null;
   evidence_notes?: string | null;
   reviewed_by?: string | null;
   reviewed_at?: string | null;
@@ -589,6 +633,8 @@ async function ensureAppColumns(db: D1Database): Promise<void> {
     ["orders", "qr_kind", "TEXT"],
     ["orders", "qr_label", "TEXT"],
     ["orders", "merchant_deleted_at", "TEXT"],
+    ["payment_requests", "draft_json", "TEXT"],
+    ["payment_requests", "fulfilled_qr_id", "TEXT"],
   ];
   for (const [table, name, type] of columns) {
     try {
@@ -2028,6 +2074,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         amount?: number;
         reference_code?: string;
         evidence_notes?: string;
+        draft?: unknown;
       };
 
       // The submitting merchant is the signed-in session, never a body field.
@@ -2058,6 +2105,14 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       }
       // The price is fixed server-side; any amount in the request is ignored.
       const amount = ENTITLEMENT_PRICES[requestedEntitlement]!;
+      // The QR the merchant was trying to create, kept so it can be made for them once approved.
+      const draftBase =
+        requestedEntitlement === "offline_qr_generation" || requestedEntitlement === "pro_monthly"
+          ? sanitizeDraft(body.draft)
+          : null;
+      const draft = draftBase
+        ? { ...draftBase, is_dynamic: requestedEntitlement === "pro_monthly" }
+        : null;
 
       const id = `payreq_${crypto.randomUUID()}`;
       const now = new Date().toISOString();
@@ -2141,6 +2196,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               .run();
           }
 
+          if (draft) {
+            await env.DB.prepare("UPDATE payment_requests SET draft_json = ? WHERE id = ?")
+              .bind(JSON.stringify(draft), id)
+              .run()
+              .catch((e) => console.warn("draft_json not stored:", e));
+          }
+
           const record: MemPaymentRequest = {
             id,
             merchant_id: merchantId,
@@ -2150,6 +2212,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             currency: "RWF",
             reference_code: referenceCode,
             status: "pending",
+            draft,
+            fulfilled_qr_id: null,
             evidence_notes: evidenceNotes || null,
             created_at: now,
             updated_at: now,
@@ -2199,6 +2263,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
         currency: "RWF",
         reference_code: referenceCode,
         status: "pending",
+        draft,
+        fulfilled_qr_id: null,
         evidence_notes: evidenceNotes || null,
         created_at: now,
         updated_at: now,
@@ -2262,6 +2328,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               : r.rejection_reason
                 ? String(r.rejection_reason)
                 : null,
+            draft: parseDraftJson(r.draft_json),
+            fulfilled_qr_id: r.fulfilled_qr_id ? String(r.fulfilled_qr_id) : null,
             created_at: String(r.created_at || now),
             updated_at: String(r.updated_at || now),
           }));
@@ -2281,6 +2349,78 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           )
         : memPaymentRequests;
       return jsonResponse(list);
+    }
+
+    // The merchant's app creates the QR from the stored draft once a request is approved, then
+    // records here which QR fulfilled it, so it is not created twice and the history can link to it.
+    if (
+      (path === "/payment-requests/fulfill" || path === "/api/payment-requests/fulfill") &&
+      request.method === "POST"
+    ) {
+      const fulfilSession = await getSession(request, env);
+      if (!fulfilSession) {
+        return jsonResponse({ detail: "Please sign in." }, 401);
+      }
+      const fulfilBody = (await request.json().catch(() => ({}))) as {
+        request_id?: string;
+        qr_code_id?: string;
+      };
+      const fulfilRequestId = (fulfilBody.request_id || "").trim();
+      const fulfilQrId = (fulfilBody.qr_code_id || "").trim();
+      if (!fulfilRequestId || !fulfilQrId) {
+        return jsonResponse({ detail: "request_id and qr_code_id are required." }, 400);
+      }
+
+      type FulfilRow = {
+        id: string;
+        merchant_id: string;
+        status: string;
+        fulfilled_qr_id?: string | null;
+      };
+      const reqRow: FulfilRow | null = env.DB
+        ? await env.DB.prepare(
+            "SELECT id, merchant_id, status, fulfilled_qr_id FROM payment_requests WHERE id = ?",
+          )
+            .bind(fulfilRequestId)
+            .first<FulfilRow>()
+        : memPaymentRequests.find((r) => r.id === fulfilRequestId) || null;
+      if (!reqRow || reqRow.merchant_id !== fulfilSession.sub) {
+        return jsonResponse({ detail: "Payment request not found." }, 404);
+      }
+      if (reqRow.status !== "approved") {
+        return jsonResponse({ detail: "Only approved payment requests can be fulfilled." }, 409);
+      }
+      if (reqRow.fulfilled_qr_id) {
+        return jsonResponse({ success: true, fulfilled_qr_id: reqRow.fulfilled_qr_id });
+      }
+
+      const fulfilQr: Partial<MemQrCode> | null = env.DB
+        ? await env.DB.prepare("SELECT id, owner_id, phone_number FROM qr_codes WHERE id = ?")
+            .bind(fulfilQrId)
+            .first<MemQrCode>()
+        : memQrCodes.find((q) => q.id === fulfilQrId) || null;
+      if (!fulfilQr || !ownsRecord(fulfilSession, fulfilQr)) {
+        return jsonResponse({ detail: "That QR code was not found on your account." }, 404);
+      }
+
+      if (env.DB) {
+        await env.DB.prepare(
+          "UPDATE payment_requests SET fulfilled_qr_id = ? WHERE id = ? AND fulfilled_qr_id IS NULL",
+        )
+          .bind(fulfilQrId, fulfilRequestId)
+          .run();
+        const stored = await env.DB.prepare(
+          "SELECT fulfilled_qr_id FROM payment_requests WHERE id = ?",
+        )
+          .bind(fulfilRequestId)
+          .first<{ fulfilled_qr_id: string | null }>();
+        return jsonResponse({
+          success: true,
+          fulfilled_qr_id: stored?.fulfilled_qr_id || fulfilQrId,
+        });
+      }
+      (reqRow as MemPaymentRequest).fulfilled_qr_id = reqRow.fulfilled_qr_id || fulfilQrId;
+      return jsonResponse({ success: true, fulfilled_qr_id: reqRow.fulfilled_qr_id });
     }
 
     // ----------------------------------------------------
@@ -2333,6 +2473,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               : r.rejection_reason
                 ? String(r.rejection_reason)
                 : null,
+            draft: parseDraftJson(r.draft_json),
+            fulfilled_qr_id: r.fulfilled_qr_id ? String(r.fulfilled_qr_id) : null,
             created_at: String(r.created_at || now),
             updated_at: String(r.updated_at || now),
           }));
@@ -3579,7 +3721,19 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           400,
         );
       }
-      if (!customerName || !customerPhone || !deliveryLocation) {
+      if (
+        !/^\+?[0-9][0-9\s\-()]*$/.test(customerPhone) ||
+        !/^\d{8,15}$/.test(customerPhone.replace(/\D/g, ""))
+      ) {
+        return jsonResponse(
+          {
+            detail:
+              "Please enter a valid phone number we can call or WhatsApp (e.g. 0788 123 456).",
+          },
+          400,
+        );
+      }
+      if (!customerName || !deliveryLocation) {
         return jsonResponse(
           { detail: "Please provide your name, phone number, and delivery location in Kigali." },
           400,

@@ -108,7 +108,7 @@ export default function PricingSection({ onGetStarted }: LandingSectionProps) {
                   {MONETIZATION_PRICES.pdf_download.toLocaleString()} RWF
                 </span>
                 <span className="text-xs text-muted-foreground block">
-                  Per print-ready PDF export
+                  Per high-resolution card download
                 </span>
               </div>
               <div className="pt-3 border-t border-border/50 space-y-2 text-xs text-muted-foreground">

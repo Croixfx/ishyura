@@ -19,7 +19,7 @@ import {
   Lock,
   ArrowRight,
 } from "lucide-react";
-import { IshyuraClient } from "@/lib/ishyura-client";
+import { IshyuraClient, type QrDraft } from "@/lib/ishyura-client";
 import { MONETIZATION_PRICES, generateRequestReference } from "@/lib/payment";
 
 interface PaymentRequestDialogProps {
@@ -28,6 +28,8 @@ interface PaymentRequestDialogProps {
   entitlementType: "offline_qr_generation" | "pdf_download" | "pro_monthly";
   merchantId: string;
   merchantPhone: string;
+  /** What the merchant was creating; the QR is made for them as soon as an admin approves. */
+  draft?: QrDraft | null;
   onSuccess?: () => void;
 }
 
@@ -37,6 +39,7 @@ export function PaymentRequestDialog({
   entitlementType,
   merchantId,
   merchantPhone,
+  draft,
   onSuccess,
 }: PaymentRequestDialogProps) {
   const [referenceCode, setReferenceCode] = useState(() => generateRequestReference());
@@ -63,7 +66,7 @@ export function PaymentRequestDialog({
     entitlementType === "pro_monthly"
       ? "Unlock remotely editable counter bills, edge payment pages, and analytics."
       : entitlementType === "pdf_download"
-        ? "Unlock an official print-ready high-resolution card export."
+        ? "Unlock a high-resolution download of your official card."
         : "Your included free generation has been consumed. Top up to generate an additional stand.";
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -84,6 +87,7 @@ export function PaymentRequestDialog({
         amount: price,
         reference_code: referenceCode.trim().toUpperCase(),
         evidence_notes: evidenceNotes.trim() || undefined,
+        draft: draft || undefined,
       });
 
       setSubmitted(true);
@@ -127,6 +131,9 @@ export function PaymentRequestDialog({
               <p className="text-xs text-muted-foreground max-w-xs mx-auto">
                 Reference <strong>{referenceCode}</strong> has been logged. Ishyura administrators
                 review and approve requests promptly.
+                {draft
+                  ? " Once it is approved, your QR card is created automatically. Open your dashboard to view and download it."
+                  : ""}
               </p>
             </div>
             <Button onClick={handleClose} className="rounded-xl text-xs font-bold w-full">

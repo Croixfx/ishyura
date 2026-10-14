@@ -374,6 +374,37 @@ export function AppSidebar({
                   Saved
                 </span>
               </button>
+
+              {/* 3. Payment & order history */}
+              <Link
+                to="/history"
+                onClick={() => onNavigate?.()}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                  location.pathname === "/history"
+                    ? "bg-primary text-primary-foreground shadow-xs font-bold"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Clock
+                    className={`size-4 shrink-0 ${
+                      location.pathname === "/history"
+                        ? "text-primary-foreground"
+                        : "text-amber-500 group-hover:text-foreground"
+                    }`}
+                  />
+                  <span className="truncate">Payments & Orders</span>
+                </div>
+                <span
+                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                    location.pathname === "/history"
+                      ? "bg-primary-foreground/20 text-primary-foreground"
+                      : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                  }`}
+                >
+                  History
+                </span>
+              </Link>
             </div>
 
             {/* Physical Stands & Merchandise Section */}

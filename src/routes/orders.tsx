@@ -37,12 +37,17 @@ import {
   type OrderRecord,
   type QRCodeRecord,
   canDeleteOrder,
+  getRememberedContactPhone,
+  isRealPhoneNumber,
+  knownPhone,
+  rememberContactPhone,
   type OrderItemType,
   type UserProfile,
 } from "@/lib/ishyura-client";
 import { signInWithGoogleReal } from "@/lib/firebase-auth";
 import { ORDER_UNIT_PRICES, MAX_ORDER_QUANTITY } from "@/lib/order-catalog";
 import { QrPicker } from "@/components/QrPicker";
+import { OrderHistoryList } from "@/components/OrderHistoryList";
 
 export const Route = createFileRoute("/orders")({
   head: () => ({
@@ -171,6 +176,8 @@ export function OrdersPage() {
   const [customLocationDetail, setCustomLocationDetail] = useState("");
   const [orderNotes, setOrderNotes] = useState("");
   const [selectedQr, setSelectedQr] = useState<QRCodeRecord | null>(null);
+  // Google accounts have no phone number on file; in that case the customer types it here.
+  const [phoneOnFile, setPhoneOnFile] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [historyNotice, setHistoryNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -185,9 +192,9 @@ export function OrdersPage() {
   useEffect(() => {
     const user = IshyuraClient.getCurrentUser();
     setCurrentUser(user);
-    if (user?.phone_number) {
-      setCustomerPhone(user.phone_number);
-    }
+    // Use the phone on the account if there is one, else the one typed on a previous order.
+    setCustomerPhone(knownPhone(user) || getRememberedContactPhone());
+    setPhoneOnFile(Boolean(knownPhone(user)));
 
     try {
       if (typeof window !== "undefined") {
@@ -259,8 +266,10 @@ export function OrdersPage() {
       setSubmitError("Please enter your name.");
       return;
     }
-    if (!customerPhone.trim() || customerPhone.replace(/\D/g, "").length < 8) {
-      setSubmitError("Please enter a valid Rwandan phone number for delivery updates.");
+    if (!isRealPhoneNumber(customerPhone)) {
+      setSubmitError(
+        "Please enter the phone number we should call or WhatsApp (e.g. 0788 123 456).",
+      );
       return;
     }
 
@@ -281,6 +290,7 @@ export function OrdersPage() {
       };
 
       const result = await IshyuraClient.createOrder(payload);
+      rememberContactPhone(customerPhone);
       if (!result.order) {
         throw new Error("The order was saved but could not be displayed. Check My Orders.");
       }
@@ -615,8 +625,15 @@ export function OrdersPage() {
                           value={customerPhone}
                           onChange={(e) => setCustomerPhone(e.target.value)}
                           required
+                          autoComplete="tel"
                           className="h-9 text-xs"
                         />
+                        {!phoneOnFile && (
+                          <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                            We don't have a phone number for your account yet. Enter the number we
+                            should call or WhatsApp about this delivery.
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -690,153 +707,15 @@ export function OrdersPage() {
           </div>
         ) : (
           /* Orders History Tab */
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold text-foreground">Order Tracking & History</h2>
-                <p className="text-xs text-muted-foreground">
-                  Track your physical merchant stands and delivery statuses
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={loadOrders}
-                disabled={loadingHistory}
-                className="text-xs h-8 gap-1.5"
-              >
-                {loadingHistory ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Package className="size-3.5" />
-                )}
-                <span>Refresh</span>
-              </Button>
-            </div>
-
-            {historyNotice && (
-              <div
-                className={`p-3 rounded-lg border text-xs ${
-                  historyNotice.ok
-                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
-                    : "bg-destructive/10 border-destructive/20 text-destructive"
-                }`}
-              >
-                {historyNotice.text}
-              </div>
-            )}
-
-            {loadingHistory ? (
-              <div className="p-12 text-center text-xs text-muted-foreground">
-                <Loader2 className="size-6 animate-spin mx-auto mb-2 text-emerald-500" />
-                <span>Loading your orders...</span>
-              </div>
-            ) : orderHistory.length === 0 ? (
-              <div className="p-12 rounded-2xl border border-dashed border-border/80 text-center space-y-3">
-                <div className="size-10 rounded-full bg-muted flex items-center justify-center mx-auto text-muted-foreground">
-                  <ShoppingBag className="size-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-foreground">No physical orders yet</h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Order your first custom acrylic stand or counter stickers today.
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  onClick={() => setActiveTab("catalog")}
-                  className="text-xs font-semibold"
-                >
-                  Browse Merchandise
-                </Button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-3">
-                {orderHistory.map((order) => {
-                  const statusColors = {
-                    pending: "bg-amber-500/10 text-amber-600 border-amber-500/30",
-                    processing: "bg-sky-500/10 text-sky-600 border-sky-500/30",
-                    delivered: "bg-emerald-500/10 text-emerald-600 border-emerald-500/30",
-                    cancelled: "bg-red-500/10 text-red-600 border-red-500/30",
-                  };
-
-                  return (
-                    <div
-                      key={order.id}
-                      className="p-4 rounded-2xl border border-border/70 bg-card/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-xs text-foreground">
-                            {order.order_number}
-                          </span>
-                          <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${statusColors[order.status] || statusColors.pending}`}
-                          >
-                            {order.status}
-                          </span>
-                          <span className="text-xs text-muted-foreground">·</span>
-                          <span className="text-xs text-muted-foreground font-semibold">
-                            {order.business_name}
-                          </span>
-                        </div>
-                        {order.qr_label && (
-                          <p className="text-[11px] text-muted-foreground">
-                            For QR: <span className="font-semibold">{order.qr_label}</span>
-                          </p>
-                        )}
-                        <p className="text-xs text-foreground font-medium">
-                          {order.item_type.replace(/_/g, " ")} (x{order.quantity}) ·{" "}
-                          <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                            {order.total_price.toLocaleString()} RWF
-                          </span>
-                        </p>
-                        <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-                          <MapPin className="size-3 shrink-0" />
-                          <span>{order.delivery_location}</span>
-                        </p>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <span className="text-[11px] text-muted-foreground block">
-                          {new Date(order.created_at).toLocaleDateString()}
-                        </span>
-                        <span className="text-xs font-semibold text-foreground block">
-                          Contact: {order.customer_phone}
-                        </span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={!canDeleteOrder(order.status) || deletingId === order.id}
-                          title={
-                            canDeleteOrder(order.status)
-                              ? order.status === "pending"
-                                ? "Cancel and remove this order"
-                                : "Remove this order from your list"
-                              : "Being processed: you can delete it after it is delivered"
-                          }
-                          onClick={() => handleDeleteOrder(order)}
-                          className="mt-2 h-7 text-[11px] gap-1.5"
-                        >
-                          {deletingId === order.id ? (
-                            <Loader2 className="size-3 animate-spin" />
-                          ) : (
-                            <Trash2 className="size-3" />
-                          )}
-                          <span>{order.status === "pending" ? "Cancel & delete" : "Delete"}</span>
-                        </Button>
-                        {!canDeleteOrder(order.status) && (
-                          <span className="block text-[10px] text-muted-foreground mt-1">
-                            In process: delete after delivery
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <OrderHistoryList
+            orders={orderHistory}
+            loading={loadingHistory}
+            deletingId={deletingId}
+            notice={historyNotice}
+            onRefresh={loadOrders}
+            onDelete={handleDeleteOrder}
+            onBrowse={() => setActiveTab("catalog")}
+          />
         )}
       </div>
     </AppLayout>

@@ -21,6 +21,45 @@ export function isKnownAdminEmail(email?: string | null): boolean {
   return KNOWN_ADMIN_EMAILS.has(email.trim().toLowerCase());
 }
 
+/** True for something that looks like a real phone number (8-15 digits), not an email or placeholder. */
+export function isRealPhoneNumber(value?: string | null): boolean {
+  if (!value) return false;
+  const v = value.trim();
+  if (!/^\+?[0-9][0-9\s\-()]*$/.test(v)) return false;
+  const digits = v.replace(/\D/g, "").length;
+  return digits >= 8 && digits <= 15;
+}
+
+/**
+ * The user's phone number if we actually have one. Google sign-in accounts have no phone
+ * (their "phone_number" is their email), so this returns "" and the order form asks for it.
+ */
+export function knownPhone(user?: { phone_number?: string | null } | null): string {
+  return user && isRealPhoneNumber(user.phone_number) ? user.phone_number!.trim() : "";
+}
+
+const CONTACT_PHONE_KEY = "ishyura_contact_phone";
+
+/** The phone number the user last typed on an order form, so they only type it once. */
+export function getRememberedContactPhone(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const saved = localStorage.getItem(CONTACT_PHONE_KEY) || "";
+    return isRealPhoneNumber(saved) ? saved : "";
+  } catch {
+    return "";
+  }
+}
+
+export function rememberContactPhone(phone: string): void {
+  if (typeof window === "undefined" || !isRealPhoneNumber(phone)) return;
+  try {
+    localStorage.setItem(CONTACT_PHONE_KEY, phone.trim());
+  } catch {
+    // storage unavailable (private mode): the user just types it again next time
+  }
+}
+
 export function isAdminUser(user: UserProfile | null | undefined): boolean {
   if (!user) return false;
   // Role is assigned from the server's login response; an email address alone proves nothing.
@@ -55,7 +94,20 @@ export interface MerchantEntitlementsResponse {
   pro_expires_at: string | null;
 }
 
+/** The QR the merchant was creating when they were asked to pay; created for them once approved. */
+export interface QrDraft {
+  business_name: string;
+  network: string;
+  payment_type: string;
+  dial_code: string;
+  amount: number | null;
+  item_name: string | null;
+  is_dynamic: boolean;
+}
+
 export interface PaymentRequestRecord {
+  draft?: QrDraft | null;
+  fulfilled_qr_id?: string | null;
   id: string;
   merchant_id: string;
   merchant_phone: string;
@@ -610,6 +662,7 @@ export class IshyuraClient {
     merchant_id?: string;
     merchant_phone?: string;
     evidence_notes?: string;
+    draft?: QrDraft;
   }): Promise<{ success: boolean; payment_request: PaymentRequestRecord }> {
     const user = this.getSavedUser();
     const token = this.getToken();
@@ -635,6 +688,25 @@ export class IshyuraClient {
     }
 
     return await res.json();
+  }
+
+  /** Records which QR was created for an approved payment request (so it is only created once). */
+  static async fulfillPaymentRequest(requestId: string, qrCodeId: string): Promise<void> {
+    const token = this.getToken();
+    const res = await fetch(getApiEndpoint("payment-requests/fulfill"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ request_id: requestId, qr_code_id: qrCodeId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(
+        (err as { detail?: string }).detail || "Could not link the QR to the payment.",
+      );
+    }
   }
 
   static async listPaymentRequests(merchantId?: string): Promise<PaymentRequestRecord[]> {

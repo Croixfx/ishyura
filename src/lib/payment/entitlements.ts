@@ -53,7 +53,7 @@ export function formatProductTypeLabel(type: PaymentRequestProductType): string 
     case "offline_generation":
       return "Additional Offline QR Stand";
     case "pdf_download":
-      return "Printable PDF Download Output";
+      return "High-Resolution Card Download";
     case "pro_subscription":
       return "Ishyura PRO Monthly Subscription";
     case "physical_stand":

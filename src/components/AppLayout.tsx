@@ -4,7 +4,7 @@ import { Menu, X, MessageSquare, QrCode, LogIn } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { InquiryDialog } from "@/components/InquiryDialog";
 import { PWAInstallButton } from "@/components/PWAInstallButton";
-import { type UserProfile, isAdminUser } from "@/lib/ishyura-client";
+import { type UserProfile, isAdminUser, knownPhone } from "@/lib/ishyura-client";
 import { Button } from "@/components/ui/button";
 import { AppShellSkeleton } from "@/components/AppShellSkeleton";
 
@@ -249,7 +249,7 @@ export function AppLayout({
       <InquiryDialog
         open={inquiryOpen}
         onOpenChange={setInquiryOpen}
-        defaultPhone={currentUser?.phone_number}
+        defaultPhone={knownPhone(currentUser) || undefined}
       />
     </div>
   );

@@ -27,6 +27,10 @@ import {
   type OrderItemType,
   type OrderPayload,
   type QRCodeRecord,
+  getRememberedContactPhone,
+  isRealPhoneNumber,
+  knownPhone,
+  rememberContactPhone,
 } from "@/lib/ishyura-client";
 import { QrPicker } from "@/components/QrPicker";
 import { ORDER_UNIT_PRICES, MAX_ORDER_QUANTITY } from "@/lib/order-catalog";
@@ -125,6 +129,8 @@ export function OrderDialog({
   const [businessName, setBusinessName] = useState<string>(defaultBusinessName);
   const [selectedQr, setSelectedQr] = useState<QRCodeRecord | null>(null);
   const [signedIn, setSignedIn] = useState<boolean>(false);
+  // Google accounts have no phone number on file; in that case the customer types it here.
+  const [phoneOnFile, setPhoneOnFile] = useState<boolean>(true);
   const [deliveryLocation, setDeliveryLocation] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
@@ -133,8 +139,13 @@ export function OrderDialog({
   const [completedOrderNumber, setCompletedOrderNumber] = useState<string | null>(null);
 
   React.useEffect(() => {
-    if (open) setSignedIn(Boolean(IshyuraClient.getSavedUser()));
-  }, [open]);
+    if (!open) return;
+    const user = IshyuraClient.getSavedUser();
+    setSignedIn(Boolean(user));
+    const onFile = knownPhone(user);
+    setPhoneOnFile(Boolean(onFile) || isRealPhoneNumber(defaultPhone));
+    setCustomerPhone((current) => current || onFile || getRememberedContactPhone());
+  }, [open, defaultPhone]);
 
   // Sync defaults when dialog opens or defaults change
   React.useEffect(() => {
@@ -169,8 +180,8 @@ export function OrderDialog({
       setError("Please provide your name or contact person.");
       return;
     }
-    if (!phone || phone.replace(/[^0-9]/g, "").length < 8) {
-      setError("Please provide a valid Rwandan phone number (e.g. 0788 123 456).");
+    if (!isRealPhoneNumber(phone)) {
+      setError("Please enter the phone number we should call or WhatsApp (e.g. 0788 123 456).");
       return;
     }
     if (!location) {
@@ -193,6 +204,7 @@ export function OrderDialog({
       };
 
       const res = await IshyuraClient.createOrder(payload);
+      rememberContactPhone(phone);
       setCompletedOrderNumber(res.order_number);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to place order.");
@@ -443,6 +455,7 @@ export function OrderDialog({
                 <div className="space-y-1">
                   <Label htmlFor="cust-phone" className="text-[11px] text-muted-foreground">
                     Phone / WhatsApp Number
+                    {!phoneOnFile && <span className="text-red-500"> *</span>}
                   </Label>
                   <Input
                     id="cust-phone"
@@ -452,7 +465,14 @@ export function OrderDialog({
                     onChange={(e) => setCustomerPhone(e.target.value)}
                     className="h-9 text-xs font-mono"
                     required
+                    autoComplete="tel"
                   />
+                  {!phoneOnFile && (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                      We don't have a phone number for your account yet. Enter the number we should
+                      call or WhatsApp about this delivery.
+                    </p>
+                  )}
                 </div>
               </div>
 

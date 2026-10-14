@@ -31,7 +31,6 @@ import {
   Package,
   Phone,
   MapPin,
-  Printer,
   Search,
   UserPlus,
   Mail,
@@ -1183,10 +1182,10 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                         variant="outline"
                         onClick={() => setSelectedQrForPrint(qr)}
                         className="h-7 text-xs font-semibold gap-1 rounded-lg px-2"
-                        title="View and print official counter card"
+                        title="View and download the official counter card"
                       >
-                        <Printer className="size-3" />
-                        <span>Print</span>
+                        <Download className="size-3" />
+                        <span>View / Download</span>
                       </Button>
 
                       <Button
@@ -1900,16 +1899,16 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
         </DialogContent>
       </Dialog>
 
-      {/* 4. Admin High-Resolution Card View & Re-Print Modal */}
+      {/* 4. Admin High-Resolution Card View & Download Modal */}
       <Dialog open={!!selectedQrForPrint} onOpenChange={() => setSelectedQrForPrint(null)}>
         <DialogContent className="max-w-md bg-card border-border/80">
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2">
-              <Printer className="size-5 text-primary" />
+              <Download className="size-5 text-primary" />
               <span>Official Merchant Counter Card</span>
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Preview and export counter tent card for {selectedQrForPrint?.business_name}.
+              Preview and download the counter tent card for {selectedQrForPrint?.business_name}.
             </DialogDescription>
           </DialogHeader>
 
@@ -2006,7 +2005,7 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
               </div>
 
               {/* Actions */}
-              <div className="w-full grid grid-cols-2 gap-2 pt-1">
+              <div className="w-full grid grid-cols-1 gap-2 pt-1">
                 <Button
                   onClick={handleDownloadPrintCard}
                   disabled={downloadingCard}
@@ -2019,14 +2018,6 @@ export function AdminWorkspace({ activeTab, currentUser, onTabChange }: AdminWor
                     <Download className="size-3.5" />
                   )}
                   <span>{downloadingCard ? "Saving..." : "Download PNG"}</span>
-                </Button>
-
-                <Button
-                  onClick={() => window.print()}
-                  className="w-full text-xs font-bold gap-1.5 rounded-xl bg-primary"
-                >
-                  <Printer className="size-3.5" />
-                  <span>Print Card</span>
                 </Button>
               </div>
             </div>

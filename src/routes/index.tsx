@@ -30,7 +30,6 @@ import {
   Package,
   Truck,
   FileDown,
-  Printer,
   Radio,
   Smartphone,
   Lock,
@@ -50,7 +49,7 @@ import {
 import { InquiryDialog } from "@/components/InquiryDialog";
 import { OrderDialog } from "@/components/OrderDialog";
 import { AdminWorkspace } from "@/components/AdminWorkspace";
-import { type OrderItemType } from "@/lib/ishyura-client";
+import { type OrderItemType, knownPhone } from "@/lib/ishyura-client";
 import { signInWithGoogleReal, logoutGoogle } from "@/lib/firebase-auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -77,6 +76,7 @@ import {
   IshyuraClient,
   UserProfile,
   QRCodeRecord,
+  type QrDraft,
   isAdminUser,
   getDynamicPayUrl,
   type PaymentRequestRecord,
@@ -105,6 +105,8 @@ const checkSessionServerFn = createServerFn({ method: "GET" }).handler(async () 
 
 interface IndexSearch {
   tab?: string;
+  /** Open the view-and-download dialog for this QR card (linked from payment history). */
+  card?: string;
   product?: "offline" | "online";
 }
 
@@ -112,6 +114,7 @@ export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>): IndexSearch => {
     return {
       tab: (search.tab as string) || undefined,
+      card: typeof search.card === "string" && search.card ? search.card : undefined,
       product:
         search.product === "offline" || search.product === "online"
           ? (search.product as "offline" | "online")
@@ -273,6 +276,8 @@ function Index() {
     "offline" | "online" | null
   >(null);
   const [paymentRequestDialogOpen, setPaymentRequestDialogOpen] = useState(false);
+  // What the user typed before being asked to pay; sent with the payment so the QR can be made once approved.
+  const [paymentDraft, setPaymentDraft] = useState<QrDraft | null>(null);
   const [paymentRequestType, setPaymentRequestType] = useState<
     "offline_qr_generation" | "pdf_download" | "pro_monthly"
   >("offline_qr_generation");
@@ -453,6 +458,62 @@ function Index() {
       setPaymentRequests([]);
     }
   }, [currentUser, fetchPaymentRequests]);
+
+  // Deep link from payment history: open the card the payment produced.
+  useEffect(() => {
+    if (!searchParams.card) return;
+    const card = qrHistory.find((q) => q.id === searchParams.card);
+    if (card) setSelectedQrForCustomerPrint(card);
+  }, [searchParams.card, qrHistory]);
+
+  // When an admin approves a payment, create the QR the merchant was waiting for and show it to them.
+  const fulfilmentStarted = useRef<Set<string>>(new Set());
+  const [readyQr, setReadyQr] = useState<{ qr: QRCodeRecord; requestId: string } | null>(null);
+  const [fulfilError, setFulfilError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const waiting = paymentRequests.filter(
+      (r) =>
+        r.status === "approved" &&
+        r.draft &&
+        !r.fulfilled_qr_id &&
+        !fulfilmentStarted.current.has(r.id),
+    );
+    for (const req of waiting) {
+      const d = req.draft!;
+      fulfilmentStarted.current.add(req.id); // once per page load, so a failure cannot loop
+      IshyuraClient.createQrCode(`${d.business_name} (${d.network} - ${d.dial_code})`, d.amount, {
+        business_name: d.business_name,
+        network: d.network,
+        payment_type: d.payment_type,
+        dial_code: d.dial_code,
+        is_dynamic: d.is_dynamic,
+        item_name: d.item_name || undefined,
+        update_if_exists: true,
+      })
+        .then(async (qr) => {
+          await IshyuraClient.fulfillPaymentRequest(req.id, qr.id);
+          setReadyQr({ qr, requestId: req.id });
+          const mid = currentUser.id || currentUser.phone_number;
+          const [cards, ents, reqs] = await Promise.all([
+            IshyuraClient.listQrCodes(),
+            IshyuraClient.getEntitlements(mid),
+            IshyuraClient.listPaymentRequests(mid),
+          ]);
+          setQrHistory(cards);
+          setEntitlements(ents);
+          setPaymentRequests(reqs);
+        })
+        .catch((err: unknown) => {
+          setFulfilError(
+            err instanceof Error && err.message
+              ? err.message
+              : "We could not create your approved QR automatically.",
+          );
+        });
+    }
+  }, [currentUser, paymentRequests]);
 
   // Handle post-authentication product routing
   useEffect(() => {
@@ -759,6 +820,16 @@ function Index() {
       dynamicUrl,
     };
 
+    setPaymentDraft({
+      business_name: cardData.businessName,
+      network: cardData.network,
+      payment_type: cardData.paymentType,
+      dial_code: cardData.ussdString,
+      amount: numAmount,
+      item_name: cleanItem || null,
+      is_dynamic: Boolean(isDynamic),
+    });
+
     // 1. Unauthenticated visitors must sign in first.
     // Single generation policy/check must NOT render or run before one logs in!
     if (!currentUser) {
@@ -868,7 +939,7 @@ function Index() {
           setOwnerReprintNotice({
             businessName: reloadedCard.businessName,
             dialCode: reloadedCard.ussdString,
-            message: `Retrieved your registered payment card for "${reloadedCard.businessName}". You can reprint, download, or edit your card now!`,
+            message: `Retrieved your registered payment card for "${reloadedCard.businessName}". You can download or edit your card now!`,
           });
           setDuplicateWarning(null);
           return;
@@ -2010,7 +2081,7 @@ function Index() {
       <InquiryDialog
         open={inquiryDialogOpen}
         onOpenChange={setInquiryDialogOpen}
-        defaultPhone={currentUser?.phone_number || sanitizedInput}
+        defaultPhone={knownPhone(currentUser) || (sanitizedInput.length >= 8 ? sanitizedInput : "")}
       />
 
       <OrderDialog
@@ -2018,7 +2089,7 @@ function Index() {
         onOpenChange={setOrderDialogOpen}
         defaultBusinessName={confirmedData?.businessName || businessName}
         defaultPhone={
-          currentUser?.phone_number || (sanitizedInput.length >= 8 ? sanitizedInput : undefined)
+          knownPhone(currentUser) || (sanitizedInput.length >= 8 ? sanitizedInput : undefined)
         }
         network={confirmedData?.network || network}
         dialCode={confirmedData?.ussdString || draftUssdString}
@@ -2034,6 +2105,7 @@ function Index() {
         entitlementType={paymentRequestType}
         merchantId={currentUser?.id || currentUser?.phone_number || "guest"}
         merchantPhone={currentUser?.phone_number || sanitizedInput || ""}
+        draft={paymentDraft}
         onSuccess={() => {
           if (currentUser) {
             IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
@@ -2248,11 +2320,11 @@ function Index() {
         <DialogContent className="max-w-md bg-card border-border/80 p-5">
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2">
-              <Printer className="size-5 text-primary" />
-              <span>Official Counter Tent Card</span>
+              <Download className="size-5 text-primary" />
+              <span>Your Payment QR Card</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
-              Preview, download high-res PNG or print your official counter card.
+              Preview your official counter card and download it as a high-resolution PNG.
             </DialogDescription>
           </DialogHeader>
 
@@ -2349,7 +2421,7 @@ function Index() {
               </div>
 
               {/* Actions */}
-              <div className="w-full grid grid-cols-2 gap-2 pt-1">
+              <div className="w-full grid grid-cols-1 gap-2 pt-1">
                 <Button
                   onClick={handleDownloadCustomerCard}
                   disabled={downloadingCustomerCard}
@@ -2362,14 +2434,6 @@ function Index() {
                     <Download className="size-3.5" />
                   )}
                   <span>{downloadingCustomerCard ? "Saving..." : "Download PNG"}</span>
-                </Button>
-
-                <Button
-                  onClick={() => window.print()}
-                  className="w-full text-xs font-bold gap-1.5 rounded-xl bg-primary"
-                >
-                  <Printer className="size-3.5" />
-                  <span>Print Card</span>
                 </Button>
               </div>
             </div>
@@ -2432,6 +2496,71 @@ function Index() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {(readyQr || fulfilError) && currentUser && (
+        <div className="px-4 pt-4 sm:px-6 w-full max-w-5xl mx-auto">
+          {readyQr ? (
+            <div className="p-4 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="size-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-bold text-foreground">
+                    Payment approved. Your QR card is ready.
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {readyQr.qr.business_name || "Your card"} ({readyQr.qr.network},{" "}
+                    {readyQr.qr.dial_code}) has been created. View it and download it as an image.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  className="h-8 text-xs font-bold gap-1.5 rounded-xl"
+                  onClick={() => {
+                    setSelectedQrForCustomerPrint(readyQr.qr);
+                    setReadyQr(null);
+                  }}
+                >
+                  <Download className="size-3.5" />
+                  <span>View &amp; Download</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs rounded-xl"
+                  onClick={() => setReadyQr(null)}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-bold text-foreground">
+                    Payment approved, but your QR card needs one more step.
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {fulfilError} Generate it again from the generator; you will not be charged
+                    again.
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-xs rounded-xl shrink-0"
+                onClick={() => setFulfilError(null)}
+              >
+                Dismiss
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Tab-driven View Switching */}
       {isAuthLoading ? (
@@ -2678,6 +2807,21 @@ function Index() {
                         </div>
                       )}
 
+                      {req.status === "approved" && req.fulfilled_qr_id && (
+                        <Button
+                          size="sm"
+                          className="h-8 text-xs font-bold gap-1.5 rounded-xl w-fit"
+                          onClick={() => {
+                            const card = qrHistory.find((q) => q.id === req.fulfilled_qr_id);
+                            if (card) setSelectedQrForCustomerPrint(card);
+                            else setRecordsSubTab("cards");
+                          }}
+                        >
+                          <Download className="size-3.5" />
+                          <span>View &amp; Download your QR</span>
+                        </Button>
+                      )}
+
                       {req.status === "approved" && (
                         <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-800 dark:text-emerald-200 flex items-center justify-between">
                           <span>Verified by administrator. Your entitlement has been granted.</span>
@@ -2710,7 +2854,7 @@ function Index() {
                   <h4 className="text-xs font-bold text-foreground">Saved Payment Records</h4>
                   <p className="text-xs text-muted-foreground leading-relaxed">
                     Your payment codes are active and ready. If you ever lose your counter card or
-                    phone, you can reprint or download your official counter tent cards below at any
+                    phone, you can view and download your official counter tent cards below at any
                     time, edit details, or release the code.
                   </p>
                 </div>
@@ -2880,15 +3024,15 @@ function Index() {
                       )}
 
                       <div className="pt-2.5 border-t border-border/40 flex flex-wrap items-center justify-between gap-1.5">
-                        {/* Direct Print / Download Counter Card (Key feature for lost QR recovery!) */}
+                        {/* View & download the counter card (also recovers a lost QR) */}
                         <Button
                           size="sm"
                           onClick={() => setSelectedQrForCustomerPrint(qr)}
                           className="h-8 text-xs font-bold gap-1 rounded-xl bg-primary text-primary-foreground shadow-xs shrink-0"
-                          title="Preview, download high-res PNG or print official counter card"
+                          title="Preview and download your counter card as a high-res PNG"
                         >
-                          <Printer className="size-3.5" />
-                          <span>Print / Download</span>
+                          <Download className="size-3.5" />
+                          <span>View &amp; Download</span>
                         </Button>
 
                         {qr.is_dynamic ? (
@@ -4111,16 +4255,6 @@ function Index() {
                         )}
                         {downloading ? "Preparing…" : "Download PNG"}
                       </Button>
-
-                      <Button
-                        size="lg"
-                        variant="outline"
-                        className="w-full h-11 text-xs sm:text-sm font-bold border-border/80 hover:bg-muted"
-                        onClick={() => window.print()}
-                      >
-                        <Printer className="size-4 mr-1.5" />
-                        <span>Print Card</span>
-                      </Button>
                     </div>
 
                     {confirmedData.isDynamic && (
@@ -4184,16 +4318,16 @@ function Index() {
                       </div>
                     )}
 
-                    {/* Print and Save Note */}
+                    {/* Save Note */}
                     <div className="p-3 rounded-xl bg-muted/50 border border-border/70 text-xs text-muted-foreground space-y-1">
                       <p className="font-bold text-foreground flex items-center gap-1.5">
-                        <Printer className="size-3.5 text-primary shrink-0" />
-                        <span>Print or download your card</span>
+                        <Download className="size-3.5 text-primary shrink-0" />
+                        <span>Download your card</span>
                       </p>
                       <p className="text-[11px] leading-relaxed">
-                        Keep your printed card in a safe place on your counter. Your account
-                        archives your verified payment dial code so you can re-order stands or
-                        request replacements anytime.
+                        Keep the downloaded card somewhere safe. Your account archives your verified
+                        payment dial code, so you can download it again, re-order stands or request
+                        replacements anytime.
                       </p>
                     </div>
 
@@ -4265,7 +4399,7 @@ function Index() {
                   </div>
 
                   <p className="text-center text-xs text-muted-foreground">
-                    Print directly or save image to display on your shop counter.
+                    Download the image to display on your shop counter.
                   </p>
                 </div>
               ) : lockedNotice ? (

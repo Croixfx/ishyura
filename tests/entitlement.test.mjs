@@ -83,7 +83,7 @@ test("Monetization pricing constants match Rwanda merchant requirements", () => 
 test("Product type label formatting returns human-readable titles", async () => {
   const { formatProductTypeLabel } = await vite.ssrLoadModule("/src/lib/payment/index.ts");
   assert.equal(formatProductTypeLabel("offline_generation"), "Additional Offline QR Stand");
-  assert.equal(formatProductTypeLabel("pdf_download"), "Printable PDF Download Output");
+  assert.equal(formatProductTypeLabel("pdf_download"), "High-Resolution Card Download");
   assert.equal(formatProductTypeLabel("pro_subscription"), "Ishyura PRO Monthly Subscription");
 });
 

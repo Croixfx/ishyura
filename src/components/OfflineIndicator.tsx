@@ -25,7 +25,7 @@ export const OfflineIndicator: React.FC = () => {
             <WifiOff className="size-4 animate-pulse shrink-0" />
             <span>
               <strong>Offline Mode Active:</strong> You have no active internet. You can still
-              create, display, download, and print your payment cards!
+              create, display, and download your payment cards!
             </span>
           </div>
           <button
@@ -125,8 +125,8 @@ export const OfflineIndicator: React.FC = () => {
                 </div>
                 <p>
                   All your saved payment tent cards are securely cached in your device’s local
-                  memory. You can open Ishyura, display your counter QR card, download PNGs, and
-                  print tent cards even if your shop loses internet connectivity entirely.
+                  memory. You can open Ishyura, display your counter QR card, and download tent
+                  cards even if your shop loses internet connectivity entirely.
                 </p>
               </div>
             </div>
