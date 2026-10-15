@@ -2367,9 +2367,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             }
           }
 
-          // Count actual existing offline QR codes in D1 to prevent any discrepancy
+          // Count actual existing QR codes in D1 across all modes (offline + dynamic)
           const pastCountRow = await env.DB.prepare(
-            "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR owner_id = ? OR phone_number = ? OR phone_number = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
+            "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR owner_id = ? OR phone_number = ? OR phone_number = ? OR phone_number = ?)",
           )
             .bind(
               merchantId,
@@ -2379,14 +2379,14 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               e164 || merchantId,
             )
             .first<{ count: number }>();
-          const actualOfflineCount = pastCountRow?.count || 0;
+          const actualCardCount = pastCountRow?.count || 0;
 
           // Count historical creations from audit log so deleting a card never restores the free slot
           let pastAuditCount = 0;
           try {
             await ensureAuditTable(env.DB);
             const auditRow = await env.DB.prepare(
-              "SELECT count(*) as count FROM audit_events WHERE (owner_id = ? OR owner_id = ? OR owner_phone = ? OR owner_phone = ?) AND event_type = 'qr_created' AND (kind = 'qr' OR kind IS NULL)",
+              "SELECT count(*) as count FROM audit_events WHERE (owner_id = ? OR owner_id = ? OR owner_phone = ? OR owner_phone = ?) AND event_type = 'qr_created'",
             )
               .bind(merchantId, cleanPhone || merchantId, cleanPhone || merchantId, e164 || merchantId)
               .first<{ count: number }>();
@@ -2395,7 +2395,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             // ignore if audit table not ready
           }
 
-          offlineConsumed = Math.max(offlineConsumed, actualOfflineCount, pastAuditCount);
+          offlineConsumed = Math.max(offlineConsumed, actualCardCount, pastAuditCount);
 
           return jsonResponse({
             merchant_id: merchantId,
@@ -2425,13 +2425,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       const isPro = Boolean(pro.valid_until && new Date(pro.valid_until).getTime() > Date.now());
 
       const memExistingCount = memQrCodes.filter(
-        (q) => (q.owner_id === merchantId || q.phone_number === merchantId) && !q.is_dynamic,
+        (q) => q.owner_id === merchantId || q.phone_number === merchantId,
       ).length;
       const memAuditCount = memAudit.filter(
         (a) =>
           (a.owner_id === merchantId || a.owner_phone === merchantId) &&
-          a.event_type === "qr_created" &&
-          (a.kind === "qr" || !a.kind),
+          a.event_type === "qr_created",
       ).length;
       const effectiveOfflineConsumed = Math.max(off.consumed_count, memExistingCount, memAuditCount);
       off.consumed_count = effectiveOfflineConsumed;
@@ -3392,8 +3391,10 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
 
           // Enforce Entitlements before generating a new QR:
           if (!isAdmin) {
+            const e164 = phone ? formatToE164(phone) : "";
+
+            // Dynamic Smart Stand features additionally require an active PRO subscription:
             if (isDynamic) {
-              const e164 = phone ? formatToE164(phone) : "";
               const proRow = await env.DB.prepare(
                 "SELECT expires_at, valid_until FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'pro_subscription' OR entitlement_key = 'dynamic_pro_subscription') LIMIT 1",
               )
@@ -3426,68 +3427,68 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                   402,
                 );
               }
-            } else {
-              const e164 = phone ? formatToE164(phone) : "";
-              // 1. Count actual existing offline QR codes for this merchant
-              const existingCountRow = await env.DB.prepare(
-                "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR owner_id = ? OR phone_number = ? OR phone_number = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
+            }
+
+            // Universal single-free-generation policy across ALL networks and types (MoMo, eKash, phone, static, dynamic):
+            // Exactly 1 lifetime free generation. Any additional generation requires payment.
+            const existingCountRow = await env.DB.prepare(
+              "SELECT count(*) as count FROM qr_codes WHERE (owner_id = ? OR owner_id = ? OR phone_number = ? OR phone_number = ? OR phone_number = ?)",
+            )
+              .bind(ownerId, phone, phone, e164 || phone, ownerId)
+              .first<{ count: number }>();
+            const existingTotalCount = existingCountRow?.count || 0;
+
+            // Also check historical creations from audit_events so deleting a card never restores the free quota
+            let pastAuditCount = 0;
+            try {
+              await ensureAuditTable(env.DB);
+              const auditRow = await env.DB.prepare(
+                "SELECT count(*) as count FROM audit_events WHERE (owner_id = ? OR owner_id = ? OR owner_phone = ? OR owner_phone = ?) AND event_type = 'qr_created'",
               )
-                .bind(ownerId, phone, phone, e164 || phone, ownerId)
+                .bind(ownerId, phone, phone, e164 || phone)
                 .first<{ count: number }>();
-              const existingOfflineCount = existingCountRow?.count || 0;
+              pastAuditCount = auditRow?.count || 0;
+            } catch {
+              // ignore
+            }
 
-              // Also check historical creations from audit_events so deleting a card never restores the free quota
-              let pastAuditCount = 0;
-              try {
-                await ensureAuditTable(env.DB);
-                const auditRow = await env.DB.prepare(
-                  "SELECT count(*) as count FROM audit_events WHERE (owner_id = ? OR owner_id = ? OR owner_phone = ? OR owner_phone = ?) AND event_type = 'qr_created' AND (kind = 'qr' OR kind IS NULL)",
-                )
-                  .bind(ownerId, phone, phone, e164 || phone)
-                  .first<{ count: number }>();
-                pastAuditCount = auditRow?.count || 0;
-              } catch {
-                // ignore
-              }
+            // Query merchant entitlements
+            const entRow = await env.DB.prepare(
+              "SELECT granted_count, consumed_count FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') LIMIT 1",
+            )
+              .bind(ownerId, phone, e164 || phone)
+              .first<{ granted_count?: number; consumed_count?: number }>();
 
-              // 2. Query merchant entitlements
-              const entRow = await env.DB.prepare(
-                "SELECT granted_count, consumed_count FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') LIMIT 1",
+            // Free included generation is 1. Admin approved payment increases granted_count.
+            const granted = Math.max(1, entRow?.granted_count ?? 1);
+            // consumed_count only ever goes up, so deleting a card never gives its slot back.
+            const usedSlots = Math.max(entRow?.consumed_count ?? 0, existingTotalCount, pastAuditCount);
+
+            if (usedSlots >= granted) {
+              // Check if there is a pending payment request
+              const pendingReq = await env.DB.prepare(
+                "SELECT reference_code FROM payment_requests WHERE (merchant_id = ? OR merchant_id = ? OR merchant_phone = ? OR merchant_phone = ?) AND status = 'pending' AND (requested_entitlement = 'offline_qr_generation' OR product_type = 'offline_qr_generation') ORDER BY created_at DESC LIMIT 1",
               )
-                .bind(ownerId, phone, e164 || phone)
-                .first<{ granted_count?: number; consumed_count?: number }>();
+                .bind(ownerId, phone, phone, e164 || phone)
+                .first<{ reference_code?: string }>();
 
-              // Free included offline generation is 1. Admin approved payment increases granted_count.
-              const granted = Math.max(1, entRow?.granted_count ?? 1);
-              // consumed_count only ever goes up, so deleting a card never gives its slot back.
-              const usedSlots = Math.max(entRow?.consumed_count ?? 0, existingOfflineCount, pastAuditCount);
+              const detail = pendingReq?.reference_code
+                ? `Your payment submission (Ref: ${pendingReq.reference_code}) is currently awaiting administrator review. Once approved, you can generate your next QR card immediately.`
+                : "Payment is non-negotiable. Only your very first QR generation is free across all payment networks and types. Additional QR generation requires payment (2,000 RWF) approved by an administrator.";
 
-              if (usedSlots >= granted) {
-                // Check if there is a pending payment request
-                const pendingReq = await env.DB.prepare(
-                  "SELECT reference_code FROM payment_requests WHERE (merchant_id = ? OR merchant_id = ? OR merchant_phone = ? OR merchant_phone = ?) AND status = 'pending' AND (requested_entitlement = 'offline_qr_generation' OR product_type = 'offline_qr_generation') ORDER BY created_at DESC LIMIT 1",
-                )
-                  .bind(ownerId, phone, phone, e164 || phone)
-                  .first<{ reference_code?: string }>();
-
-                const detail = pendingReq?.reference_code
-                  ? `Your payment submission (Ref: ${pendingReq.reference_code}) is currently awaiting administrator review. Once approved, you can generate your next QR card immediately.`
-                  : "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.";
-
-                return jsonResponse(
-                  {
-                    error: "ENTITLEMENT_REQUIRED",
-                    locked: true,
-                    pending_approval: Boolean(pendingReq?.reference_code),
-                    pending_reference: pendingReq?.reference_code,
-                    price: MONETIZATION_PRICES.extra_offline_generation,
-                    currency: "RWF",
-                    entitlement_key: "offline_qr_generation",
-                    detail,
-                  },
-                  402,
-                );
-              }
+              return jsonResponse(
+                {
+                  error: "ENTITLEMENT_REQUIRED",
+                  locked: true,
+                  pending_approval: Boolean(pendingReq?.reference_code),
+                  pending_reference: pendingReq?.reference_code,
+                  price: MONETIZATION_PRICES.extra_offline_generation,
+                  currency: "RWF",
+                  entitlement_key: "offline_qr_generation",
+                  detail,
+                },
+                402,
+              );
             }
           }
 
@@ -3543,8 +3544,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             isDynamic,
           });
 
-          // Record consumption for offline generations
-          if (!isAdmin && !isDynamic) {
+          // Record consumption for all generations (offline and dynamic)
+          if (!isAdmin) {
             try {
               const existingEnt = await env.DB.prepare(
                 "SELECT id, consumed_count FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') LIMIT 1",
@@ -3552,12 +3553,13 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 .bind(ownerId, phone)
                 .first<{ id: string; consumed_count?: number }>();
 
+              const cardsNow = await env.DB.prepare(
+                "SELECT count(*) AS count FROM qr_codes WHERE (owner_id = ? OR phone_number = ?)",
+              )
+                .bind(ownerId, phone)
+                .first<{ count: number }>();
+
               if (existingEnt) {
-                const cardsNow = await env.DB.prepare(
-                  "SELECT count(*) AS count FROM qr_codes WHERE (owner_id = ? OR phone_number = ?) AND (is_dynamic = 0 OR is_dynamic IS NULL)",
-                )
-                  .bind(ownerId, phone)
-                  .first<{ count: number }>();
                 await env.DB.prepare(
                   "UPDATE merchant_entitlements SET consumed_count = MAX(consumed_count + 1, ?), updated_at = datetime('now') WHERE id = ?",
                 )
@@ -3566,9 +3568,9 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               } else {
                 const newEntId = `ent_${crypto.randomUUID()}`;
                 await env.DB.prepare(
-                  "INSERT INTO merchant_entitlements (id, merchant_id, entitlement_type, entitlement_key, granted_count, consumed_count, status, created_at, updated_at) VALUES (?, ?, 'offline_generation', 'offline_qr_generation', 1, 1, 'active', datetime('now'), datetime('now'))",
+                  "INSERT INTO merchant_entitlements (id, merchant_id, entitlement_type, entitlement_key, granted_count, consumed_count, status, created_at, updated_at) VALUES (?, ?, 'offline_generation', 'offline_qr_generation', 1, ?, 'active', datetime('now'), datetime('now'))",
                 )
-                  .bind(newEntId, ownerId)
+                  .bind(newEntId, ownerId, cardsNow?.count ?? 1)
                   .run();
               }
 
@@ -3576,7 +3578,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               await env.DB.prepare(
                 "INSERT INTO entitlement_events (id, merchant_id, entitlement_type, event_type, quantity, details) VALUES (?, ?, 'offline_generation', 'consume_generation', 1, ?)",
               )
-                .bind(eventId, ownerId, JSON.stringify({ stand_id: id, dial_code: dialCode }))
+                .bind(eventId, ownerId, JSON.stringify({ stand_id: id, dial_code: dialCode, is_dynamic: isDynamic }))
                 .run()
                 .catch(() => {});
             } catch (entErr) {
@@ -3700,39 +3702,39 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 402,
               );
             }
-          } else {
-            const existingMemCount = memQrCodes.filter(
-              (q) => (q.owner_id === ownerId || q.phone_number === phone) && !q.is_dynamic,
-            ).length;
-            const memAuditCount = memAudit.filter(
-              (a) =>
-                (a.owner_id === ownerId || a.owner_phone === phone) &&
-                a.event_type === "qr_created" &&
-                (a.kind === "qr" || !a.kind),
-            ).length;
-            const off = mEnts.get("offline_qr_generation") || {
-              granted_count: 1,
-              consumed_count: 0,
-            };
-            const granted = Math.max(1, off.granted_count);
-            const usedSlots = Math.max(off.consumed_count, existingMemCount, memAuditCount);
-            if (usedSlots >= granted) {
-              return jsonResponse(
-                {
-                  error: "ENTITLEMENT_REQUIRED",
-                  locked: true,
-                  price: MONETIZATION_PRICES.extra_offline_generation,
-                  currency: "RWF",
-                  entitlement_key: "offline_qr_generation",
-                  detail:
-                    "You have used your included free offline QR generation. An additional generation entitlement is required.",
-                },
-                402,
-              );
-            }
-            off.consumed_count = usedSlots + 1;
-            mEnts.set("offline_qr_generation", off);
           }
+
+          // Universal single free generation policy:
+          const existingMemCount = memQrCodes.filter(
+            (q) => q.owner_id === ownerId || q.phone_number === phone,
+          ).length;
+          const memAuditCount = memAudit.filter(
+            (a) =>
+              (a.owner_id === ownerId || a.owner_phone === phone) &&
+              a.event_type === "qr_created",
+          ).length;
+          const off = mEnts.get("offline_qr_generation") || {
+            granted_count: 1,
+            consumed_count: 0,
+          };
+          const granted = Math.max(1, off.granted_count);
+          const usedSlots = Math.max(off.consumed_count, existingMemCount, memAuditCount);
+          if (usedSlots >= granted) {
+            return jsonResponse(
+              {
+                error: "ENTITLEMENT_REQUIRED",
+                locked: true,
+                price: MONETIZATION_PRICES.extra_offline_generation,
+                currency: "RWF",
+                entitlement_key: "offline_qr_generation",
+                detail:
+                  "Payment is non-negotiable. Only your very first QR generation is free across all payment networks and types. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+              },
+              402,
+            );
+          }
+          off.consumed_count = usedSlots + 1;
+          mEnts.set("offline_qr_generation", off);
         }
 
         await recordAudit(env, {

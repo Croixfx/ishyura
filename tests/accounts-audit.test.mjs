@@ -309,6 +309,22 @@ test("creating an NFC / smart stand records kind nfc_stand and the owner in audi
   assert.equal(nfcEvent.owner_name, "Kimironko Shop");
   assert.equal(nfcEvent.owner_email, "shop@example.com");
   assert.equal(nfcEvent.owner_phone, "+250788111222");
+
+  // Attempting to generate a second card (e.g. offline phone/eKash) is strictly blocked: 1 free lifetime generation only
+  const second = await api(env, "POST", "/qr-codes", {
+    token,
+    body: {
+      business_name: "Kimironko Stand 2",
+      network: "Equity Bank (eKash)",
+      payment_type: "phone",
+      dial_code: "*555*2*0788111222#",
+      phone_number: "+250788111222",
+    },
+  });
+  assert.equal(second.status, 402, "second generation must be paid regardless of mode/network");
+  const secondBody = await second.json();
+  assert.equal(secondBody.error, "ENTITLEMENT_REQUIRED");
+  assert.equal(secondBody.locked, true);
 });
 
 test.after(async () => {

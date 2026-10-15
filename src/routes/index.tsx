@@ -596,6 +596,40 @@ function Index() {
 
   const isAdmin = isAdminUser(currentUser);
 
+  // Single lifetime generation policy: card index 0 is the 1 free transaction.
+  // Any subsequent card requires granted > cardIndex or an approved payment request.
+  const isCardEntitled = useCallback(
+    (card: QRCodeRecord | null | undefined): boolean => {
+      if (!card) return false;
+      if (isAdmin) return true;
+
+      const sorted = [...qrHistory].sort((a, b) => {
+        const ta = new Date(a.created_at || 0).getTime();
+        const tb = new Date(b.created_at || 0).getTime();
+        return ta - tb;
+      });
+
+      const cardIndex = sorted.findIndex((q) => q.id === card.id);
+      const granted = entitlements?.offline_generations?.granted ?? 1;
+
+      // Card 0 is the 1 lifetime free transaction
+      if (cardIndex === 0) return true;
+      if (cardIndex > 0 && cardIndex < granted) return true;
+
+      // Card fulfilled by approved payment
+      const hasApprovedPayment = paymentRequests.some(
+        (r) =>
+          r.status === "approved" &&
+          (r.fulfilled_qr_id === card.id ||
+            (r.draft_json && r.draft_json.includes(card.id))),
+      );
+      if (hasApprovedPayment) return true;
+
+      return false;
+    },
+    [isAdmin, qrHistory, entitlements, paymentRequests],
+  );
+
   const openOrderModal = (product: OrderItemType = "acrylic_stand") => {
     setSelectedProductForOrder(product);
     setOrderDialogOpen(true);
@@ -919,6 +953,16 @@ function Index() {
           }
 
           // Legitimate owner re-printing or reloading their lost QR card
+          if (!isCardEntitled(existing)) {
+            setConfirmedData(null);
+            setPaymentRequestType(isDyn ? "pro_monthly" : "offline_qr_generation");
+            setLockedNotice(
+              "Payment is non-negotiable. Only your very first QR generation is free across all networks. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+            );
+            setPaymentRequestDialogOpen(true);
+            return;
+          }
+
           const reloadedCard: ConfirmedCardData = {
             id: existing.id,
             businessName: existing.business_name || businessName.trim(),
@@ -988,46 +1032,50 @@ function Index() {
           }
           return;
         }
-      } else {
-        const existingOfflineCount = qrHistory.filter((q) => !q.is_dynamic).length;
-        const grantedOffline = entitlements?.offline_generations?.granted ?? 1;
-        const hasEverGenerated =
-          typeof window !== "undefined" &&
-          localStorage.getItem("ishyura_has_ever_generated_offline") === "true";
-        const consumedOffline = Math.max(
-          entitlements?.offline_generations?.consumed ?? 0,
-          existingOfflineCount,
-          hasEverGenerated ? 1 : 0,
-        );
-        const availableOffline =
-          entitlements?.offline_generations?.available !== undefined
-            ? entitlements.offline_generations.available
-            : Math.max(0, grantedOffline - consumedOffline);
+      }
 
-        if (
-          availableOffline <= 0 ||
-          consumedOffline >= grantedOffline ||
-          (existingOfflineCount >= 1 && grantedOffline <= existingOfflineCount)
-        ) {
-          setConfirmedData(null);
-          setPaymentRequestType("offline_qr_generation");
-          const pendingOffline = pendingRequests.find(
-            (r) =>
-              r.requested_entitlement === "offline_qr_generation" ||
-              r.requested_entitlement === "offline_generation",
+      // Universal generation entitlement check across all networks and modes
+      const totalExistingCount = qrHistory.length;
+      const grantedQuota = entitlements?.offline_generations?.granted ?? 1;
+      const hasEverGenerated =
+        typeof window !== "undefined" &&
+        localStorage.getItem("ishyura_has_ever_generated_offline") === "true";
+      const consumedQuota = Math.max(
+        entitlements?.offline_generations?.consumed ?? 0,
+        totalExistingCount,
+        hasEverGenerated ? 1 : 0,
+      );
+      const availableQuota =
+        entitlements?.offline_generations?.available !== undefined
+          ? entitlements.offline_generations.available
+          : Math.max(0, grantedQuota - consumedQuota);
+
+      if (
+        availableQuota <= 0 ||
+        consumedQuota >= grantedQuota ||
+        (totalExistingCount >= 1 && grantedQuota <= totalExistingCount)
+      ) {
+        setConfirmedData(null);
+        setPaymentRequestType(isDynamic ? "pro_monthly" : "offline_qr_generation");
+        const pendingReq = pendingRequests.find(
+          (r) =>
+            r.requested_entitlement === "offline_qr_generation" ||
+            r.requested_entitlement === "offline_generation" ||
+            (isDynamic &&
+              (r.requested_entitlement === "pro_monthly" ||
+                r.requested_entitlement === "pro_subscription")),
+        );
+        if (pendingReq) {
+          setLockedNotice(
+            `Your payment submission (Ref: ${pendingReq.reference_code}) for additional QR generation is currently awaiting administrator review. Once approved, you can generate your next card immediately.`,
           );
-          if (pendingOffline) {
-            setLockedNotice(
-              `Your payment submission (Ref: ${pendingOffline.reference_code}) for additional offline QR generation is currently awaiting administrator review. Once approved, you can generate your next card immediately.`,
-            );
-          } else {
-            setLockedNotice(
-              "Payment is non-negotiable. Each merchant account includes exactly 1 lifetime free offline QR generation across all networks. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
-            );
-            setPaymentRequestDialogOpen(true);
-          }
-          return;
+        } else {
+          setLockedNotice(
+            "Payment is non-negotiable. Each merchant account includes exactly 1 lifetime free QR generation across all networks. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+          );
+          setPaymentRequestDialogOpen(true);
         }
+        return;
       }
     }
 
@@ -1197,6 +1245,17 @@ function Index() {
   const handleDownloadCustomerCard = async () => {
     if (!customerPrintCardRef.current || !selectedQrForCustomerPrint) return;
 
+    if (!isAdmin && !isCardEntitled(selectedQrForCustomerPrint)) {
+      setPaymentRequestType(
+        selectedQrForCustomerPrint.is_dynamic ? "pro_monthly" : "offline_qr_generation",
+      );
+      setLockedNotice(
+        "Payment is non-negotiable. Only your very first QR generation is free across all networks. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+      );
+      setPaymentRequestDialogOpen(true);
+      return;
+    }
+
     const availablePdfs = entitlements?.pdf_downloads?.available ?? 1;
     if (!isAdmin && availablePdfs <= 0) {
       setPaymentRequestType("pdf_download");
@@ -1359,6 +1418,16 @@ function Index() {
         setAuthPhoneInput(sanitizedInput);
       }
       setAuthDialogOpen(true);
+      return;
+    }
+
+    const matchedCard = confirmedData.id ? qrHistory.find((q) => q.id === confirmedData.id) : null;
+    if (!isAdmin && matchedCard && !isCardEntitled(matchedCard)) {
+      setPaymentRequestType(matchedCard.is_dynamic ? "pro_monthly" : "offline_qr_generation");
+      setLockedNotice(
+        "Payment is non-negotiable. Only your very first QR generation is free across all networks. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+      );
+      setPaymentRequestDialogOpen(true);
       return;
     }
 
@@ -2341,10 +2410,10 @@ function Index() {
         open={Boolean(selectedQrForCustomerPrint)}
         onOpenChange={(open) => !open && setSelectedQrForCustomerPrint(null)}
       >
-        <DialogContent className="max-w-md bg-card border-border/80 p-5">
-          <DialogHeader>
+        <DialogContent className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-card border-border/80 p-4 sm:p-5">
+          <DialogHeader className="pb-1">
             <DialogTitle className="text-base font-bold flex items-center gap-2">
-              <Download className="size-5 text-primary" />
+              <Download className="size-5 text-primary shrink-0" />
               <span>Your Payment QR Card</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
@@ -2353,11 +2422,11 @@ function Index() {
           </DialogHeader>
 
           {selectedQrForCustomerPrint && (
-            <div className="flex flex-col items-center py-2 space-y-4">
-              {/* High-Fidelity Printable Card */}
+            <div className="flex flex-col items-center py-1 space-y-3.5">
+              {/* High-Fidelity Printable Card - sized cleanly to fit viewport without zooming */}
               <div
                 ref={customerPrintCardRef}
-                className="w-72 overflow-hidden rounded-2xl bg-white text-slate-900 border-2 border-slate-200 shadow-2xl flex flex-col items-center text-center pb-5"
+                className="w-full max-w-[280px] sm:max-w-[290px] mx-auto overflow-hidden rounded-2xl bg-white text-slate-900 border-2 border-slate-200 shadow-xl flex flex-col items-center text-center pb-4"
               >
                 <div
                   className={`h-3 w-full ${
@@ -2368,7 +2437,7 @@ function Index() {
                         : "bg-amber-400"
                   }`}
                 />
-                <div className="px-5 pt-4 pb-2 w-full flex flex-col items-center">
+                <div className="px-4 pt-3.5 pb-2 w-full flex flex-col items-center">
                   <div className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 text-[10px] font-bold text-emerald-700 uppercase">
                     <CheckCircle2 className="size-2.5" />
                     <span>Verified Merchant</span>
@@ -2382,18 +2451,34 @@ function Index() {
                     <span>{selectedQrForCustomerPrint.network || "MTN MoMo"}</span>
                   </div>
 
-                  {/* QR Code */}
-                  <div className="mt-3 p-3 bg-white rounded-2xl border border-slate-200 shadow-md">
-                    <PaymentQrCode
-                      standId={selectedQrForCustomerPrint.id}
-                      publicId={selectedQrForCustomerPrint.public_id}
-                      configVersion={selectedQrForCustomerPrint.config_version}
-                      network={selectedQrForCustomerPrint.network || "MTN MoMo"}
-                      paymentType={selectedQrForCustomerPrint.payment_type || "momo_code"}
-                      destination={selectedQrForCustomerPrint.dial_code || "*182#"}
-                      amount={selectedQrForCustomerPrint.amount}
-                      isDynamic={selectedQrForCustomerPrint.is_dynamic}
-                    />
+                  {/* QR Code or Locked State */}
+                  <div className="mt-3 p-2.5 bg-white rounded-2xl border border-slate-200 shadow-md">
+                    {isCardEntitled(selectedQrForCustomerPrint) ? (
+                      <PaymentQrCode
+                        standId={selectedQrForCustomerPrint.id}
+                        publicId={selectedQrForCustomerPrint.public_id}
+                        configVersion={selectedQrForCustomerPrint.config_version}
+                        network={selectedQrForCustomerPrint.network || "MTN MoMo"}
+                        paymentType={selectedQrForCustomerPrint.payment_type || "momo_code"}
+                        destination={selectedQrForCustomerPrint.dial_code || "*182#"}
+                        amount={selectedQrForCustomerPrint.amount}
+                        isDynamic={selectedQrForCustomerPrint.is_dynamic}
+                        size={130}
+                        compact
+                      />
+                    ) : (
+                      <div className="size-[130px] bg-amber-500/10 border-2 border-dashed border-amber-500/40 rounded-xl flex flex-col items-center justify-center p-2 text-center">
+                        <div className="size-8 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center mb-1">
+                          <Lock className="size-4 text-amber-600" />
+                        </div>
+                        <p className="text-[11px] font-bold text-amber-900 dark:text-amber-100 leading-tight">
+                          Payment Required
+                        </p>
+                        <p className="text-[8.5px] text-amber-700 dark:text-amber-300 mt-0.5 font-medium">
+                          2,000 RWF to unlock
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Clean Merchant Code & Dial Code Display */}
@@ -2446,19 +2531,39 @@ function Index() {
 
               {/* Actions */}
               <div className="w-full grid grid-cols-1 gap-2 pt-1">
-                <Button
-                  onClick={handleDownloadCustomerCard}
-                  disabled={downloadingCustomerCard}
-                  variant="outline"
-                  className="w-full text-xs font-bold gap-1.5 rounded-xl border-border"
-                >
-                  {downloadingCustomerCard ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Download className="size-3.5" />
-                  )}
-                  <span>{downloadingCustomerCard ? "Saving..." : "Download PNG"}</span>
-                </Button>
+                {isCardEntitled(selectedQrForCustomerPrint) ? (
+                  <Button
+                    onClick={handleDownloadCustomerCard}
+                    disabled={downloadingCustomerCard}
+                    variant="outline"
+                    className="w-full text-xs font-bold gap-1.5 rounded-xl border-border h-10"
+                  >
+                    {downloadingCustomerCard ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Download className="size-3.5" />
+                    )}
+                    <span>{downloadingCustomerCard ? "Saving..." : "Download PNG"}</span>
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => {
+                      const qrToPay = selectedQrForCustomerPrint;
+                      setSelectedQrForCustomerPrint(null);
+                      setPaymentRequestType(
+                        qrToPay.is_dynamic ? "pro_monthly" : "offline_qr_generation",
+                      );
+                      setLockedNotice(
+                        "Payment is non-negotiable. Only your very first QR generation is free across all payment networks and types. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+                      );
+                      setPaymentRequestDialogOpen(true);
+                    }}
+                    className="w-full text-xs font-bold gap-1.5 rounded-xl bg-primary text-primary-foreground shadow-sm h-10"
+                  >
+                    <Lock className="size-3.5" />
+                    <span>Pay 2,000 RWF to Unlock &amp; Download</span>
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -2967,9 +3072,16 @@ function Index() {
                             </span>
                           </div>
                         </div>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
-                          Active
-                        </span>
+                        {isCardEntitled(qr) ? (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
+                            Active
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 flex items-center gap-1 shrink-0">
+                            <Lock className="size-2.5" />
+                            Payment Required
+                          </span>
+                        )}
                       </div>
 
                       <div className="p-3 rounded-xl bg-muted/40 border border-border/40 text-xs flex items-center justify-between">
@@ -3053,11 +3165,23 @@ function Index() {
                         <Button
                           size="sm"
                           onClick={() => setSelectedQrForCustomerPrint(qr)}
-                          className="h-8 text-xs font-bold gap-1 rounded-xl bg-primary text-primary-foreground shadow-xs shrink-0"
-                          title="Preview and download your counter card as a high-res PNG"
+                          className={
+                            isCardEntitled(qr)
+                              ? "h-8 text-xs font-bold gap-1 rounded-xl bg-primary text-primary-foreground shadow-xs shrink-0"
+                              : "h-8 text-xs font-bold gap-1 rounded-xl bg-amber-600 hover:bg-amber-700 text-white shadow-xs shrink-0"
+                          }
+                          title={
+                            isCardEntitled(qr)
+                              ? "Preview and download your counter card as a high-res PNG"
+                              : "Payment required to unlock and download this QR card"
+                          }
                         >
-                          <Download className="size-3.5" />
-                          <span>View &amp; Download</span>
+                          {isCardEntitled(qr) ? (
+                            <Download className="size-3.5" />
+                          ) : (
+                            <Lock className="size-3.5" />
+                          )}
+                          <span>{isCardEntitled(qr) ? "View & Download" : "View (Locked)"}</span>
                         </Button>
 
                         {qr.is_dynamic ? (
@@ -4156,13 +4280,41 @@ function Index() {
                       </p>
 
                       <div className="relative mt-2.5 rounded-xl border border-print-muted bg-white p-2.5 shadow-xs overflow-hidden">
-                        <div
-                          className={
-                            !currentUser
-                              ? "blur-md select-none pointer-events-none opacity-30 transition-all duration-300"
-                              : "transition-all duration-300"
-                          }
-                        >
+                        {!currentUser ? (
+                          <div
+                            onClick={() => {
+                              if (!authPhoneInput && sanitizedInput.length >= 8) {
+                                setAuthPhoneInput(sanitizedInput);
+                              }
+                              setAuthDialogOpen(true);
+                            }}
+                            className="size-[135px] flex flex-col items-center justify-center bg-slate-50 border border-dashed border-slate-300 rounded-xl p-2 text-center cursor-pointer transition-all hover:bg-slate-100 group"
+                          >
+                            <div className="size-8 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-1 group-hover:scale-110 transition-transform">
+                              <Lock className="size-4 text-primary" />
+                            </div>
+                            <p className="text-xs font-bold text-foreground">
+                              Sign In to Reveal QR
+                            </p>
+                            <p className="text-[9.5px] text-muted-foreground mt-0.5">
+                              1 free generation included
+                            </p>
+                          </div>
+                        ) : confirmedData.id &&
+                          !isCardEntitled(qrHistory.find((q) => q.id === confirmedData.id)) &&
+                          qrHistory.length > 1 ? (
+                          <div className="size-[135px] bg-amber-500/10 border-2 border-dashed border-amber-500/40 rounded-xl flex flex-col items-center justify-center p-2 text-center">
+                            <div className="size-8 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center mb-1">
+                              <Lock className="size-4 text-amber-600" />
+                            </div>
+                            <p className="text-xs font-bold text-amber-900 dark:text-amber-100 leading-tight">
+                              Payment Required
+                            </p>
+                            <p className="text-[9.5px] text-amber-700 dark:text-amber-300 mt-0.5 font-medium">
+                              2,000 RWF to unlock
+                            </p>
+                          </div>
+                        ) : (
                           <PaymentQrCode
                             standId={confirmedData.id || "preview"}
                             network={confirmedData.network}
@@ -4173,28 +4325,6 @@ function Index() {
                             size={135}
                             compact
                           />
-                        </div>
-
-                        {!currentUser && (
-                          <div
-                            onClick={() => {
-                              if (!authPhoneInput && sanitizedInput.length >= 8) {
-                                setAuthPhoneInput(sanitizedInput);
-                              }
-                              setAuthDialogOpen(true);
-                            }}
-                            className="absolute inset-0 flex flex-col items-center justify-center bg-background/70 backdrop-blur-[2px] p-2 text-center cursor-pointer transition-all hover:bg-background/80 group"
-                          >
-                            <div className="size-9 rounded-full bg-primary/20 text-primary flex items-center justify-center mb-1 shadow-md group-hover:scale-110 transition-transform">
-                              <Lock className="size-4 text-primary" />
-                            </div>
-                            <p className="text-xs font-bold text-foreground">
-                              Sign In to Reveal QR
-                            </p>
-                            <p className="text-[9.5px] text-muted-foreground mt-0.5">
-                              Click to unlock with Phone or Google
-                            </p>
-                          </div>
                         )}
                       </div>
 
