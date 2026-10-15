@@ -35,6 +35,7 @@ export function AppLayout({
   notice,
 }: AppLayoutProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [publicNavOpen, setPublicNavOpen] = useState(false);
   const [inquiryOpen, setInquiryOpen] = useState(false);
 
   // 0. AUTH HYDRATION SKELETON: Display clean app shell skeleton during initial load/refresh
@@ -44,6 +45,14 @@ export function AppLayout({
 
   // 1. UNLOGGED VISITOR: Flawlessly scrollable layout with fixed header & dedicated scroll viewport
   if (!currentUser) {
+    const scrollToSection = (id: string) => {
+      setPublicNavOpen(false);
+      const el = document.getElementById(id);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth" });
+      }
+    };
+
     return (
       <div className="h-dvh max-h-dvh w-full bg-background text-foreground flex flex-col overflow-hidden">
         {notice && (
@@ -56,14 +65,14 @@ export function AppLayout({
         )}
         {/* Public Top Header */}
         <header className="z-40 border-b border-border/60 bg-background/90 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
-          <Link to="/" className="flex items-center gap-3">
-            <div className="size-9 rounded-xl bg-foreground text-background flex items-center justify-center font-black text-sm shadow-xs">
-              <QrCode className="size-5" />
+          <Link to="/" className="flex items-center gap-2.5 sm:gap-3">
+            <div className="size-8 sm:size-9 rounded-xl bg-foreground text-background flex items-center justify-center font-black text-sm shadow-xs">
+              <QrCode className="size-4.5 sm:size-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-black text-base tracking-tight">Ishyura</span>
-                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-muted text-foreground border border-border">
+                <span className="font-black text-sm sm:text-base tracking-tight">Ishyura</span>
+                <span className="text-[9px] sm:text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-muted text-foreground border border-border">
                   Rwanda
                 </span>
               </div>
@@ -77,45 +86,35 @@ export function AppLayout({
           <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-muted-foreground">
             <button
               type="button"
-              onClick={() => {
-                document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
-              }}
+              onClick={() => scrollToSection("products")}
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               Products
             </button>
             <button
               type="button"
-              onClick={() => {
-                document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
-              }}
+              onClick={() => scrollToSection("how-it-works")}
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               How It Works
             </button>
             <button
               type="button"
-              onClick={() => {
-                document.getElementById("hardware-section")?.scrollIntoView({ behavior: "smooth" });
-              }}
+              onClick={() => scrollToSection("hardware-section")}
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               Stands &amp; Hardware
             </button>
             <button
               type="button"
-              onClick={() => {
-                document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
-              }}
+              onClick={() => scrollToSection("pricing")}
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               Pricing
             </button>
             <button
               type="button"
-              onClick={() => {
-                document.getElementById("faq")?.scrollIntoView({ behavior: "smooth" });
-              }}
+              onClick={() => scrollToSection("faq")}
               className="hover:text-foreground transition-colors cursor-pointer"
             >
               FAQ
@@ -128,20 +127,132 @@ export function AppLayout({
               size="sm"
               variant="outline"
               onClick={onOpenAuthDialog}
-              className="text-xs font-bold h-8.5 rounded-xl px-3 sm:px-4 border-border/80 hover:bg-muted"
+              className="hidden sm:inline-flex text-xs font-bold h-8.5 rounded-xl px-3 sm:px-4 border-border/80 hover:bg-muted"
             >
               <LogIn className="size-3.5 sm:mr-1.5" />
-              <span className="hidden sm:inline">Sign In</span>
+              <span>Sign In</span>
             </Button>
             <Button
               size="sm"
               onClick={onOpenAuthDialog}
-              className="text-xs font-bold h-8.5 rounded-xl px-4 bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
+              className="text-xs font-bold h-8.5 rounded-xl px-3.5 sm:px-4 bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
             >
               Get Started
             </Button>
+            {/* Mobile Icon for remaining navigation links */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="md:hidden size-8.5 p-0 rounded-xl border border-border/80 text-foreground"
+              onClick={() => setPublicNavOpen(true)}
+              aria-label="Open navigation menu"
+            >
+              <Menu className="size-4.5" />
+            </Button>
           </div>
         </header>
+
+        {/* Mobile Navigation Drawer for Unlogged Visitors */}
+        {publicNavOpen && (
+          <div className="fixed inset-0 z-50 flex md:hidden">
+            <div
+              className="fixed inset-0 bg-background/80 backdrop-blur-sm animate-in fade-in duration-200"
+              onClick={() => setPublicNavOpen(false)}
+            />
+            <div className="relative z-50 ml-auto w-72 max-w-[80vw] h-full bg-card border-l border-border p-5 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-250">
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b border-border/50 pb-4">
+                  <div className="flex items-center gap-2">
+                    <div className="size-7 rounded-lg bg-foreground text-background flex items-center justify-center font-black text-xs">
+                      <QrCode className="size-4" />
+                    </div>
+                    <span className="font-extrabold text-sm">Ishyura Rwanda</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="size-8 p-0 rounded-lg"
+                    onClick={() => setPublicNavOpen(false)}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </div>
+
+                <nav className="flex flex-col gap-2.5 text-sm font-semibold text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={() => scrollToSection("products")}
+                    className="flex items-center gap-2.5 py-2 px-2.5 rounded-lg text-left hover:text-foreground hover:bg-muted/50 transition-colors"
+                  >
+                    <span>Products</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => scrollToSection("how-it-works")}
+                    className="flex items-center gap-2.5 py-2 px-2.5 rounded-lg text-left hover:text-foreground hover:bg-muted/50 transition-colors"
+                  >
+                    <span>How It Works</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => scrollToSection("hardware-section")}
+                    className="flex items-center gap-2.5 py-2 px-2.5 rounded-lg text-left hover:text-foreground hover:bg-muted/50 transition-colors"
+                  >
+                    <span>Stands &amp; Hardware</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => scrollToSection("pricing")}
+                    className="flex items-center gap-2.5 py-2 px-2.5 rounded-lg text-left hover:text-foreground hover:bg-muted/50 transition-colors"
+                  >
+                    <span>Pricing</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => scrollToSection("faq")}
+                    className="flex items-center gap-2.5 py-2 px-2.5 rounded-lg text-left hover:text-foreground hover:bg-muted/50 transition-colors"
+                  >
+                    <span>FAQ</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPublicNavOpen(false);
+                      setInquiryOpen(true);
+                    }}
+                    className="flex items-center gap-2.5 py-2 px-2.5 rounded-lg text-left hover:text-foreground hover:bg-muted/50 transition-colors text-sky-600 dark:text-sky-400 font-bold"
+                  >
+                    <MessageSquare className="size-4" />
+                    <span>Contact Support</span>
+                  </button>
+                </nav>
+              </div>
+
+              <div className="pt-4 border-t border-border/60 space-y-2">
+                <Button
+                  variant="outline"
+                  className="w-full text-xs font-bold rounded-xl h-9.5 justify-center gap-1.5"
+                  onClick={() => {
+                    setPublicNavOpen(false);
+                    if (onOpenAuthDialog) onOpenAuthDialog();
+                  }}
+                >
+                  <LogIn className="size-3.5" />
+                  <span>Sign In</span>
+                </Button>
+                <Button
+                  className="w-full text-xs font-bold rounded-xl h-9.5 bg-primary text-primary-foreground justify-center"
+                  onClick={() => {
+                    setPublicNavOpen(false);
+                    if (onOpenAuthDialog) onOpenAuthDialog();
+                  }}
+                >
+                  Get Started
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <main
           id="ishyura-public-scroll"

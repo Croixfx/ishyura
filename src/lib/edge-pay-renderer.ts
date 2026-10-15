@@ -176,18 +176,21 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 16px;
+      justify-content: flex-start;
+      min-height: 100dvh;
+      padding: 12px 14px 24px;
       -webkit-font-smoothing: antialiased;
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
     }
     .container {
       width: 100%;
       max-width: 440px;
+      margin: auto 0;
       background: var(--card-bg);
       border: 1px solid var(--card-border);
-      border-radius: 28px;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
+      border-radius: 24px;
+      box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.35);
       overflow: hidden;
       animation: popIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
@@ -196,11 +199,11 @@ export async function handleEdgePayPage(request: Request, rawEnv?: unknown): Pro
       to { opacity: 1; transform: scale(1) translateY(0); }
     }
     .header-bar {
-      height: 6px;
+      height: 5px;
       background: linear-gradient(90deg, #eab308, #dc2626, #8b1e0f);
     }
     .content {
-      padding: 24px 22px 28px;
+      padding: 20px 18px 22px;
       display: flex;
       flex-direction: column;
       align-items: center;

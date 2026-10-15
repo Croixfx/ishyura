@@ -4,4 +4,19 @@ when users logs out they should go to landing page immediately(not to /hostory)
 when user clicks Paymenst&Orders button, they should not be blocked from accessing Payment Tent card, MyCards and records or any other link
 when user goes to payment screen, they should see a QR to scan with exact amount prefilled and the code is 729710(Registered under Jean De La Croix)
 Admin should be able to deactivate accounts
+
+
+========================================================
 audit should know the owner of what qr or nfc created
+
+Payment is non negotiable. Just because one started generating MTN Momo code doesn't
+mean they won't pay for generating phone number(ekash). We only gives one generation for free
+and anything generated later is paid regardless of whether payment was deleted or not.
+
+QR preview should seat inside the screen and not be larger than available screen so that one
+can access download button efficiently.
+
+
+On a mobile screen, links should render well and only necessary should be shown and others can be seen from an icon
+
+When users are paing, the paying screen should be that User friendly that users pay smothly without struggling to scroll or navigate the paying screen

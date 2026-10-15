@@ -832,6 +832,8 @@ interface AuditInput {
   /** The merchant that owns the card or account the event is about. */
   ownerId?: string | null;
   ownerPhone?: string | null;
+  ownerEmail?: string | null;
+  ownerName?: string | null;
   label?: string | null;
   dialCode?: string | null;
   actor?: { id?: string | null; role: "admin" | "merchant" | "system" } | null;
@@ -877,16 +879,16 @@ async function recordAudit(env: AppEnv, a: AuditInput): Promise<void> {
   try {
     let ownerId = (a.ownerId || "").trim() || null;
     let ownerPhone = (a.ownerPhone || "").trim() || null;
-    let ownerEmail: string | null = null;
-    let ownerName: string | null = null;
+    let ownerEmail: string | null = (a.ownerEmail || "").trim() || null;
+    let ownerName: string | null = (a.ownerName || "").trim() || null;
 
     if (env.DB) {
       await ensureAuditTable(env.DB);
-      if (ownerId || ownerPhone) {
+      if (ownerId || ownerPhone || ownerEmail) {
         const m = await env.DB.prepare(
-          "SELECT id, phone_number, email, business_name FROM merchants WHERE id = ? OR phone_number = ? LIMIT 1",
+          "SELECT id, phone_number, email, business_name FROM merchants WHERE id = ? OR phone_number = ? OR email = ? LIMIT 1",
         )
-          .bind(ownerId || "-", ownerPhone || ownerId || "-")
+          .bind(ownerId || "-", ownerPhone || ownerId || "-", ownerEmail || ownerId || "-")
           .first<{
             id: string;
             phone_number: string | null;
@@ -896,19 +898,28 @@ async function recordAudit(env: AppEnv, a: AuditInput): Promise<void> {
         if (m) {
           ownerId = m.id;
           ownerPhone = m.phone_number || ownerPhone;
-          ownerEmail = m.email;
-          ownerName = m.business_name;
+          ownerEmail = m.email || ownerEmail;
+          ownerName = m.business_name || ownerName;
         }
       }
     } else {
       const m = [...memMerchants.values()].find(
-        (x) => (ownerId && x.id === ownerId) || (ownerPhone && x.phone_number === ownerPhone),
+        (x) =>
+          (ownerId && x.id === ownerId) ||
+          (ownerPhone && x.phone_number === ownerPhone) ||
+          (ownerEmail && x.email === ownerEmail) ||
+          (ownerId && x.email === ownerId),
       );
       if (m) {
         ownerId = m.id;
-        ownerPhone = m.phone_number;
-        ownerEmail = m.email || null;
+        ownerPhone = m.phone_number || ownerPhone;
+        ownerEmail = m.email || ownerEmail;
+        ownerName = m.business_name || ownerName;
       }
+    }
+
+    if (!ownerName && a.label) {
+      ownerName = a.label;
     }
 
     const row: AuditRow = {
@@ -2369,9 +2380,22 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             )
             .first<{ count: number }>();
           const actualOfflineCount = pastCountRow?.count || 0;
-          if (actualOfflineCount > offlineConsumed) {
-            offlineConsumed = actualOfflineCount;
+
+          // Count historical creations from audit log so deleting a card never restores the free slot
+          let pastAuditCount = 0;
+          try {
+            await ensureAuditTable(env.DB);
+            const auditRow = await env.DB.prepare(
+              "SELECT count(*) as count FROM audit_events WHERE (owner_id = ? OR owner_id = ? OR owner_phone = ? OR owner_phone = ?) AND event_type = 'qr_created' AND (kind = 'qr' OR kind IS NULL)",
+            )
+              .bind(merchantId, cleanPhone || merchantId, cleanPhone || merchantId, e164 || merchantId)
+              .first<{ count: number }>();
+            pastAuditCount = auditRow?.count || 0;
+          } catch {
+            // ignore if audit table not ready
           }
+
+          offlineConsumed = Math.max(offlineConsumed, actualOfflineCount, pastAuditCount);
 
           return jsonResponse({
             merchant_id: merchantId,
@@ -2400,12 +2424,24 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
       const pro = mEnts.get("dynamic_pro_subscription") || { granted_count: 0, consumed_count: 0 };
       const isPro = Boolean(pro.valid_until && new Date(pro.valid_until).getTime() > Date.now());
 
+      const memExistingCount = memQrCodes.filter(
+        (q) => (q.owner_id === merchantId || q.phone_number === merchantId) && !q.is_dynamic,
+      ).length;
+      const memAuditCount = memAudit.filter(
+        (a) =>
+          (a.owner_id === merchantId || a.owner_phone === merchantId) &&
+          a.event_type === "qr_created" &&
+          (a.kind === "qr" || !a.kind),
+      ).length;
+      const effectiveOfflineConsumed = Math.max(off.consumed_count, memExistingCount, memAuditCount);
+      off.consumed_count = effectiveOfflineConsumed;
+
       return jsonResponse({
         merchant_id: merchantId,
         offline_generations: {
           granted: off.granted_count,
-          consumed: off.consumed_count,
-          available: Math.max(0, off.granted_count - off.consumed_count),
+          consumed: effectiveOfflineConsumed,
+          available: Math.max(0, off.granted_count - effectiveOfflineConsumed),
         },
         pdf_downloads: {
           granted: pdf.granted_count,
@@ -3400,6 +3436,20 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
                 .first<{ count: number }>();
               const existingOfflineCount = existingCountRow?.count || 0;
 
+              // Also check historical creations from audit_events so deleting a card never restores the free quota
+              let pastAuditCount = 0;
+              try {
+                await ensureAuditTable(env.DB);
+                const auditRow = await env.DB.prepare(
+                  "SELECT count(*) as count FROM audit_events WHERE (owner_id = ? OR owner_id = ? OR owner_phone = ? OR owner_phone = ?) AND event_type = 'qr_created' AND (kind = 'qr' OR kind IS NULL)",
+                )
+                  .bind(ownerId, phone, phone, e164 || phone)
+                  .first<{ count: number }>();
+                pastAuditCount = auditRow?.count || 0;
+              } catch {
+                // ignore
+              }
+
               // 2. Query merchant entitlements
               const entRow = await env.DB.prepare(
                 "SELECT granted_count, consumed_count FROM merchant_entitlements WHERE (merchant_id = ? OR merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') LIMIT 1",
@@ -3410,7 +3460,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               // Free included offline generation is 1. Admin approved payment increases granted_count.
               const granted = Math.max(1, entRow?.granted_count ?? 1);
               // consumed_count only ever goes up, so deleting a card never gives its slot back.
-              const usedSlots = Math.max(entRow?.consumed_count ?? 0, existingOfflineCount);
+              const usedSlots = Math.max(entRow?.consumed_count ?? 0, existingOfflineCount, pastAuditCount);
 
               if (usedSlots >= granted) {
                 // Check if there is a pending payment request
@@ -3540,6 +3590,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             qrId: id,
             ownerId,
             ownerPhone: phone,
+            ownerEmail: qrSession?.email || null,
+            ownerName: businessName,
             label: businessName,
             dialCode,
             actor: { id: qrSession?.sub || null, role: isAdmin ? "admin" : "merchant" },
@@ -3652,12 +3704,18 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
             const existingMemCount = memQrCodes.filter(
               (q) => (q.owner_id === ownerId || q.phone_number === phone) && !q.is_dynamic,
             ).length;
+            const memAuditCount = memAudit.filter(
+              (a) =>
+                (a.owner_id === ownerId || a.owner_phone === phone) &&
+                a.event_type === "qr_created" &&
+                (a.kind === "qr" || !a.kind),
+            ).length;
             const off = mEnts.get("offline_qr_generation") || {
               granted_count: 1,
               consumed_count: 0,
             };
             const granted = Math.max(1, off.granted_count);
-            const usedSlots = Math.max(off.consumed_count, existingMemCount);
+            const usedSlots = Math.max(off.consumed_count, existingMemCount, memAuditCount);
             if (usedSlots >= granted) {
               return jsonResponse(
                 {
@@ -3673,6 +3731,7 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
               );
             }
             off.consumed_count = usedSlots + 1;
+            mEnts.set("offline_qr_generation", off);
           }
         }
 
@@ -3682,6 +3741,8 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           qrId: id,
           ownerId,
           ownerPhone: phone,
+          ownerEmail: qrSession?.email || null,
+          ownerName: businessName,
           label: businessName,
           dialCode,
           actor: { id: qrSession?.sub || null, role: isAdmin ? "admin" : "merchant" },
@@ -5045,31 +5106,12 @@ export async function handleApiRequest(request: Request, rawEnv?: unknown): Prom
           });
         }
 
-        let slotReturned = false;
-        if (gone && !gone.is_dynamic) {
-          if (env.DB) {
-            const refunded = await env.DB.prepare(
-              "UPDATE merchant_entitlements SET consumed_count = MAX(0, consumed_count - 1), updated_at = datetime('now') " +
-                "WHERE (merchant_id = ? OR merchant_id = ?) AND (entitlement_type = 'offline_generation' OR entitlement_key = 'offline_qr_generation') AND consumed_count > 0 RETURNING id",
-            )
-              .bind(gone.owner_id ?? "", gone.phone_number ?? "")
-              .first<{ id: string }>();
-            slotReturned = Boolean(refunded);
-          } else {
-            const off = getMemEntitlements(gone.owner_id ?? "").get("offline_qr_generation");
-            if (off && off.consumed_count > 0) {
-              off.consumed_count -= 1;
-              slotReturned = true;
-            }
-          }
-        }
-
+        // Payment is non negotiable: 1 lifetime free offline generation per merchant across all networks.
+        // Deleting a previous card never restores or refunds the generation slot.
         return jsonResponse({
           success: true,
-          slot_returned: slotReturned,
-          message: slotReturned
-            ? "QR code deleted. The merchant's offline generation slot was returned, so they may generate a new card."
-            : "QR code deleted.",
+          slot_returned: false,
+          message: "QR code deleted. Offline generation quota is unchanged (deleting does not restore free generation).",
         });
       }
     }

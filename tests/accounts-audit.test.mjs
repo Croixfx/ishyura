@@ -230,6 +230,87 @@ test("account changes are audited with who did them", async () => {
   assert.equal(ev.detail, "chargeback fraud");
 });
 
+test("deleting a previous QR card does not return the offline slot: generating phone/eKash next requires payment", async () => {
+  const env = await setup();
+  const token = await signIn(env);
+
+  // 1. First generation (MTN MoMo code) succeeds as the free included generation
+  const res1 = await api(env, "POST", "/qr-codes", {
+    token,
+    body: {
+      business_name: "Kimironko Shop",
+      network: "MTN MoMo",
+      payment_type: "momo_code",
+      dial_code: "*182*8*1*123456#",
+      phone_number: "+250788111222",
+    },
+  });
+  assert.equal(res1.status, 200, "first offline generation allowed");
+  const qr1 = await res1.json();
+
+  // 2. Delete the created card
+  const del = await api(env, "DELETE", `/qr-codes?id=${encodeURIComponent(qr1.id)}`, { token });
+  assert.equal(del.status, 200);
+
+  // 3. Generating a phone number / eKash stand afterwards is strictly locked (non-negotiable payment)
+  const res2 = await api(env, "POST", "/qr-codes", {
+    token,
+    body: {
+      business_name: "Kimironko Shop",
+      network: "Equity Bank (eKash)",
+      payment_type: "phone",
+      dial_code: "*555*2*0788111222#",
+      phone_number: "+250788111222",
+    },
+  });
+  assert.equal(res2.status, 402, "second offline generation locked even after delete");
+  const body2 = await res2.json();
+  assert.equal(body2.error, "ENTITLEMENT_REQUIRED");
+  assert.equal(body2.locked, true);
+
+  // 4. Entitlements endpoint confirms available is 0 and consumed is at least 1
+  const entRes = await api(env, "GET", "/merchants/entitlements", { token });
+  assert.equal(entRes.status, 200);
+  const entData = await entRes.json();
+  assert.equal(entData.offline_generations.available, 0);
+  assert.ok(entData.offline_generations.consumed >= 1);
+});
+
+test("creating an NFC / smart stand records kind nfc_stand and the owner in audit trail", async () => {
+  const env = await setup();
+  const token = await signIn(env);
+
+  // Grant PRO entitlement so smart stand can be generated
+  env.DB.raw
+    .prepare(
+      "INSERT INTO merchant_entitlements (id, merchant_id, entitlement_type, entitlement_key, granted_count, consumed_count, status, expires_at) VALUES ('ent-pro-1', 'm-1', 'pro_subscription', 'dynamic_pro_subscription', 1, 0, 'active', datetime('now', '+30 days'))",
+    )
+    .run();
+
+  const created = await api(env, "POST", "/qr-codes", {
+    token,
+    body: {
+      business_name: "Kimironko Smart Mart",
+      network: "MTN MoMo",
+      payment_type: "momo_code",
+      dial_code: "*182*8*1*654321#",
+      phone_number: "+250788111222",
+      is_dynamic: true,
+    },
+  });
+  assert.equal(created.status, 200);
+  const stand = await created.json();
+
+  const audit = await (await api(env, "GET", "/admin/audit", { admin: true })).json();
+  const nfcEvent = audit.find((e) => e.qr_id === stand.id && e.event_type === "qr_created");
+  assert.ok(nfcEvent, "smart stand creation is logged");
+  assert.equal(nfcEvent.kind, "nfc_stand");
+  assert.equal(nfcEvent.owner_id, "m-1");
+  assert.equal(nfcEvent.owner_name, "Kimironko Shop");
+  assert.equal(nfcEvent.owner_email, "shop@example.com");
+  assert.equal(nfcEvent.owner_phone, "+250788111222");
+});
+
 test.after(async () => {
   await vite.close();
 });

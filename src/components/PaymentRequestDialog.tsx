@@ -18,6 +18,11 @@ import {
   AlertTriangle,
   Lock,
   ArrowRight,
+  PhoneCall,
+  Copy,
+  Check,
+  QrCode as QrIcon,
+  Smartphone,
 } from "lucide-react";
 import { IshyuraClient, type QrDraft } from "@/lib/ishyura-client";
 import {
@@ -54,6 +59,8 @@ export function PaymentRequestDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [payMode, setPayMode] = useState<"dial" | "qr">("dial");
+  const [copiedCode, setCopiedCode] = useState(false);
 
   const price =
     entitlementType === "pro_monthly"
@@ -75,6 +82,19 @@ export function PaymentRequestDialog({
       : entitlementType === "pdf_download"
         ? "Unlock a high-resolution download of your official card."
         : "Your included free generation has been consumed. Top up to generate an additional stand.";
+
+  const ussdString = buildRwandaUssdString("MTN MoMo", "momo_code", PLATFORM_MOMO_CODE, price);
+  const telUri = `tel:${encodeURIComponent(ussdString)}`;
+
+  const handleCopyCode = () => {
+    try {
+      navigator.clipboard.writeText(PLATFORM_MOMO_CODE);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2500);
+    } catch {
+      // Fallback
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,15 +137,17 @@ export function PaymentRequestDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <div className="flex items-center gap-2 text-foreground mb-1">
-            <div className="size-8 rounded-lg bg-foreground/5 flex items-center justify-center">
-              <Lock className="size-4 text-foreground" />
+      <DialogContent className="sm:max-w-md max-h-[92dvh] overflow-y-auto p-4 sm:p-6">
+        <DialogHeader className="space-y-1">
+          <div className="flex items-center gap-2 text-foreground">
+            <div className="size-7 rounded-lg bg-foreground/5 flex items-center justify-center shrink-0">
+              <Lock className="size-3.5 text-foreground" />
             </div>
-            <DialogTitle className="text-base font-bold">{title}</DialogTitle>
+            <DialogTitle className="text-sm sm:text-base font-bold truncate">{title}</DialogTitle>
           </div>
-          <DialogDescription className="text-xs">{description}</DialogDescription>
+          <DialogDescription className="text-[11px] sm:text-xs text-muted-foreground line-clamp-2">
+            {description}
+          </DialogDescription>
         </DialogHeader>
 
         {submitted ? (
@@ -148,68 +170,133 @@ export function PaymentRequestDialog({
             </Button>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+          <form onSubmit={handleSubmit} className="space-y-3 pt-1">
             {error && (
-              <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+              <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
 
             {/* Price Callout */}
-            <div className="p-3.5 rounded-xl border border-border/80 bg-muted/20 flex items-center justify-between">
+            <div className="p-3 rounded-xl border border-border/80 bg-muted/20 flex items-center justify-between">
               <div>
-                <span className="text-xs font-semibold text-foreground">Applicable Fee</span>
-                <p className="text-[11px] text-muted-foreground">
-                  Standard Rwanda merchant pricing
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Amount Due
+                </span>
+                <p className="text-xs font-bold text-foreground">
+                  Official Platform Fee
                 </p>
               </div>
               <div className="text-right">
-                <span className="text-base font-black text-foreground">
+                <span className="text-lg font-black text-foreground">
                   {price.toLocaleString()} RWF
                 </span>
               </div>
             </div>
 
-            {/* Scan-to-pay: MoMo code with the exact fee already filled in */}
-            <div className="p-3 rounded-xl border border-border/60 bg-card text-xs space-y-3">
-              <p className="font-bold text-foreground">How to Pay:</p>
-              <div className="flex flex-col items-center gap-2 rounded-xl bg-white p-3">
-                <PaymentQrCode
-                  standId="ishyura-fee"
-                  network="MTN MoMo"
-                  paymentType="momo_code"
-                  destination={PLATFORM_MOMO_CODE}
-                  amount={price}
-                  isDynamic={false}
-                  size={176}
-                />
-                <p className="text-center text-[11px] font-bold text-slate-800">
-                  Scan with your phone camera to pay {price.toLocaleString()} RWF
-                </p>
+            {/* Smooth Payment Options Switch */}
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-muted/60 border border-border/50">
+                <button
+                  type="button"
+                  onClick={() => setPayMode("dial")}
+                  className={`flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                    payMode === "dial"
+                      ? "bg-card text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Smartphone className="size-3.5" />
+                  <span>Dial on Phone</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPayMode("qr")}
+                  className={`flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                    payMode === "qr"
+                      ? "bg-card text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <QrIcon className="size-3.5" />
+                  <span>Scan QR Code</span>
+                </button>
               </div>
-              <div className="space-y-1 text-muted-foreground text-[11px] leading-relaxed">
-                <div>
-                  • <strong>MoMo code:</strong>{" "}
-                  <code className="bg-muted px-1 py-0.5 rounded font-bold">
-                    {PLATFORM_MOMO_CODE}
-                  </code>{" "}
-                  (registered under {PLATFORM_PAYEE_NAME}). Check that name before you confirm.
+
+              {payMode === "dial" ? (
+                <div className="p-3 rounded-xl border border-border/60 bg-card text-xs space-y-2.5 animate-in fade-in duration-200">
+                  {/* One-Tap Direct Dial */}
+                  <a
+                    href={telUri}
+                    className="w-full h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all active:scale-[0.98]"
+                  >
+                    <PhoneCall className="size-4" />
+                    <span>1-Tap Dial ({ussdString})</span>
+                  </a>
+
+                  {/* MoMo Code Details with One-Tap Copy */}
+                  <div className="flex items-center justify-between p-2.5 rounded-lg bg-muted/40 border border-border/60">
+                    <div className="min-w-0 pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] uppercase font-bold text-muted-foreground">
+                          MoMo Code:
+                        </span>
+                        <code className="text-xs font-black text-foreground font-mono">
+                          {PLATFORM_MOMO_CODE}
+                        </code>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground truncate">
+                        Registered to: <strong className="text-foreground">{PLATFORM_PAYEE_NAME}</strong>
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCopyCode}
+                      className="h-7 px-2.5 text-[11px] font-bold shrink-0 gap-1 rounded-lg"
+                    >
+                      {copiedCode ? (
+                        <>
+                          <Check className="size-3 text-emerald-600" />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
-                <div>
-                  • <strong>Amount:</strong> {price.toLocaleString()} RWF, filled in for you.
+              ) : (
+                <div className="p-3 rounded-xl border border-border/60 bg-card text-xs space-y-2.5 animate-in fade-in duration-200 flex flex-col items-center">
+                  <div className="rounded-xl bg-white p-2.5 flex flex-col items-center shadow-xs border border-border/40">
+                    <PaymentQrCode
+                      standId="ishyura-fee"
+                      network="MTN MoMo"
+                      paymentType="momo_code"
+                      destination={PLATFORM_MOMO_CODE}
+                      amount={price}
+                      isDynamic={false}
+                      size={135}
+                      compact
+                    />
+                    <p className="text-[10px] font-bold text-slate-800 mt-1">
+                      Scan camera to pay {price.toLocaleString()} RWF
+                    </p>
+                  </div>
+                  <div className="text-center text-[10.5px] text-muted-foreground">
+                    MoMo Code: <strong className="text-foreground">{PLATFORM_MOMO_CODE}</strong> ({PLATFORM_PAYEE_NAME})
+                  </div>
                 </div>
-                <div>
-                  • <strong>Cannot scan?</strong> Dial{" "}
-                  <code className="bg-muted px-1 py-0.5 rounded font-bold">
-                    {buildRwandaUssdString("MTN MoMo", "momo_code", PLATFORM_MOMO_CODE, price)}
-                  </code>
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Reference Input */}
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <Label htmlFor="req-ref" className="text-xs font-semibold">
                 Transaction Reference / SMS Code
               </Label>
@@ -218,16 +305,16 @@ export function PaymentRequestDialog({
                 value={referenceCode}
                 onChange={(e) => setReferenceCode(e.target.value.toUpperCase())}
                 placeholder="e.g. PAY-839201 or MoMo TxID"
-                className="font-mono text-sm h-10"
+                className="font-mono text-xs sm:text-sm h-9"
                 required
               />
-              <p className="text-[10px] text-muted-foreground">
-                Enter your transaction ID from telecom confirmation SMS.
+              <p className="text-[9.5px] text-muted-foreground">
+                Enter telecom SMS confirmation TxID or keep generated reference.
               </p>
             </div>
 
             {/* Optional Notes */}
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <Label htmlFor="req-notes" className="text-xs font-semibold">
                 Sender Phone or Note (Optional)
               </Label>
@@ -236,17 +323,17 @@ export function PaymentRequestDialog({
                 value={evidenceNotes}
                 onChange={(e) => setEvidenceNotes(e.target.value)}
                 placeholder="e.g. Paid from 0788123456"
-                className="text-xs h-10"
+                className="text-xs h-9"
               />
             </div>
 
-            <div className="pt-2 flex items-center justify-end gap-2">
+            <div className="pt-1 flex items-center justify-end gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 onClick={handleClose}
-                className="rounded-xl text-xs"
+                className="rounded-xl text-xs h-8.5"
               >
                 Cancel
               </Button>
@@ -254,14 +341,14 @@ export function PaymentRequestDialog({
                 type="submit"
                 size="sm"
                 disabled={loading}
-                className="rounded-xl text-xs font-bold bg-foreground text-background hover:bg-foreground/90 gap-1.5"
+                className="rounded-xl text-xs font-bold h-8.5 bg-foreground text-background hover:bg-foreground/90 gap-1.5"
               >
                 {loading ? (
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   <ArrowRight className="size-3.5" />
                 )}
-                <span>Submit for Verification</span>
+                <span>Submit Verification</span>
               </Button>
             </div>
           </form>

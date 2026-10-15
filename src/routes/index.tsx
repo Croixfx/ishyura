@@ -991,15 +991,22 @@ function Index() {
       } else {
         const existingOfflineCount = qrHistory.filter((q) => !q.is_dynamic).length;
         const grantedOffline = entitlements?.offline_generations?.granted ?? 1;
+        const hasEverGenerated =
+          typeof window !== "undefined" &&
+          localStorage.getItem("ishyura_has_ever_generated_offline") === "true";
+        const consumedOffline = Math.max(
+          entitlements?.offline_generations?.consumed ?? 0,
+          existingOfflineCount,
+          hasEverGenerated ? 1 : 0,
+        );
         const availableOffline =
           entitlements?.offline_generations?.available !== undefined
             ? entitlements.offline_generations.available
-            : existingOfflineCount >= 1
-              ? 0
-              : 1;
+            : Math.max(0, grantedOffline - consumedOffline);
 
         if (
           availableOffline <= 0 ||
+          consumedOffline >= grantedOffline ||
           (existingOfflineCount >= 1 && grantedOffline <= existingOfflineCount)
         ) {
           setConfirmedData(null);
@@ -1015,7 +1022,7 @@ function Index() {
             );
           } else {
             setLockedNotice(
-              "You have used your included free offline QR generation. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
+              "Payment is non-negotiable. Each merchant account includes exactly 1 lifetime free offline QR generation across all networks. Additional QR generation requires payment (2,000 RWF) approved by an administrator.",
             );
             setPaymentRequestDialogOpen(true);
           }
@@ -1050,6 +1057,11 @@ function Index() {
           dynamicUrl: isDynamic && saved.id ? getDynamicPayUrl(saved.id) : undefined,
           qrTelUri: isDynamic && saved.id ? getDynamicPayUrl(saved.id) : cardData.ussdString,
         });
+        if (!isDynamic) {
+          try {
+            localStorage.setItem("ishyura_has_ever_generated_offline", "true");
+          } catch {}
+        }
         if (currentUser) {
           IshyuraClient.getEntitlements(currentUser.id || currentUser.phone_number)
             .then(setEntitlements)
@@ -1057,7 +1069,14 @@ function Index() {
         }
         return IshyuraClient.listQrCodes();
       })
-      .then(setQrHistory)
+      .then((cards) => {
+        setQrHistory(cards);
+        if (cards.some((c) => !c.is_dynamic)) {
+          try {
+            localStorage.setItem("ishyura_has_ever_generated_offline", "true");
+          } catch {}
+        }
+      })
       .catch((err: unknown) => {
         setSavingQr(false);
         setConfirmedData(null);
@@ -4092,9 +4111,9 @@ function Index() {
             </section>
 
             {/* Right Column: Live Payment Card Preview & Download */}
-            <section className="lg:col-span-5 xl:col-span-5 flex flex-col items-center justify-start lg:sticky lg:top-6">
+            <section className="lg:col-span-5 xl:col-span-5 flex flex-col items-center justify-start lg:sticky lg:top-4 max-h-[calc(100vh-2rem)] overflow-y-auto pr-1">
               {confirmedData ? (
-                <div className="w-full max-w-sm space-y-4 animate-in fade-in zoom-in-95 duration-300">
+                <div className="w-full max-w-[340px] space-y-3 animate-in fade-in zoom-in-95 duration-300">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
                       Generated Card
@@ -4105,38 +4124,38 @@ function Index() {
                     </span>
                   </div>
 
-                  {/* Printable card */}
+                  {/* Printable card - sized to comfortably fit screen height */}
                   <div
                     ref={cardRef}
-                    className="w-full overflow-hidden rounded-2xl bg-print-surface text-print-ink shadow-2xl shadow-black/15 transition-all duration-300"
+                    className="w-full overflow-hidden rounded-2xl bg-print-surface text-print-ink shadow-xl shadow-black/10 transition-all duration-300"
                   >
-                    <div className="gradient-strip h-2.5 w-full" />
-                    <div className="flex flex-col items-center px-6 pb-6 pt-6 text-center">
+                    <div className="gradient-strip h-2 w-full" />
+                    <div className="flex flex-col items-center px-4 pb-3.5 pt-3.5 text-center">
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-print-muted-ink">
+                        <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-print-muted-ink">
                           {confirmedData.network === "Equity Bank (eKash)"
                             ? "Equity eKash Pay"
                             : confirmedData.paymentType === "momo_code"
                               ? "Merchant Pay"
                               : "Send Money"}
                         </span>
-                        <span className="text-[10px] rounded-sm bg-print-muted px-1.5 py-0.5 font-bold uppercase text-print-muted-ink">
+                        <span className="text-[9px] rounded-sm bg-print-muted px-1.5 py-0.5 font-bold uppercase text-print-muted-ink">
                           {confirmedData.network}
                         </span>
                       </div>
 
                       {confirmedData.isDynamic && (
-                        <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[9px] font-black uppercase text-amber-700">
+                        <div className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[8.5px] font-black uppercase text-amber-700">
                           <Sparkles className="size-2.5" />
                           <span>Smart Dynamic QR • PRO</span>
                         </div>
                       )}
 
-                      <p className="mt-1.5 max-w-full truncate text-2xl font-black tracking-tight">
+                      <p className="mt-1 max-w-full truncate text-lg sm:text-xl font-black tracking-tight">
                         {confirmedData.businessName}
                       </p>
 
-                      <div className="relative mt-4 rounded-2xl border-2 border-print-muted bg-white p-3.5 shadow-xs overflow-hidden">
+                      <div className="relative mt-2.5 rounded-xl border border-print-muted bg-white p-2.5 shadow-xs overflow-hidden">
                         <div
                           className={
                             !currentUser
@@ -4151,6 +4170,7 @@ function Index() {
                             destination={confirmedData.ussdString}
                             amount={confirmedData.amount}
                             isDynamic={confirmedData.isDynamic}
+                            size={135}
                             compact
                           />
                         </div>
@@ -4163,24 +4183,24 @@ function Index() {
                               }
                               setAuthDialogOpen(true);
                             }}
-                            className="absolute inset-0 flex flex-col items-center justify-center bg-background/70 backdrop-blur-[2px] p-3 text-center cursor-pointer transition-all hover:bg-background/80 group"
+                            className="absolute inset-0 flex flex-col items-center justify-center bg-background/70 backdrop-blur-[2px] p-2 text-center cursor-pointer transition-all hover:bg-background/80 group"
                           >
-                            <div className="size-11 rounded-full bg-primary/20 text-primary flex items-center justify-center mb-1.5 shadow-md group-hover:scale-110 transition-transform">
-                              <Lock className="size-5 text-primary" />
+                            <div className="size-9 rounded-full bg-primary/20 text-primary flex items-center justify-center mb-1 shadow-md group-hover:scale-110 transition-transform">
+                              <Lock className="size-4 text-primary" />
                             </div>
                             <p className="text-xs font-bold text-foreground">
                               Sign In to Reveal QR
                             </p>
-                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                            <p className="text-[9.5px] text-muted-foreground mt-0.5">
                               Click to unlock with Phone or Google
                             </p>
                           </div>
                         )}
                       </div>
 
-                      <div className="mt-4 w-full rounded-xl bg-print-muted px-4 py-2.5 text-left">
+                      <div className="mt-2.5 w-full rounded-xl bg-print-muted px-3.5 py-2 text-left">
                         <div className="flex items-center justify-between">
-                          <p className="text-[10px] font-bold uppercase tracking-wider text-print-muted-ink">
+                          <p className="text-[9.5px] font-bold uppercase tracking-wider text-print-muted-ink">
                             {confirmedData.paymentType === "momo_code"
                               ? "Merchant Code (Code y'Umucuruzi)"
                               : "Phone Number"}
@@ -4188,22 +4208,22 @@ function Index() {
                           <span
                             className={
                               confirmedData.isDynamic
-                                ? "text-[9px] font-bold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full"
-                                : "text-[9px] font-bold text-emerald-700 bg-emerald-500/10 px-1.5 py-0.5 rounded-full"
+                                ? "text-[8.5px] font-bold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full"
+                                : "text-[8.5px] font-bold text-emerald-700 bg-emerald-500/10 px-1.5 py-0.5 rounded-full"
                             }
                           >
                             {confirmedData.isDynamic
-                              ? "Online + direct USSD choices"
-                              : "100% Offline (Zero Data Needed)"}
+                              ? "Online + USSD"
+                              : "100% Offline"}
                           </span>
                         </div>
-                        <p className="font-mono text-xl font-black text-print-ink mt-0.5 tracking-wide">
+                        <p className="font-mono text-lg font-black text-print-ink mt-0.5 tracking-wide">
                           {extractMerchantOrAccountCode(
                             confirmedData.sanitizedInput || confirmedData.ussdString,
                           )}
                         </p>
-                        <div className="mt-1.5 pt-1.5 border-t border-print-muted-ink/15 flex items-center justify-between">
-                          <span className="text-[10px] text-print-muted-ink font-semibold">
+                        <div className="mt-1 pt-1 border-t border-print-muted-ink/15 flex items-center justify-between">
+                          <span className="text-[9.5px] text-print-muted-ink font-semibold">
                             Direct USSD Dial:
                           </span>
                           <span className="font-mono text-xs font-bold tracking-tight text-print-ink">
@@ -4211,57 +4231,55 @@ function Index() {
                           </span>
                         </div>
                         {confirmedData.feeNote && (
-                          <p className="mt-1 text-[11px] font-bold text-emerald-700">
+                          <p className="mt-0.5 text-[10px] font-bold text-emerald-700">
                             {confirmedData.feeNote}
                           </p>
                         )}
                       </div>
 
                       {confirmedData.amount && (
-                        <div className="mt-2.5 w-full rounded-xl bg-primary/10 border border-primary/20 px-3.5 py-2 text-center">
-                          <p className="text-[10px] uppercase font-bold text-primary tracking-wider">
+                        <div className="mt-2 w-full rounded-xl bg-primary/10 border border-primary/20 px-3 py-1.5 text-center">
+                          <p className="text-[9px] uppercase font-bold text-primary tracking-wider">
                             {confirmedData.itemName || "Pre-defined Amount"}
                           </p>
-                          <p className="text-xl font-black text-print-ink">
+                          <p className="text-lg font-black text-print-ink">
                             {confirmedData.amount.toLocaleString()} RWF
                           </p>
                         </div>
                       )}
 
-                      <p className="mt-3 text-[11px] font-medium text-print-muted-ink">
+                      <p className="mt-2 text-[10.5px] font-medium text-print-muted-ink">
                         {confirmedData.isDynamic
-                          ? "⚡ One stand • online amount entry or direct USSD with no internet"
-                          : "📶 Works 100% Offline • Scan camera or dial code • No internet data needed"}
+                          ? "⚡ One stand • online amount entry or direct USSD fallback"
+                          : "📶 Works 100% Offline • Scan camera or dial code • No data needed"}
                       </p>
                     </div>
-                    <div className="flex items-center justify-between border-t border-print-muted bg-print-muted/40 px-5 py-3">
-                      <span className="text-[11px] font-semibold text-print-muted-ink">
+                    <div className="flex items-center justify-between border-t border-print-muted bg-print-muted/40 px-4 py-2">
+                      <span className="text-[10px] font-semibold text-print-muted-ink">
                         {confirmedData.network === "Equity Bank (eKash)"
                           ? "eKash • 20 RWF"
                           : confirmedData.paymentType === "momo_code"
                             ? "Registered Merchant"
                             : "Direct Number"}
                       </span>
-                      <span className="text-sm font-extrabold text-primary">Ishyura</span>
+                      <span className="text-xs font-extrabold text-primary">Ishyura</span>
                     </div>
                   </div>
 
-                  <div className="space-y-2.5">
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        size="lg"
-                        className="w-full h-11 text-xs sm:text-sm font-bold shadow-md shadow-primary/20"
-                        onClick={handleDownload}
-                        disabled={downloading}
-                      >
-                        {downloading ? (
-                          <Loader2 className="size-4 animate-spin mr-1.5" />
-                        ) : (
-                          <Download className="size-4 mr-1.5" />
-                        )}
-                        {downloading ? "Preparing…" : "Download PNG"}
-                      </Button>
-                    </div>
+                  <div className="w-full space-y-2.5 pt-0.5">
+                    <Button
+                      size="lg"
+                      className="w-full h-11 text-xs sm:text-sm font-bold shadow-md shadow-primary/20 bg-primary text-primary-foreground hover:bg-primary/90 flex items-center justify-center gap-2"
+                      onClick={handleDownload}
+                      disabled={downloading}
+                    >
+                      {downloading ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Download className="size-4" />
+                      )}
+                      <span>{downloading ? "Preparing High-Res Image…" : "Download Stand Card (PNG)"}</span>
+                    </Button>
 
                     {confirmedData.isDynamic && (
                       <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2.5">
